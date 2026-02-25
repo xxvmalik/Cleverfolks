@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Home,
   Brain,
@@ -13,9 +13,10 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Menu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { signOut } from "@/lib/auth";
+import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const navItems = [
   { label: "Home", href: "/", icon: Home },
@@ -29,6 +30,12 @@ const navItems = [
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+
+  async function handleSignOut() {
+    await signOut();
+    router.push("/login");
+  }
 
   return (
     <aside
@@ -37,18 +44,9 @@ export function Sidebar() {
         collapsed ? "w-[64px]" : "w-[260px]"
       )}
     >
-      {/* Logo */}
-      <div className="flex items-center h-16 px-4 border-b border-[#2A2D35]">
-        {!collapsed && (
-          <span className="font-heading font-700 text-xl text-white tracking-tight">
-            Cleverfolks
-          </span>
-        )}
-        {collapsed && (
-          <span className="font-heading font-bold text-xl text-[#3A89FF] mx-auto">
-            CF
-          </span>
-        )}
+      {/* Workspace Switcher */}
+      <div className="h-16 flex items-center px-2 border-b border-[#2A2D35]">
+        <WorkspaceSwitcher collapsed={collapsed} />
       </div>
 
       {/* Navigation */}
@@ -90,6 +88,7 @@ export function Sidebar() {
       {/* Sign Out */}
       <div className="border-t border-[#2A2D35] p-2">
         <button
+          onClick={handleSignOut}
           className={cn(
             "flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium text-[#8B8F97] hover:bg-[#1C1F24] hover:text-[#F87171] transition-colors duration-150",
             collapsed && "justify-center"

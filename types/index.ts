@@ -12,3 +12,10 @@ export type User = {
   name?: string;
   avatar_url?: string;
 };
+
+export type Workspace = {
+  id: string;
+  name: string;
+  slug: string;
+  role: string;
+};
