@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Nango from "@nangohq/frontend";
+import type { ConnectUIEvent } from "@nangohq/frontend";
 import {
   connectIntegrationAction,
   disconnectIntegrationAction,
@@ -61,37 +63,15 @@ function getRelativeTime(dateStr: string | null): string {
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { dot: string; label: string; bg: string; text: string }> = {
-    connected: {
-      dot: "bg-[#4ADE80]",
-      label: "Connected",
-      bg: "bg-[#4ADE80]/10",
-      text: "text-[#4ADE80]",
-    },
-    disconnected: {
-      dot: "bg-[#8B8F97]",
-      label: "Disconnected",
-      bg: "bg-[#8B8F97]/10",
-      text: "text-[#8B8F97]",
-    },
-    syncing: {
-      dot: "bg-[#3A89FF] animate-pulse",
-      label: "Syncing",
-      bg: "bg-[#3A89FF]/10",
-      text: "text-[#3A89FF]",
-    },
-    error: {
-      dot: "bg-[#F87171]",
-      label: "Error",
-      bg: "bg-[#F87171]/10",
-      text: "text-[#F87171]",
-    },
+    connected: { dot: "bg-[#4ADE80]", label: "Connected", bg: "bg-[#4ADE80]/10", text: "text-[#4ADE80]" },
+    disconnected: { dot: "bg-[#8B8F97]", label: "Disconnected", bg: "bg-[#8B8F97]/10", text: "text-[#8B8F97]" },
+    syncing: { dot: "bg-[#3A89FF] animate-pulse", label: "Syncing", bg: "bg-[#3A89FF]/10", text: "text-[#3A89FF]" },
+    error: { dot: "bg-[#F87171]", label: "Error", bg: "bg-[#F87171]/10", text: "text-[#F87171]" },
   };
 
   const c = config[status] ?? config.disconnected;
   return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}
-    >
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
       {c.label}
     </span>
@@ -102,21 +82,27 @@ function IntegrationCard({
   config,
   integration,
   workspaceId,
+  onConnect,
 }: {
   config: IntegrationConfig;
   integration: Integration | undefined;
   workspaceId: string;
+  onConnect: (provider: string) => Promise<void>;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState<"sync" | "connect" | "disconnect" | null>(null);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const status = integration?.status ?? "disconnected";
 
   async function handleConnect() {
     setLoading("connect");
+    setError(null);
     try {
-      await connectIntegrationAction(workspaceId, config.provider);
-      router.refresh();
+      await onConnect(config.provider);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Connection failed");
     } finally {
       setLoading(null);
     }
@@ -125,9 +111,14 @@ function IntegrationCard({
   async function handleDisconnect() {
     if (!integration) return;
     setLoading("disconnect");
+    setError(null);
     try {
-      await disconnectIntegrationAction(integration.id);
-      router.refresh();
+      const result = await disconnectIntegrationAction(integration.id);
+      if (result.error) {
+        setError(result.error);
+      } else {
+        router.refresh();
+      }
     } finally {
       setLoading(null);
     }
@@ -136,13 +127,23 @@ function IntegrationCard({
   async function handleSync() {
     if (!integration) return;
     setLoading("sync");
+    setSyncResult(null);
+    setError(null);
     try {
-      await fetch("/api/sync", {
+      const res = await fetch("/api/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integrationId: integration.id }),
       });
-      router.refresh();
+      const data = (await res.json()) as { ok?: boolean; processed?: number; skipped?: number; error?: string };
+      if (!res.ok || data.error) {
+        setError(data.error ?? "Sync failed");
+      } else {
+        setSyncResult(`${data.processed ?? 0} records synced`);
+        router.refresh();
+      }
+    } catch {
+      setError("Sync failed");
     } finally {
       setLoading(null);
     }
@@ -163,12 +164,24 @@ function IntegrationCard({
             <div className="text-xs text-[#8B8F97]">{config.category}</div>
           </div>
         </div>
-        <StatusBadge status={status} />
+        <StatusBadge status={loading === "sync" ? "syncing" : status} />
       </div>
 
       <div className="text-xs text-[#8B8F97]">
         Last synced: {getRelativeTime(integration?.last_synced_at ?? null)}
       </div>
+
+      {error && (
+        <div className="text-xs text-[#F87171] bg-[#F87171]/10 rounded-lg px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {syncResult && (
+        <div className="text-xs text-[#4ADE80] bg-[#4ADE80]/10 rounded-lg px-3 py-2">
+          {syncResult}
+        </div>
+      )}
 
       <div className="flex gap-2 mt-auto">
         {status === "connected" || status === "syncing" ? (
@@ -234,8 +247,86 @@ export function IntegrationsClient({
   integrations: Integration[];
   workspaceId: string;
 }) {
+  const router = useRouter();
   const integrationsByProvider = Object.fromEntries(
     integrations.map((i) => [i.provider, i])
+  );
+
+  /**
+   * Opens the Nango Connect UI for a given provider.
+   * 1. Fetches a session token from our backend.
+   * 2. Opens the Nango iframe.
+   * 3. On 'connect' event: saves the connection to our DB, triggers first sync.
+   */
+  const handleConnect = useCallback(
+    async (provider: string) => {
+      // 1. Get session token
+      const tokenRes = await fetch("/api/nango-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+
+      if (!tokenRes.ok) {
+        const err = (await tokenRes.json()) as { error?: string };
+        throw new Error(err.error ?? "Failed to create Nango session");
+      }
+
+      const { token } = (await tokenRes.json()) as { token: string };
+
+      // 2. Open Nango Connect UI
+      await new Promise<void>((resolve, reject) => {
+        const nango = new Nango({ connectSessionToken: token });
+
+        const connectUI = nango.openConnectUI({
+          onEvent: async (event: ConnectUIEvent) => {
+            if (event.type === "connect") {
+              const { connectionId, providerConfigKey } = event.payload;
+
+              try {
+                // 3. Save to our DB
+                const result = await connectIntegrationAction(
+                  workspaceId,
+                  providerConfigKey,
+                  connectionId
+                );
+
+                if (result.error) {
+                  connectUI.close();
+                  reject(new Error(result.error));
+                  return;
+                }
+
+                // 4. Trigger first sync automatically
+                if (result.integrationId) {
+                  fetch("/api/sync", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ integrationId: result.integrationId }),
+                  }).catch(console.error);
+                }
+
+                connectUI.close();
+                router.refresh();
+                resolve();
+              } catch (err) {
+                connectUI.close();
+                reject(err);
+              }
+            } else if (event.type === "error") {
+              connectUI.close();
+              reject(new Error(event.payload.errorMessage));
+            } else if (event.type === "close") {
+              // User closed without connecting — not an error
+              resolve();
+            }
+          },
+        });
+
+        connectUI.open();
+      });
+    },
+    [workspaceId, router]
   );
 
   return (
@@ -258,6 +349,7 @@ export function IntegrationsClient({
               config={config}
               integration={integrationsByProvider[config.provider]}
               workspaceId={workspaceId}
+              onConnect={handleConnect}
             />
           ))}
         </div>
