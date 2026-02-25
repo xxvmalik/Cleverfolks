@@ -16,27 +16,34 @@ export default async function AppLayout({
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/login");
-  }
+  if (!user) redirect("/login");
 
   const { data: memberships } = await getUserWorkspaces(supabase, user.id);
 
-  if (!memberships || memberships.length === 0) {
-    redirect("/create-workspace");
-  }
+  if (!memberships || memberships.length === 0) redirect("/create-workspace");
 
   const workspaces: Workspace[] = memberships
     .filter((m) => m.workspaces)
     .map((m) => {
-      const ws = m.workspaces as unknown as { id: string; name: string; slug: string };
+      const ws = m.workspaces as unknown as {
+        id: string;
+        name: string;
+        slug: string;
+        onboarding_completed: boolean;
+      };
       return {
         id: ws.id,
         name: ws.name,
         slug: ws.slug,
         role: m.role,
+        onboarding_completed: ws.onboarding_completed,
       };
     });
+
+  // If onboarding not completed, redirect to the wizard
+  if (workspaces.length > 0 && !workspaces[0].onboarding_completed) {
+    redirect("/onboarding");
+  }
 
   return (
     <WorkspaceProvider workspaces={workspaces}>

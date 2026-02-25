@@ -18,4 +18,5 @@ export type Workspace = {
   name: string;
   slug: string;
   role: string;
+  onboarding_completed: boolean;
 };

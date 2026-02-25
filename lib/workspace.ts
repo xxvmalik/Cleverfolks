@@ -9,10 +9,7 @@ export function generateSlug(name: string): string {
     .replace(/^-|-$/g, "");
 }
 
-export async function createWorkspace(
-  client: SupabaseClient,
-  name: string
-) {
+export async function createWorkspace(client: SupabaseClient, name: string) {
   const slug = generateSlug(name);
 
   const { data, error } = await client.rpc("create_workspace_for_user", {
@@ -26,7 +23,7 @@ export async function createWorkspace(
 export async function getUserWorkspaces(client: SupabaseClient, userId: string) {
   return client
     .from("workspace_memberships")
-    .select("role, workspaces(id, name, slug)")
+    .select("role, workspaces(id, name, slug, onboarding_completed)")
     .eq("user_id", userId);
 }
 
@@ -53,7 +50,10 @@ export async function inviteTeamMember(
     .single();
 
   if (profileError || !profile) {
-    return { data: null, error: { message: "No user found with that email address." } };
+    return {
+      data: null,
+      error: { message: "No user found with that email address." },
+    };
   }
 
   return client
