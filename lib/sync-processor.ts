@@ -28,87 +28,124 @@ export async function processSyncedData(
   let skipped = 0;
   const total = records.length;
 
-  for (const record of records) {
-    // 1. Extract content
-    let content = "";
-    if (record.file) {
-      content = await extractText(
-        record.file.name,
-        record.file.mimeType,
-        record.file.data
-      );
-    } else {
-      content = record.content ?? "";
-    }
+  console.log(`[processor] Starting — ${total} records, workspace=${workspaceId}`);
 
-    // 2. Skip empty content
-    if (!content.trim()) {
-      skipped++;
-      continue;
-    }
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    const label = `[processor] record[${i}] external_id=${record.external_id}`;
 
-    // 3. Upsert synced document
-    const { data: documentId, error: docError } = await supabase.rpc(
-      "upsert_synced_document",
-      {
-        p_workspace_id: workspaceId,
-        p_integration_id: integrationId,
-        p_source_type: record.source_type,
-        p_external_id: record.external_id,
-        p_title: record.title ?? "",
-        p_content: content,
-        p_metadata: record.metadata ?? {},
+    try {
+      // ── Step A: Extract content ──────────────────────────────────────────
+      let content = "";
+      if (record.file) {
+        console.log(`${label} extracting file: ${record.file.name}`);
+        content = await extractText(record.file.name, record.file.mimeType, record.file.data);
+      } else {
+        content = record.content ?? "";
       }
-    );
 
-    if (docError || !documentId) {
-      console.error("Failed to upsert document:", docError);
-      skipped++;
-      continue;
-    }
+      if (!content.trim()) {
+        console.log(`${label} skipped — empty content`);
+        skipped++;
+        continue;
+      }
 
-    // 4. Delete old chunks
-    await supabase.rpc("delete_chunks_for_document", {
-      p_document_id: documentId,
-    });
+      // ── Step B: Upsert document ──────────────────────────────────────────
+      console.log(`${label} upserting document (${content.length} chars)`);
+      const { data: documentId, error: docError } = await supabase.rpc(
+        "upsert_synced_document",
+        {
+          p_workspace_id: workspaceId,
+          p_integration_id: integrationId,
+          p_source_type: record.source_type,
+          p_external_id: record.external_id,
+          p_title: record.title ?? "",
+          p_content: content,
+          p_metadata: record.metadata ?? {},
+        }
+      );
 
-    // 5. Chunk the content
-    const chunks = chunkText(content, {
-      source_type: record.source_type,
-      external_id: record.external_id,
-      ...(record.metadata ?? {}),
-    });
+      if (docError) {
+        console.error(`${label} upsert_synced_document RPC error:`, docError);
+        // Surface this error so the caller can detect DB/schema issues
+        throw new Error(`upsert_synced_document failed: ${docError.message}`);
+      }
+      if (!documentId) {
+        console.error(`${label} upsert_synced_document returned null — check RPC function exists`);
+        throw new Error("upsert_synced_document returned null — is the SQL migration applied?");
+      }
 
-    if (chunks.length === 0) {
-      skipped++;
-      continue;
-    }
-
-    // 6. Create embeddings
-    const chunkTexts = chunks.map((c) => c.text);
-    const embeddings = await createEmbeddings(chunkTexts);
-
-    // 7. Store chunks
-    for (let i = 0; i < chunks.length; i++) {
-      const embedding = embeddings[i];
-      if (!embedding || embedding.length === 0) continue;
-
-      const { error: chunkError } = await supabase.rpc("create_document_chunk", {
+      // ── Step C: Delete old chunks ─────────────────────────────────────────
+      const { error: deleteErr } = await supabase.rpc("delete_chunks_for_document", {
         p_document_id: documentId,
-        p_workspace_id: workspaceId,
-        p_chunk_text: chunks[i].text,
-        p_chunk_index: chunks[i].index,
-        p_embedding: `[${embedding.join(",")}]`,
-        p_metadata: chunks[i].metadata,
+      });
+      if (deleteErr) {
+        console.error(`${label} delete_chunks_for_document error:`, deleteErr);
+        throw new Error(`delete_chunks_for_document failed: ${deleteErr.message}`);
+      }
+
+      // ── Step D: Chunk text ────────────────────────────────────────────────
+      const chunks = chunkText(content, {
+        source_type: record.source_type,
+        external_id: record.external_id,
+        ...(record.metadata ?? {}),
       });
 
-      if (chunkError) {
-        console.error("Failed to create chunk:", chunkError);
-      }
-    }
+      console.log(`${label} ${chunks.length} chunk(s)`);
 
-    processed++;
-    console.log(`Processed ${processed}/${total} for workspace ${workspaceId}`);
+      if (chunks.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      // ── Step E: Create embeddings ─────────────────────────────────────────
+      const chunkTexts = chunks.map((c) => c.text);
+      let embeddings: number[][];
+      try {
+        embeddings = await createEmbeddings(chunkTexts);
+        const empty = embeddings.filter((e) => !e || e.length === 0).length;
+        if (empty > 0) {
+          console.warn(`${label} ${empty}/${embeddings.length} embeddings came back empty — VOYAGE_API_KEY may be missing`);
+        }
+      } catch (embErr) {
+        console.error(`${label} createEmbeddings threw:`, embErr);
+        throw new Error(`createEmbeddings failed: ${embErr instanceof Error ? embErr.message : String(embErr)}`);
+      }
+
+      // ── Step F: Store chunks ──────────────────────────────────────────────
+      let storedChunks = 0;
+      for (let j = 0; j < chunks.length; j++) {
+        const embedding = embeddings[j];
+        if (!embedding || embedding.length === 0) {
+          console.warn(`${label} chunk[${j}] skipped — no embedding`);
+          continue;
+        }
+
+        const { error: chunkError } = await supabase.rpc("create_document_chunk", {
+          p_document_id: documentId,
+          p_workspace_id: workspaceId,
+          p_chunk_text: chunks[j].text,
+          p_chunk_index: chunks[j].index,
+          p_embedding: `[${embedding.join(",")}]`,
+          p_metadata: chunks[j].metadata,
+        });
+
+        if (chunkError) {
+          console.error(`${label} create_document_chunk error (chunk ${j}):`, chunkError);
+          throw new Error(`create_document_chunk failed: ${chunkError.message}`);
+        }
+        storedChunks++;
+      }
+
+      processed++;
+      console.log(`[processor] ${processed}/${total} done — ${storedChunks} chunks stored`);
+
+    } catch (recordErr) {
+      console.error(`${label} fatal error — skipping record:`, recordErr);
+      // Re-throw so the caller (sync route) can surface this to the client
+      // If you'd prefer to skip bad records instead of aborting, change to: skipped++; continue;
+      throw recordErr;
+    }
   }
 
   return { processed, skipped };
@@ -157,13 +194,13 @@ export function normalizeGmail(raw: any): SyncRecord {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeSlack(raw: any): SyncRecord {
   return {
-    external_id: raw.ts ?? raw.client_msg_id ?? "",
+    external_id: raw.ts ?? raw.client_msg_id ?? raw.id ?? "",
     source_type: "slack_message",
-    title: `Slack message in #${raw.channel ?? "unknown"}`,
+    title: `Slack message in #${raw.channel ?? raw.channel_id ?? "unknown"}`,
     content: raw.text ?? "",
     metadata: {
-      channel: raw.channel,
-      user: raw.user,
+      channel: raw.channel ?? raw.channel_id,
+      user: raw.user ?? raw.user_id,
       ts: raw.ts,
       thread_ts: raw.thread_ts,
     },

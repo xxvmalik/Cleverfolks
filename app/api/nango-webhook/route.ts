@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Nango } from "@nangohq/node";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import {
   processSyncedData,
@@ -21,23 +22,17 @@ const PROVIDER_MODEL_MAP: Record<string, string> = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function normalizeRecord(provider: string, raw: any): SyncRecord | null {
   switch (provider) {
-    case "gmail":
-      return normalizeGmail(raw);
-    case "slack":
-      return normalizeSlack(raw);
-    case "google-calendar":
-      return normalizeCalendar(raw);
-    case "hubspot":
-      return normalizeHubspot(raw);
-    case "google-drive":
-      return normalizeDrive(raw);
-    default:
-      return null;
+    case "gmail":           return normalizeGmail(raw);
+    case "slack":           return normalizeSlack(raw);
+    case "google-calendar": return normalizeCalendar(raw);
+    case "hubspot":         return normalizeHubspot(raw);
+    case "google-drive":    return normalizeDrive(raw);
+    default:                return null;
   }
 }
 
 export async function POST(request: NextRequest) {
-  // 1. Verify secret
+  // Verify secret
   const authHeader = request.headers.get("authorization");
   const expectedSecret = `Bearer ${process.env.NANGO_WEBHOOK_SECRET}`;
 
@@ -46,7 +41,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // 2. Parse body
     const body = (await request.json()) as {
       connection_id: string;
       provider_config_key: string;
@@ -54,8 +48,9 @@ export async function POST(request: NextRequest) {
     };
 
     const { connection_id, provider_config_key } = body;
+    console.log(`[webhook] provider=${provider_config_key} connection=${connection_id}`);
 
-    // 3. Look up integration
+    // Look up integration
     const supabase = await createServerSupabaseClient();
     const { data: integration, error: integrationError } = await supabase
       .from("integrations")
@@ -64,53 +59,37 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (integrationError || !integration) {
-      return NextResponse.json(
-        { error: "Integration not found" },
-        { status: 404 }
-      );
+      console.error("[webhook] Integration not found:", integrationError);
+      return NextResponse.json({ error: "Integration not found" }, { status: 404 });
     }
 
-    // 4. Fetch records from Nango
     const model = PROVIDER_MODEL_MAP[provider_config_key] ?? "default";
-    const nangoBaseUrl = process.env.NEXT_PUBLIC_NANGO_BASE_URL;
-    const nangoSecretKey = process.env.NANGO_SECRET_KEY;
+    const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-    const nangoResponse = await fetch(
-      `${nangoBaseUrl}/sync/records?model=${model}&connection_id=${connection_id}`,
-      {
-        headers: {
-          Authorization: `Bearer ${nangoSecretKey}`,
-          "Provider-Config-Key": provider_config_key,
-        },
-      }
-    );
+    // Fetch all records (paginated)
+    const rawRecords: Record<string, unknown>[] = [];
+    let cursor: string | undefined = undefined;
 
-    if (!nangoResponse.ok) {
-      console.error(`Nango fetch failed: ${nangoResponse.status}`);
-      return NextResponse.json(
-        { error: "Failed to fetch records from Nango" },
-        { status: 502 }
-      );
+    for (;;) {
+      const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
+        await nango.listRecords({ providerConfigKey: provider_config_key, connectionId: connection_id, model, cursor });
+      rawRecords.push(...page.records);
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
     }
 
-    const nangoData = (await nangoResponse.json()) as {
-      records?: unknown[];
-    };
-    const rawRecords = nangoData.records ?? [];
+    console.log(`[webhook] Fetched ${rawRecords.length} raw records`);
 
-    // 5. Normalize records
     const records: SyncRecord[] = rawRecords
       .map((raw) => normalizeRecord(provider_config_key, raw))
       .filter((r): r is SyncRecord => r !== null);
 
-    // 6. Process
     const { processed, skipped } = await processSyncedData(
       integration.workspace_id,
       integration.id,
       records
     );
 
-    // 7. Update last_synced_at + status
     await supabase
       .from("integrations")
       .update({ last_synced_at: new Date().toISOString(), status: "connected" })
@@ -118,7 +97,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, processed, skipped });
   } catch (err) {
-    console.error("Nango webhook error:", err);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    console.error("[webhook] Error:", err);
+    return NextResponse.json(
+      {
+        error: "Internal server error",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      { status: 500 }
+    );
   }
 }
