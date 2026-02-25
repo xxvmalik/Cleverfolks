@@ -5,37 +5,75 @@ import {
   processSyncedData,
   normalizeGmail,
   normalizeSlack,
+  normalizeSlackChannel,
+  normalizeSlackUser,
   normalizeCalendar,
   normalizeHubspot,
   normalizeDrive,
   type SyncRecord,
 } from "@/lib/sync-processor";
 
-// Model name registered in your Nango integration scripts
-const PROVIDER_MODEL_MAP: Record<string, string> = {
-  gmail: "GmailEmail",
-  slack: "SlackMessage",
-  "google-calendar": "GoogleCalendarEvent",
-  hubspot: "HubSpotDeal",
-  "google-drive": "GoogleDriveFile",
+// All models to fetch per provider — Slack has three
+const PROVIDER_MODELS_MAP: Record<string, string[]> = {
+  gmail:            ["GmailEmail"],
+  slack:            ["SlackMessage", "SlackChannel", "SlackUser"],
+  "google-calendar":["GoogleCalendarEvent"],
+  hubspot:          ["HubSpotDeal"],
+  "google-drive":   ["GoogleDriveFile"],
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeRecord(provider: string, raw: any): SyncRecord | null {
-  switch (provider) {
-    case "gmail":           return normalizeGmail(raw);
-    case "slack":           return normalizeSlack(raw);
-    case "google-calendar": return normalizeCalendar(raw);
-    case "hubspot":         return normalizeHubspot(raw);
-    case "google-drive":    return normalizeDrive(raw);
-    default:                return null;
+function normalizeRecord(provider: string, model: string, raw: any): SyncRecord | null {
+  if (provider === "slack") {
+    switch (model) {
+      case "SlackMessage": return normalizeSlack(raw);
+      case "SlackChannel": return normalizeSlackChannel(raw);
+      case "SlackUser":    return normalizeSlackUser(raw);
+      default:             return null;
+    }
   }
+  switch (provider) {
+    case "gmail":            return normalizeGmail(raw);
+    case "google-calendar":  return normalizeCalendar(raw);
+    case "hubspot":          return normalizeHubspot(raw);
+    case "google-drive":     return normalizeDrive(raw);
+    default:                 return null;
+  }
+}
+
+/** Fetch every page for a single (provider, model, connectionId) triple */
+async function fetchAllRecords(
+  nango: Nango,
+  providerConfigKey: string,
+  connectionId: string,
+  model: string
+): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  let cursor: string | undefined = undefined;
+
+  for (;;) {
+    const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
+      await nango.listRecords({ providerConfigKey, connectionId, model, cursor });
+
+    console.log(`[sync] model=${model} page: ${page.records.length} record(s) (cursor=${cursor ?? "start"})`);
+
+    // Log the first record's shape so we can see what Nango actually returns
+    if (page.records.length > 0 && !cursor) {
+      console.log(`[sync] model=${model} first record sample:`, JSON.stringify(page.records[0], null, 2));
+    }
+
+    all.push(...page.records);
+    if (!page.next_cursor) break;
+    cursor = page.next_cursor;
+  }
+
+  return all;
 }
 
 export async function POST(request: NextRequest) {
   const supabase = await createServerSupabaseClient();
 
-  // ── Step 0: Auth ─────────────────────────────────────────────────────────
+  // ── Step 0: Auth ────────────────────────────────────────────────────────
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -44,7 +82,7 @@ export async function POST(request: NextRequest) {
   let integrationId = "";
 
   try {
-    // ── Step 1: Parse + validate body ──────────────────────────────────────
+    // ── Step 1: Parse + validate body ────────────────────────────────────
     let body: { integrationId?: string };
     try {
       body = await request.json() as { integrationId?: string };
@@ -57,7 +95,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "integrationId is required" }, { status: 400 });
     }
 
-    // ── Step 2: Load integration + verify membership ───────────────────────
+    // ── Step 2: Load integration + verify membership ─────────────────────
     const { data: integration, error: integrationError } = await supabase
       .from("integrations")
       .select("id, workspace_id, provider, nango_connection_id")
@@ -88,11 +126,11 @@ export async function POST(request: NextRequest) {
 
     const provider: string = integration.provider;
     const connectionId: string = integration.nango_connection_id ?? "";
-    const model = PROVIDER_MODEL_MAP[provider];
+    const models = PROVIDER_MODELS_MAP[provider];
 
-    if (!model) {
+    if (!models) {
       return NextResponse.json(
-        { error: `No sync model configured for provider: ${provider}` },
+        { error: `No sync models configured for provider: ${provider}` },
         { status: 400 }
       );
     }
@@ -104,51 +142,49 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Step 3: Mark as syncing ────────────────────────────────────────────
+    // ── Step 3: Mark as syncing ──────────────────────────────────────────
     await supabase
       .from("integrations")
       .update({ status: "syncing" })
       .eq("id", integrationId);
 
-    // ── Step 4: Fetch all records from Nango (paginated) ───────────────────
+    // ── Step 4: Fetch all models from Nango ──────────────────────────────
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-    const rawRecords: Record<string, unknown>[] = [];
-    let cursor: string | undefined = undefined;
+    const allRawRecords: Array<{ model: string; raw: Record<string, unknown> }> = [];
 
-    console.log(`[sync] Fetching records — provider=${provider}, model=${model}, connectionId=${connectionId}`);
+    console.log(`[sync] provider=${provider} models=${models.join(",")} connectionId=${connectionId}`);
 
-    try {
-      for (;;) {
-        const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
-          await nango.listRecords({ providerConfigKey: provider, connectionId, model, cursor });
-
-        console.log(`[sync] Got ${page.records.length} records (cursor=${cursor ?? "start"})`);
-        rawRecords.push(...page.records);
-        if (!page.next_cursor) break;
-        cursor = page.next_cursor;
+    for (const model of models) {
+      try {
+        const rawRecords = await fetchAllRecords(nango, provider, connectionId, model);
+        console.log(`[sync] model=${model} total: ${rawRecords.length}`);
+        for (const raw of rawRecords) {
+          allRawRecords.push({ model, raw });
+        }
+      } catch (nangoErr) {
+        console.error(`[sync] Nango listRecords failed for model=${model}:`, nangoErr);
+        await supabase.from("integrations").update({ status: "error" }).eq("id", integrationId);
+        return NextResponse.json(
+          {
+            error: `Failed to fetch records from Nango (model: ${model})`,
+            detail: nangoErr instanceof Error ? nangoErr.message : String(nangoErr),
+            step: "nango_fetch",
+            model,
+          },
+          { status: 502 }
+        );
       }
-    } catch (nangoErr) {
-      console.error("[sync] Nango listRecords failed:", nangoErr);
-      await supabase.from("integrations").update({ status: "error" }).eq("id", integrationId);
-      return NextResponse.json(
-        {
-          error: "Failed to fetch records from Nango",
-          detail: nangoErr instanceof Error ? nangoErr.message : String(nangoErr),
-          step: "nango_fetch",
-        },
-        { status: 502 }
-      );
     }
 
-    console.log(`[sync] Total raw records: ${rawRecords.length}`);
+    console.log(`[sync] Grand total raw records across all models: ${allRawRecords.length}`);
 
-    // ── Step 5: Normalize ──────────────────────────────────────────────────
+    // ── Step 5: Normalize ────────────────────────────────────────────────
     let records: SyncRecord[];
     try {
-      records = rawRecords
-        .map((raw) => normalizeRecord(provider, raw))
+      records = allRawRecords
+        .map(({ model, raw }) => normalizeRecord(provider, model, raw))
         .filter((r): r is SyncRecord => r !== null);
-      console.log(`[sync] Normalized ${records.length} records`);
+      console.log(`[sync] Normalized ${records.length} records (from ${allRawRecords.length} raw)`);
     } catch (normalizeErr) {
       console.error("[sync] Normalization failed:", normalizeErr);
       await supabase.from("integrations").update({ status: "error" }).eq("id", integrationId);
@@ -162,15 +198,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Step 6: Process (upsert docs, chunk, embed, store) ────────────────
+    // ── Step 6: Process (upsert docs, chunk, embed, store) ───────────────
     let processed = 0;
     let skipped = 0;
     try {
-      const result = await processSyncedData(
-        integration.workspace_id,
-        integrationId,
-        records
-      );
+      const result = await processSyncedData(integration.workspace_id, integrationId, records);
       processed = result.processed;
       skipped = result.skipped;
     } catch (processErr) {
@@ -186,7 +218,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ── Step 7: Mark connected ─────────────────────────────────────────────
+    // ── Step 7: Mark connected ───────────────────────────────────────────
     await supabase
       .from("integrations")
       .update({ last_synced_at: new Date().toISOString(), status: "connected" })
@@ -197,7 +229,6 @@ export async function POST(request: NextRequest) {
 
   } catch (err) {
     console.error("[sync] Unhandled error:", err);
-    // Best-effort reset to error state
     if (integrationId) {
       try { await supabase.from("integrations").update({ status: "error" }).eq("id", integrationId); } catch { /* best-effort */ }
     }

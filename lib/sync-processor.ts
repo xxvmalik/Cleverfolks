@@ -193,16 +193,81 @@ export function normalizeGmail(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeSlack(raw: any): SyncRecord {
+  // Nango's SlackMessage model: id, ts, text, channel_id, user, thread_ts, etc.
+  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
+  const text: string = raw.text ?? "";
+
   return {
-    external_id: raw.ts ?? raw.client_msg_id ?? raw.id ?? "",
+    external_id: messageId,
     source_type: "slack_message",
-    title: `Slack message in #${raw.channel ?? raw.channel_id ?? "unknown"}`,
-    content: raw.text ?? "",
+    title: `Slack message in #${channelRef}`,
+    content: text,
     metadata: {
-      channel: raw.channel ?? raw.channel_id,
-      user: raw.user ?? raw.user_id,
+      channel_id: channelRef,
+      user: raw.user ?? raw.user_id ?? raw.username,
       ts: raw.ts,
-      thread_ts: raw.thread_ts,
+      thread_ts: raw.thread_ts ?? null,
+      subtype: raw.subtype ?? null,
+      // preserve the full raw shape for debugging
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeSlackChannel(raw: any): SyncRecord {
+  // Nango's SlackChannel model: id, name, purpose, topic, is_archived, num_members, etc.
+  const parts: string[] = [];
+  if (raw.name) parts.push(`Channel: #${raw.name}`);
+  if (raw.topic?.value) parts.push(`Topic: ${raw.topic.value}`);
+  if (raw.purpose?.value) parts.push(`Purpose: ${raw.purpose.value}`);
+  if (raw.num_members != null) parts.push(`Members: ${raw.num_members}`);
+
+  return {
+    external_id: raw.id ?? "",
+    source_type: "document",
+    title: `#${raw.name ?? raw.id ?? "unknown-channel"}`,
+    content: parts.join("\n") || `Slack channel #${raw.name ?? raw.id}`,
+    metadata: {
+      channel_id: raw.id,
+      name: raw.name,
+      is_archived: raw.is_archived ?? false,
+      is_private: raw.is_private ?? false,
+      num_members: raw.num_members,
+      created: raw.created,
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeSlackUser(raw: any): SyncRecord {
+  // Nango's SlackUser model: id, name, real_name, profile (title, email, display_name, etc.)
+  const profile = raw.profile ?? {};
+  const parts: string[] = [];
+  if (raw.real_name) parts.push(`Name: ${raw.real_name}`);
+  if (profile.title) parts.push(`Title: ${profile.title}`);
+  if (profile.email) parts.push(`Email: ${profile.email}`);
+  if (profile.display_name && profile.display_name !== raw.real_name) {
+    parts.push(`Display name: ${profile.display_name}`);
+  }
+  if (raw.tz_label) parts.push(`Timezone: ${raw.tz_label}`);
+
+  return {
+    external_id: raw.id ?? "",
+    source_type: "document",
+    title: raw.real_name ?? profile.display_name ?? raw.name ?? raw.id ?? "Unknown user",
+    content: parts.join("\n") || `Slack user ${raw.real_name ?? raw.name ?? raw.id}`,
+    metadata: {
+      user_id: raw.id,
+      username: raw.name,
+      real_name: raw.real_name,
+      email: profile.email,
+      title: profile.title,
+      is_bot: raw.is_bot ?? false,
+      deleted: raw.deleted ?? false,
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
 }
