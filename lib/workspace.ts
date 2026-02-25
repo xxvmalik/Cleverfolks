@@ -11,30 +11,16 @@ export function generateSlug(name: string): string {
 
 export async function createWorkspace(
   client: SupabaseClient,
-  name: string,
-  userId: string
+  name: string
 ) {
   const slug = generateSlug(name);
 
-  const { data: workspace, error: workspaceError } = await client
-    .from("workspaces")
-    .insert({ name, slug, owner_id: userId })
-    .select()
-    .single();
+  const { data, error } = await client.rpc("create_workspace_for_user", {
+    p_name: name,
+    p_slug: slug,
+  });
 
-  if (workspaceError) return { data: null, error: workspaceError };
-
-  const { error: memberError } = await client
-    .from("workspace_memberships")
-    .insert({
-      workspace_id: workspace.id,
-      user_id: userId,
-      role: "owner",
-    });
-
-  if (memberError) return { data: null, error: memberError };
-
-  return { data: workspace, error: null };
+  return { data: data as string | null, error };
 }
 
 export async function getUserWorkspaces(client: SupabaseClient, userId: string) {

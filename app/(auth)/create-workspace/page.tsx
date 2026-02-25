@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { createWorkspace, generateSlug } from "@/lib/workspace";
+import { generateSlug } from "@/lib/workspace";
+import { createWorkspaceAction } from "@/app/actions/workspace";
 
 export default function CreateWorkspacePage() {
   const router = useRouter();
@@ -17,15 +18,33 @@ export default function CreateWorkspacePage() {
     setLoading(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+      // Debug: show what the browser-side Supabase client sees.
+      // Open DevTools → Console to read this before the insert fires.
+      const { data: { session } } = await supabase.auth.getSession();
+      console.log("[create-workspace] client-side session:", {
+        userId: session?.user?.id ?? null,
+        hasAccessToken: !!session?.access_token,
+        expiresAt: session?.expires_at ?? null,
+      });
 
-      const { error } = await createWorkspace(supabase, name, user.id);
-      if (error) throw error;
+      // Use a Server Action so the insert runs server-side with
+      // createServerSupabaseClient, which reads session cookies
+      // from the request directly — no cookie-assembly issues.
+      const result = await createWorkspaceAction(name);
+
+      if (result.error) {
+        throw new Error(result.error);
+      }
 
       router.push("/");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to create workspace");
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === "object" && err !== null && "message" in err
+          ? String((err as { message: unknown }).message)
+          : "Failed to create workspace";
+      setError(msg);
     } finally {
       setLoading(false);
     }
