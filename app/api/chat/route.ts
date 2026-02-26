@@ -193,19 +193,22 @@ export async function POST(request: NextRequest) {
 
         // ── Step 3: Embed query ──────────────────────────────────────────────
         const queryEmbedding = await createEmbedding(message);
+        console.log(`[chat] embedding length: ${queryEmbedding.length}`);
 
         // ── Step 4: Hybrid search ────────────────────────────────────────────
         let searchResults: SearchResult[] = [];
         if (queryEmbedding.length > 0) {
           try {
+            const queryText = searchTerms.length > 0 ? searchTerms.join(" ") : message;
+            console.log(`[chat] searching — queryText: "${queryText}", threshold: 0.2`);
             const { data: results, error: searchError } = await db.rpc(
               "hybrid_search_documents",
               {
                 p_workspace_id: workspaceId,
                 p_query_embedding: `[${queryEmbedding.join(",")}]`,
-                p_query_text: searchTerms.length > 0 ? searchTerms.join(" ") : message,
+                p_query_text: queryText,
                 p_match_count: 15,
-                p_match_threshold: 0.4,
+                p_match_threshold: 0.2,
                 p_after:  timeRange?.after  ? timeRange.after.toISOString()  : null,
                 p_before: timeRange?.before ? timeRange.before.toISOString() : null,
               }
@@ -214,6 +217,7 @@ export async function POST(request: NextRequest) {
               console.error("[chat] hybrid_search_documents error:", searchError);
             } else {
               searchResults = (results ?? []) as SearchResult[];
+              console.log(`[chat] search returned ${searchResults.length} results`);
             }
           } catch (searchErr) {
             console.error("[chat] Search threw — continuing without results:", searchErr);

@@ -394,6 +394,11 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
 
       let finalConversationId = activeConversationId;
 
+      // Local mirror of streaming state — updated in sync with setStreamingState.
+      // This avoids reading React state inside another setState updater (which React
+      // Strict Mode would call twice, causing duplicate messages in the done handler).
+      let localStreaming: StreamingState = initState;
+
       try {
         const res = await fetch("/api/chat", {
           method: "POST",
@@ -435,37 +440,35 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
 
             if (event.type === "activity") {
               const { action } = event;
-              setStreamingState((prev) => {
-                if (!prev) return prev;
-                const activities = prev.activities.map((a, i, arr) =>
-                  i === arr.length - 1 ? { ...a, complete: true } : a
-                );
-                return { ...prev, activities: [...activities, { action, complete: false }] };
-              });
+              const activities = localStreaming.activities.map((a, i, arr) =>
+                i === arr.length - 1 ? { ...a, complete: true } : a
+              );
+              localStreaming = { ...localStreaming, activities: [...activities, { action, complete: false }] };
+              setStreamingState(localStreaming);
             } else if (event.type === "text") {
               const { text: chunk } = event;
-              setStreamingState((prev) => {
-                if (!prev) return prev;
-                const activities =
-                  !prev.textStarted && prev.activities.length > 0
-                    ? prev.activities.map((a, i, arr) =>
-                        i === arr.length - 1 ? { ...a, complete: true } : a
-                      )
-                    : prev.activities;
-                return {
-                  ...prev,
-                  content: prev.content + chunk,
-                  textStarted: true,
-                  activities,
-                };
-              });
+              const activities =
+                !localStreaming.textStarted && localStreaming.activities.length > 0
+                  ? localStreaming.activities.map((a, i, arr) =>
+                      i === arr.length - 1 ? { ...a, complete: true } : a
+                    )
+                  : localStreaming.activities;
+              localStreaming = {
+                ...localStreaming,
+                content: localStreaming.content + chunk,
+                textStarted: true,
+                activities,
+              };
+              setStreamingState(localStreaming);
             } else if (event.type === "sources") {
               const { sources } = event;
-              setStreamingState((prev) => (prev ? { ...prev, sources } : prev));
+              localStreaming = { ...localStreaming, sources };
+              setStreamingState(localStreaming);
             } else if (event.type === "metadata") {
               const { conversationId: cid, messageId } = event;
               finalConversationId = cid;
-              setStreamingState((prev) => (prev ? { ...prev, conversationId: cid, messageId } : prev));
+              localStreaming = { ...localStreaming, conversationId: cid, messageId };
+              setStreamingState(localStreaming);
               setActiveConversationId(cid);
               // Optimistically add new conversation to sidebar if not present
               setConversations((prev) => {
@@ -481,21 +484,21 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                 return [placeholder, ...prev];
               });
             } else if (event.type === "done") {
-              // Finalize: move streaming message into messages list
-              setStreamingState((prev) => {
-                if (!prev) return null;
-                const finalActivities = prev.activities.map((a) => ({ ...a, complete: true }));
-                const assistantMsg: UIMessage = {
-                  id: prev.messageId ?? `assistant-${Date.now()}`,
-                  role: "assistant",
-                  content: prev.content,
-                  sources: prev.sources.length > 0 ? prev.sources : null,
-                  created_at: new Date().toISOString(),
-                  activities: finalActivities,
-                };
-                setMessages((msgs) => [...msgs, assistantMsg]);
-                return null;
-              });
+              // Finalize: move streaming message into messages list.
+              // We read from localStreaming (not React state) to avoid the React Strict Mode
+              // double-invocation bug that would occur if we nested setMessages inside
+              // setStreamingState's updater function.
+              const finalActivities = localStreaming.activities.map((a) => ({ ...a, complete: true }));
+              const assistantMsg: UIMessage = {
+                id: localStreaming.messageId ?? `assistant-${Date.now()}`,
+                role: "assistant",
+                content: localStreaming.content,
+                sources: localStreaming.sources.length > 0 ? localStreaming.sources : null,
+                created_at: new Date().toISOString(),
+                activities: finalActivities,
+              };
+              setMessages((msgs) => [...msgs, assistantMsg]);
+              setStreamingState(null);
 
               // Refetch conversations to pick up auto-title
               void fetchConversations();
