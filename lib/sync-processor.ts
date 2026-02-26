@@ -32,12 +32,19 @@ export async function processSyncedData(
   const supabase = supabaseOverride ?? await createServerSupabaseClient();
   let processed = 0;
   let skipped = 0;
-  const total = records.length;
 
-  console.log(`[processor] Starting — ${total} records, workspace=${workspaceId}`);
+  // Deduplicate within this batch by external_id (last writer wins)
+  const seen = new Map<string, SyncRecord>();
+  for (const r of records) seen.set(r.external_id, r);
+  const deduped = [...seen.values()];
+  if (deduped.length < records.length) {
+    console.log(`[processor] Deduped ${records.length - deduped.length} duplicate external_ids in batch`);
+  }
 
-  for (let i = 0; i < records.length; i++) {
-    const record = records[i];
+  console.log(`[processor] Starting — ${deduped.length} records (after dedup), workspace=${workspaceId}`);
+
+  for (let i = 0; i < deduped.length; i++) {
+    const record = deduped[i];
     const label = `[processor] record[${i}] external_id=${record.external_id}`;
 
     try {
@@ -72,8 +79,22 @@ export async function processSyncedData(
       );
 
       if (docError) {
+        // Postgres unique_violation (23505) means a concurrent insert beat us —
+        // the ON CONFLICT clause should prevent this but handle it gracefully anyway.
+        const isUniqueViolation =
+          docError.code === "23505" ||
+          docError.message?.includes("unique constraint") ||
+          docError.message?.includes("duplicate key");
+
+        if (isUniqueViolation) {
+          console.warn(`${label} skipped — unique constraint violation (duplicate external_id)`);
+          skipped++;
+          continue;
+        }
+
+        // Any other DB/schema error should still surface so we know if the
+        // SQL migration hasn't been applied yet.
         console.error(`${label} upsert_synced_document RPC error:`, docError);
-        // Surface this error so the caller can detect DB/schema issues
         throw new Error(`upsert_synced_document failed: ${docError.message}`);
       }
       if (!documentId) {
@@ -144,7 +165,7 @@ export async function processSyncedData(
       }
 
       processed++;
-      console.log(`[processor] ${processed}/${total} done — ${storedChunks} chunks stored`);
+      console.log(`[processor] ${processed}/${deduped.length} done — ${storedChunks} chunks stored`);
 
     } catch (recordErr) {
       console.error(`${label} fatal error — skipping record:`, recordErr);
@@ -248,10 +269,13 @@ export function normalizeSlackReply(raw: any): SyncRecord {
 export function normalizeSlackReaction(raw: any): SyncRecord {
   // Nango's SlackMessageReaction model: reaction, user, message_ts, channel_id
   const emoji: string = raw.reaction ?? raw.name ?? "unknown";
-  const user: string = raw.user ?? raw.user_id ?? "someone";
+  const user: string = raw.user ?? raw.user_id ?? "unknown";
   const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
   const messageTs: string = raw.message_ts ?? raw.ts ?? "";
-  const uniqueId: string = raw.id ?? `${emoji}_${user}_${messageTs}`;
+
+  // Always build a composite key — raw.id is often the parent message ts
+  // (shared across all reactions on that message) and cannot be used alone.
+  const uniqueId = `reaction-${messageTs}-${emoji}-${user}`;
 
   return {
     external_id: uniqueId,
