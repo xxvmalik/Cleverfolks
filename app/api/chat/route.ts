@@ -16,6 +16,16 @@ type SearchResult = {
   similarity: number;
 };
 
+type ChronologicalResult = {
+  chunk_id: string;
+  document_id: string;
+  title: string;
+  chunk_text: string;
+  source_type: string;
+  metadata: Record<string, unknown>;
+  msg_ts: string | null;
+};
+
 type SourceInfo = {
   source_type: string;
   title: string;
@@ -207,6 +217,22 @@ function deduplicateSources(results: SearchResult[]): SourceInfo[] {
   return [...seen.values()];
 }
 
+function formatTimeRangeLabel(timeRange: { after?: Date; before?: Date }): string {
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  if (timeRange.after && timeRange.before) {
+    const a = timeRange.after.toLocaleDateString("en-US", opts);
+    const b = timeRange.before.toLocaleDateString("en-US", opts);
+    return `${a} – ${b}`;
+  }
+  if (timeRange.after) {
+    return `since ${timeRange.after.toLocaleDateString("en-US", opts)}`;
+  }
+  if (timeRange.before) {
+    return `before ${timeRange.before.toLocaleDateString("en-US", opts)}`;
+  }
+  return "the selected period";
+}
+
 // ── Route ─────────────────────────────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   // ── Auth (cookie-based, verify session only) ──────────────────────────────
@@ -365,60 +391,99 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // ── Activity: searching (sent BEFORE the actual search starts) ───────
-        send({ type: "activity", action: "Searching your business data..." });
+        // ── Steps 4 & 5: Retrieve context ────────────────────────────────────
+        //
+        // Two paths depending on query intent:
+        //   • Broad summary (e.g. "what happened last week?") → chronological
+        //     fetch via fetch_chunks_by_timerange; no embedding needed.
+        //   • Specific topic query → vector + keyword hybrid search.
 
-        // ── Step 4: Embed query ──────────────────────────────────────────────
-        const queryEmbedding = await createEmbedding(message);
-        console.log(`[chat] embedding length: ${queryEmbedding.length}`);
-
-        // ── Step 5: Hybrid search ────────────────────────────────────────────
         let searchResults: SearchResult[] = [];
-        if (queryEmbedding.length > 0) {
+        const isBroad = analysis.isBroadSummary && timeRange !== null;
+
+        if (isBroad && timeRange) {
+          // ── Broad summary path ─────────────────────────────────────────────
+          const label = formatTimeRangeLabel(timeRange);
+          send({ type: "activity", action: `Fetching messages from ${label}...` });
+
           try {
-            const queryText =
-              searchTerms.length > 0 ? searchTerms.join(" ") : message;
             console.log(
-              `[chat] searching — queryText: "${queryText}", ` +
-                `threshold: 0.2, ` +
-                `after: ${timeRange?.after?.toISOString() ?? "none"}, ` +
-                `before: ${timeRange?.before?.toISOString() ?? "none"}`
+              `[chat] broad summary fetch — after: ${timeRange.after?.toISOString() ?? "none"}, ` +
+                `before: ${timeRange.before?.toISOString() ?? "none"}`
             );
-            const { data: results, error: searchError } = await db.rpc(
-              "hybrid_search_documents",
+            const { data: results, error: fetchError } = await db.rpc(
+              "fetch_chunks_by_timerange",
               {
                 p_workspace_id: workspaceId,
-                p_query_embedding: `[${queryEmbedding.join(",")}]`,
-                p_query_text: queryText,
-                p_match_count: 15,
-                p_match_threshold: 0.2,
-                p_after: timeRange?.after ? timeRange.after.toISOString() : null,
-                p_before: timeRange?.before
-                  ? timeRange.before.toISOString()
-                  : null,
+                p_after: timeRange.after ? timeRange.after.toISOString() : null,
+                p_before: timeRange.before ? timeRange.before.toISOString() : null,
+                p_limit: 150,
               }
             );
-            if (searchError) {
-              console.error(
-                "[chat] hybrid_search_documents error:",
-                searchError
-              );
+            if (fetchError) {
+              console.error("[chat] fetch_chunks_by_timerange error:", fetchError);
             } else {
-              searchResults = (results ?? []) as SearchResult[];
+              // Map to SearchResult (similarity: 0 — not ranked by relevance)
+              searchResults = ((results ?? []) as ChronologicalResult[]).map(
+                (r) => ({ ...r, similarity: 0 })
+              );
               console.log(
-                `[chat] search returned ${searchResults.length} results`
+                `[chat] chronological fetch returned ${searchResults.length} chunks`
               );
             }
-          } catch (searchErr) {
-            console.error(
-              "[chat] Search threw — continuing without results:",
-              searchErr
-            );
+          } catch (fetchErr) {
+            console.error("[chat] fetch_chunks_by_timerange threw:", fetchErr);
           }
         } else {
-          console.warn(
-            "[chat] Empty embedding from Voyage — skipping vector search"
-          );
+          // ── Hybrid search path ─────────────────────────────────────────────
+          send({ type: "activity", action: "Searching your business data..." });
+
+          const queryEmbedding = await createEmbedding(message);
+          console.log(`[chat] embedding length: ${queryEmbedding.length}`);
+
+          if (queryEmbedding.length > 0) {
+            try {
+              const queryText =
+                searchTerms.length > 0 ? searchTerms.join(" ") : message;
+              console.log(
+                `[chat] searching — queryText: "${queryText}", ` +
+                  `threshold: 0.2, ` +
+                  `after: ${timeRange?.after?.toISOString() ?? "none"}, ` +
+                  `before: ${timeRange?.before?.toISOString() ?? "none"}`
+              );
+              const { data: results, error: searchError } = await db.rpc(
+                "hybrid_search_documents",
+                {
+                  p_workspace_id: workspaceId,
+                  p_query_embedding: `[${queryEmbedding.join(",")}]`,
+                  p_query_text: queryText,
+                  p_match_count: 15,
+                  p_match_threshold: 0.2,
+                  p_after: timeRange?.after ? timeRange.after.toISOString() : null,
+                  p_before: timeRange?.before
+                    ? timeRange.before.toISOString()
+                    : null,
+                }
+              );
+              if (searchError) {
+                console.error("[chat] hybrid_search_documents error:", searchError);
+              } else {
+                searchResults = (results ?? []) as SearchResult[];
+                console.log(
+                  `[chat] search returned ${searchResults.length} results`
+                );
+              }
+            } catch (searchErr) {
+              console.error(
+                "[chat] Search threw — continuing without results:",
+                searchErr
+              );
+            }
+          } else {
+            console.warn(
+              "[chat] Empty embedding from Voyage — skipping vector search"
+            );
+          }
         }
 
         // ── Activity: reading results (only if search found something) ───────

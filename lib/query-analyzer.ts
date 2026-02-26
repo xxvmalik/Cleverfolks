@@ -16,6 +16,9 @@ export type QueryAnalysis = {
   timeRange: TimeRange | null;
   searchTerms: string[];
   originalQuery: string;
+  /** True when the query asks for a broad summary of a time period rather than
+   *  searching for a specific topic.  Triggers the chronological fetch path. */
+  isBroadSummary: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -165,6 +168,11 @@ export function extractTimeRange(query: string, now = new Date()): TimeRange | n
     return { after: d, before: endOfDay(now) };
   }
 
+  // recently / lately / of late → last 7 days
+  if (/\b(recently|lately|of\s+late)\b/.test(q)) {
+    return { after: addDays(today, -7), before: endOfDay(now) };
+  }
+
   // on Monday / last Tuesday / this Friday (specific weekday)
   const weekdayMatch = q.match(/\b(?:on\s+|last\s+|this\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/);
   if (weekdayMatch) {
@@ -240,13 +248,38 @@ export function extractSearchTerms(query: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
+// Broad summary detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Patterns that signal the user wants an overall summary of a time period
+ * rather than a targeted search for a specific topic.
+ */
+const BROAD_INTENT_RE =
+  /\b(summar(?:is|iz)|recap|overview|highlights?|key\s+(?:topics?|discussions?|points?|issues?|updates?|things?)|what(?:'s|\s+(?:has\s+)?been)\s+(?:going\s+on|happening|discussed?|said|talked\s+about)|what\s+happened|what\s+did\s+(?:the\s+team|everyone|we|they|people)\s+(?:discuss|talk\s+about|say|post)|what\s+were\s+(?:the\s+)?(?:topics?|discussions?|issues?|updates?|key)|update\s+me|catch\s+me\s+up|fill\s+me\s+in|what(?:'s|\s+is)\s+new|any\s+updates?|what\s+was\s+discussed)\b/i;
+
+/**
+ * Returns true when the query expresses broad summary intent AND contains
+ * either an explicit time reference (timeRange !== null) or a word that
+ * implies recency such that extractTimeRange already resolved it.
+ */
+export function detectBroadSummary(
+  query: string,
+  timeRange: TimeRange | null
+): boolean {
+  return BROAD_INTENT_RE.test(query) && timeRange !== null;
+}
+
+// ---------------------------------------------------------------------------
 // Main exported function
 // ---------------------------------------------------------------------------
 
 export function analyzeQuery(query: string, now = new Date()): QueryAnalysis {
+  const timeRange = extractTimeRange(query, now);
   return {
-    timeRange: extractTimeRange(query, now),
+    timeRange,
     searchTerms: extractSearchTerms(query),
     originalQuery: query,
+    isBroadSummary: detectBroadSummary(query, timeRange),
   };
 }
