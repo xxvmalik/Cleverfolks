@@ -210,6 +210,7 @@ RULES:
 - If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.
 
 ROLE DISCOVERY:
+- Never suggest bot accounts or integration accounts as team members. Accounts with "bot", "integration", "nango", "developer", "cleverfolks_ai", or similar patterns in the name are automated systems, not people.
 - When a user asks about a role (e.g., "our designer", "the accountant", "whoever handles refunds") and NO ONE in the Company Intelligence section has that role:
   - Search the retrieved data to identify who is most active in the relevant area
   - Answer the user's question with what you found from the data AND ask for confirmation at the end: "Based on their activity in #[channel], [name] appears to handle [function] — they last posted [brief detail]. Is [name] your [role]?"
@@ -507,6 +508,58 @@ function buildContextString(
   );
 }
 
+// ── Web query enrichment ──────────────────────────────────────────────────────
+
+const QUERY_SKIP_WORDS = new Set([
+  "what", "when", "why", "how", "did", "was", "is", "are", "the", "a", "an",
+  "in", "of", "to", "for", "about", "any", "do", "does", "our", "their",
+  "has", "have", "been", "will", "can", "could", "would", "should", "its",
+  "this", "that", "these", "those", "really", "actually", "still", "last",
+  "first", "just", "also", "even", "tell", "me", "us", "you", "your", "it",
+]);
+
+/**
+ * If the web query is fewer than 4 words, scan the last 3 user messages for
+ * topic words that are missing from the query and prepend them.
+ * This prevents follow-up questions from losing their subject context.
+ */
+function enrichWebQuery(
+  webQuery: string,
+  history: Array<{ role: string; content: string }>
+): string {
+  const queryWords = webQuery.trim().split(/\s+/);
+  if (queryWords.length >= 4) return webQuery;
+
+  const priorUserMessages = history
+    .filter((m) => m.role === "user")
+    .slice(-3)
+    .reverse(); // most recent first
+
+  for (const prior of priorUserMessages) {
+    const topicWords = prior.content
+      .replace(/[^\w\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !QUERY_SKIP_WORDS.has(w.toLowerCase()));
+
+    if (topicWords.length === 0) continue;
+
+    const lowerQuery = webQuery.toLowerCase();
+    const newWords = topicWords.filter(
+      (w) => !lowerQuery.includes(w.toLowerCase())
+    );
+
+    if (newWords.length > 0) {
+      const enriched = `${newWords.slice(0, 3).join(" ")} ${webQuery}`.trim();
+      console.log(
+        `[chat] web_query enriched: "${webQuery}" → "${enriched}"`
+      );
+      return enriched;
+    }
+  }
+
+  return webQuery;
+}
+
 // ── Role update helpers ───────────────────────────────────────────────────────
 
 const ROLE_UPDATE_RE = /\[ROLE_UPDATE:\s*name=([^,\]]+),\s*role=([^\]]+)\]/i;
@@ -679,6 +732,14 @@ export async function POST(request: NextRequest) {
     profileRow as KnowledgeProfileRow | null
   );
 
+  // Fix 1: Override system prompt for general knowledge to prevent the model
+  // from mentioning data searches that never happened.
+  const effectiveSystemPrompt =
+    routing.intent === "general_knowledge"
+      ? systemPrompt +
+        "\n\nThis is a general knowledge question. Answer directly from your training knowledge. Do NOT mention searching the user's data, connected systems, or available context. Do NOT say 'I couldn't find that in the available data.' Just answer the question naturally. If relevant, relate it back to their business context."
+      : systemPrompt;
+
   const knowledgeProfile =
     (profileRow as KnowledgeProfileRow | null)?.profile ?? null;
 
@@ -770,7 +831,8 @@ export async function POST(request: NextRequest) {
 
         } else if (intent === "web_search") {
           // ── Web search: query Tavily for external information ───────────────
-          const webQuery = routing.web_query ?? message;
+          // Fix 2: enrich short queries with topic context from history
+          const webQuery = enrichWebQuery(routing.web_query ?? message, history);
           send({ type: "activity", action: "Searching the web..." });
           webResults = await searchWeb(webQuery);
           console.log(`[chat] web search (${webQuery}) → ${webResults.length} results`);
@@ -790,9 +852,11 @@ export async function POST(request: NextRequest) {
 
         } else if (intent === "hybrid") {
           // ── Hybrid: internal RAG + web search in parallel ───────────────────
+          // Fix 2: enrich short queries with topic context from history
+          const hybridWebQuery = enrichWebQuery(routing.web_query ?? message, history);
           const [ragResult, webRes] = await Promise.all([
             runInternalRAGSearch(message, history, workspaceId, db, knowledgeProfile),
-            searchWeb(routing.web_query ?? message),
+            searchWeb(hybridWebQuery),
           ]);
           for (const label of ragResult.activityLabels) {
             send({ type: "activity", action: label });
@@ -931,8 +995,10 @@ export async function POST(request: NextRequest) {
         }
 
         // ── Step 6: Call Claude with streaming ───────────────────────────────
+        // Fix 1: general_knowledge never gets a context block — no search ran,
+        // so injecting "No relevant data found" would prime the wrong response.
         const userMessageWithContext =
-          intent === "conversational"
+          intent === "conversational" || intent === "general_knowledge"
             ? message
             : `<context>\n${context}\n</context>\n\n${message}`;
 
@@ -944,7 +1010,7 @@ export async function POST(request: NextRequest) {
         const claudeStream = await anthropic.messages.create({
           model: "claude-sonnet-4-20250514",
           max_tokens: 2048,
-          system: systemPrompt,
+          system: effectiveSystemPrompt,
           messages: claudeMessages,
           stream: true,
         });

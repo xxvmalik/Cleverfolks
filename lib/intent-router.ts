@@ -107,11 +107,16 @@ INTENT CATEGORIES:
 - hybrid: needs BOTH internal company data AND external web/general knowledge. Example: "how does our complaint rate compare to industry average".
 - creative: generate content like emails, documents, reports, summaries. May need internal context for personalization.
 
+When generating web_query for web_search or hybrid intents:
+- Make the query as specific as possible using context from the RECENT CONVERSATION.
+- For follow-up questions, ALWAYS carry the main subject forward. If the user previously asked about "Instagram algorithm" and now asks "was the last update really in 2024?", the web_query MUST be "Instagram algorithm update 2024", not "algorithm update 2024".
+- Include the specific product, company, platform, or person being discussed.
+
 Return ONLY a valid JSON object (no markdown, no explanation):
 {
   "intent": "one of the 6 categories",
   "reasoning": "one sentence explaining the classification",
-  "web_query": "optimised Tavily search query if intent is web_search or hybrid, otherwise null",
+  "web_query": "specific Tavily search query if intent is web_search or hybrid, otherwise null",
   "search_needed": true or false (whether internal RAG search is needed),
   "profile_sufficient": true or false (whether the company knowledge profile alone can answer this without full RAG search)
 }`;
