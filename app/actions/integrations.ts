@@ -1,10 +1,11 @@
 "use server";
 
 import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { inngest } from "@/lib/inngest/client";
 
 /**
  * Called after Nango ConnectUI fires a 'connect' event.
- * Stores the real connection ID returned by Nango.
+ * Saves the connection then immediately fires the first background sync.
  */
 export async function connectIntegrationAction(
   workspaceId: string,
@@ -22,7 +23,7 @@ export async function connectIntegrationAction(
     return { error: "Unauthorized" };
   }
 
-  // Check if integration already exists
+  // Upsert the integration row
   const { data: existing } = await supabase
     .from("integrations")
     .select("id")
@@ -30,30 +31,45 @@ export async function connectIntegrationAction(
     .eq("provider", provider)
     .single();
 
+  let integrationId: string | null = null;
+
   if (existing) {
-    const { error } = await supabase
+    await supabase
       .from("integrations")
       .update({
         status: "connected",
         nango_connection_id: nangoConnectionId,
+        sync_status: "syncing",
+        sync_error: null,
       })
       .eq("id", existing.id);
+    integrationId = existing.id;
+  } else {
+    const { data: inserted, error } = await supabase
+      .from("integrations")
+      .insert({
+        workspace_id: workspaceId,
+        provider,
+        status: "connected",
+        nango_connection_id: nangoConnectionId,
+        sync_status: "syncing",
+      })
+      .select("id")
+      .single();
 
-    return { error: error?.message ?? null, integrationId: existing.id };
+    if (error) return { error: error.message, integrationId: null };
+    integrationId = inserted?.id ?? null;
   }
 
-  const { data: inserted, error } = await supabase
-    .from("integrations")
-    .insert({
-      workspace_id: workspaceId,
-      provider,
-      status: "connected",
-      nango_connection_id: nangoConnectionId,
-    })
-    .select("id")
-    .single();
+  if (!integrationId) return { error: "Failed to save integration", integrationId: null };
 
-  return { error: error?.message ?? null, integrationId: inserted?.id ?? null };
+  // Fire the first sync immediately as a background job
+  await inngest.send({
+    name: "integration/sync.requested",
+    data: { workspaceId, integrationId, provider, connectionId: nangoConnectionId },
+  });
+
+  return { error: null, integrationId };
 }
 
 /**
@@ -71,23 +87,20 @@ export async function disconnectIntegrationAction(integrationId: string) {
     return { error: "Unauthorized" };
   }
 
-  // Fetch the integration to get the nango_connection_id + provider
   const { data: integration } = await supabase
     .from("integrations")
     .select("nango_connection_id, provider")
     .eq("id", integrationId)
     .single();
 
-  // Delete the connection from Nango (best-effort)
+  // Delete from Nango (best-effort)
   if (integration?.nango_connection_id) {
     try {
       await fetch(
         `https://api.nango.dev/connection/${encodeURIComponent(integration.nango_connection_id)}?provider_config_key=${encodeURIComponent(integration.provider)}`,
         {
           method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${process.env.NANGO_SECRET_KEY}`,
-          },
+          headers: { Authorization: `Bearer ${process.env.NANGO_SECRET_KEY}` },
         }
       );
     } catch (err) {
@@ -97,7 +110,7 @@ export async function disconnectIntegrationAction(integrationId: string) {
 
   const { error } = await supabase
     .from("integrations")
-    .update({ status: "disconnected", nango_connection_id: null })
+    .update({ status: "disconnected", nango_connection_id: null, sync_status: "idle" })
     .eq("id", integrationId);
 
   return { error: error?.message ?? null };

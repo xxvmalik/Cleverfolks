@@ -101,7 +101,7 @@ function IntegrationCard({
   onConnect: (provider: string) => Promise<void>;
 }) {
   const router = useRouter();
-  const [loading, setLoading] = useState<"sync" | "connect" | "disconnect" | null>(null);
+  const [loading, setLoading] = useState<"connect" | "disconnect" | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const status = integration?.status ?? "disconnected";
@@ -131,32 +131,6 @@ function IntegrationCard({
       const result = await disconnectIntegrationAction(integration.id);
       if (result.error) setError(result.error);
       else router.refresh();
-    } finally {
-      setLoading(null);
-    }
-  }
-
-  async function handleSync() {
-    if (!integration) return;
-    setLoading("sync"); // prevents double-click while the request is in-flight
-    setError(null);
-    try {
-      const res = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ integrationId: integration.id }),
-      });
-      const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
-      if (!res.ok || data.error) {
-        setError(data.error ?? "Failed to start sync");
-      } else {
-        // API sets sync_status = "syncing" in DB before returning.
-        // Refresh immediately so the DB state drives the UI from here on —
-        // isSyncing will become true via syncStatus, not local loading.
-        router.refresh();
-      }
-    } catch {
-      setError("Failed to start sync");
     } finally {
       setLoading(null);
     }
@@ -206,27 +180,13 @@ function IntegrationCard({
       {/* Actions */}
       <div className="flex gap-2 mt-auto">
         {isConnected ? (
-          <>
-            <button
-              onClick={handleSync}
-              disabled={isSyncing || loading === "sync"}
-              className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#3A89FF] text-white hover:bg-[#2d7aff] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isSyncing || loading === "sync" ? (
-                <span className="flex items-center justify-center gap-1.5">
-                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  Syncing…
-                </span>
-              ) : "Sync Now"}
-            </button>
-            <button
-              onClick={handleDisconnect}
-              disabled={isSyncing || !!loading}
-              className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#3A3D45] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {loading === "disconnect" ? "Disconnecting…" : "Disconnect"}
-            </button>
-          </>
+          <button
+            onClick={handleDisconnect}
+            disabled={isSyncing || !!loading}
+            className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#3A3D45] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading === "disconnect" ? "Disconnecting…" : "Disconnect"}
+          </button>
         ) : (
           <button
             onClick={handleConnect}
