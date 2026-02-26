@@ -70,6 +70,47 @@ function extractJSON(text: string): QueryPlan | null {
   return null;
 }
 
+// ── Profile summary helper ────────────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildProfileSummary(profile: Record<string, any>): string {
+  const members: Array<{
+    name?: string;
+    detected_role?: string;
+    likely_role?: string;
+  }> = profile.team_members ?? [];
+
+  const channels: Array<{
+    name?: string;
+    purpose?: string;
+  }> = profile.channels ?? [];
+
+  const parts: string[] = [];
+
+  if (members.length > 0) {
+    const memberLines = members
+      .filter((m) => m.name)
+      .slice(0, 12)
+      .map((m) => {
+        const role = m.detected_role ?? m.likely_role ?? "unknown role";
+        return `  - ${m.name} (${role})`;
+      })
+      .join("\n");
+    parts.push(`Team members and roles:\n${memberLines}`);
+  }
+
+  if (channels.length > 0) {
+    const channelLines = channels
+      .filter((c) => c.name)
+      .slice(0, 10)
+      .map((c) => `  - #${c.name}${c.purpose ? `: ${c.purpose}` : ""}`)
+      .join("\n");
+    parts.push(`Channels:\n${channelLines}`);
+  }
+
+  return parts.join("\n\n") || "(no profile data)";
+}
+
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
 function buildPlannerPrompt(
@@ -89,15 +130,7 @@ function buildPlannerPrompt(
 
   const profileSummary =
     knowledgeProfile && Object.keys(knowledgeProfile).length > 0
-      ? `Team: ${(knowledgeProfile.team_members ?? [])
-          .slice(0, 8)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((m: any) => m.name)
-          .join(", ")}. Channels: ${(knowledgeProfile.channels ?? [])
-          .slice(0, 8)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((c: any) => `#${c.name}`)
-          .join(", ")}.`
+      ? buildProfileSummary(knowledgeProfile)
       : "(no profile available)";
 
   const timeRangeInfo = queryAnalysis.timeRange
@@ -120,6 +153,10 @@ You can combine multiple strategies. For example:
 - 'What's happening in #operations?' → channel_search for 'operations'
 - 'Who is on the team?' → profile_only
 - 'Compare complaints this week vs last week' → broad_fetch for this week + broad_fetch for last week
+
+When the user asks about a team member by name or role, use person_search with their exact name from the profile.
+When the user asks about a channel by name or purpose, use channel_search with the channel name.
+When the user asks about a role (e.g. "what is the engineering lead working on?"), resolve the role to a name using the profile, then use person_search.
 
 RECENT CONVERSATION:
 ${recentHistory}

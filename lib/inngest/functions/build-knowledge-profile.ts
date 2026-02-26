@@ -4,131 +4,59 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type SerialisableChunk = {
-  chunk_text: string;
-  metadata: Record<string, unknown>;
-  source_type: string;
+type TeamActivityRow = {
+  user_name: string;
+  message_count: number;
+  directive_count: number;
+  response_count: number;
+  channel_set: string[] | null;
 };
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+type MentionCountRow = {
+  mention_name: string;
+  mention_count: number;
+};
 
-const FETCH_PAGE_SIZE = 200;
-const ANALYSIS_BATCH_SIZE = 200;
-/** Cap total chunks so a single workspace can't generate unbounded API spend. */
-const MAX_CHUNKS = 600;
+type ChannelActivityRow = {
+  channel_name: string;
+  message_count: number;
+  unique_speakers: number;
+  key_speakers: string[] | null;
+};
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+type PersonSampleRow = {
+  user_name: string;
+  chunk_text: string;
+  channel_name: string | null;
+  msg_ts: string | null;
+};
 
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size));
-  }
-  return out;
-}
+type ChannelSampleRow = {
+  channel_name: string;
+  user_name: string | null;
+  chunk_text: string;
+  msg_ts: string | null;
+};
 
-function formatChunksForAnalysis(chunks: SerialisableChunk[]): string {
-  return chunks
-    .map((c) => {
-      const meta = c.metadata ?? {};
-      const channelName =
-        (meta.channel_name as string | undefined) ??
-        (meta.channel_id as string | undefined) ??
-        "";
-      const userName =
-        (meta.user_name as string | undefined) ??
-        (meta.user as string | undefined) ??
-        "";
-      const tsRaw = meta.ts as string | undefined;
-      const date = tsRaw
-        ? new Date(parseFloat(tsRaw) * 1000).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })
-        : "";
+type TeamData = {
+  activity: TeamActivityRow[];
+  mentions: MentionCountRow[];
+  channels: ChannelActivityRow[];
+};
 
-      const parts: string[] = [c.source_type];
-      if (channelName) parts.push(`#${channelName}`);
-      if (userName) parts.push(userName);
-      if (date) parts.push(date);
+type SampleData = {
+  personSamples: PersonSampleRow[];
+  channelSamples: ChannelSampleRow[];
+};
 
-      return `[${parts.join(" | ")}]\n${c.chunk_text}`;
-    })
-    .join("\n\n---\n\n");
-}
+// ── JSON extraction ───────────────────────────────────────────────────────────
 
-function buildAnalysisPrompt(formattedChunks: string, count: number): string {
-  return `You are analyzing business communication data to build a company knowledge profile.
-
-Analyze these ${count} messages and extract structured information.
-Return ONLY a valid JSON object (no markdown, no code blocks, no explanation) with this exact structure:
-
-{
-  "team_members": [
-    {
-      "name": "string",
-      "likely_role": "string — inferred from behavior, not job title",
-      "active_channels": ["string"],
-      "typical_activities": "string — what they actually do in messages",
-      "notes": "string — anything notable like 'frequently tagged for escalations'"
-    }
-  ],
-  "channels": [
-    {
-      "name": "string — without the # symbol",
-      "purpose": "string — what this channel is actually used for",
-      "typical_content": "string — types of messages posted here",
-      "key_people": ["string — names of frequent posters"]
-    }
-  ],
-  "business_patterns": [
-    "string — recurring patterns like shift rotations, escalation flows, weekly syncs"
-  ],
-  "terminology": {
-    "term": "definition — company-specific jargon or shorthand from the messages"
-  },
-  "key_topics": [
-    "string — major ongoing themes or subjects across the workspace"
-  ]
-}
-
-Rules:
-- Base everything ONLY on what is observed in the messages — do not fabricate
-- Infer roles from what people DO (posts announcements, handles complaints, shares designs)
-- If someone is tagged for escalations or issues, note that specifically
-- If a term has a specific meaning in this company's context, capture it
-- team_members should only include real people found in the messages (not bots or integrations)
-- Return the JSON object only — nothing before or after it
-
-Messages:
-${formattedChunks}`;
-}
-
-function buildMergePrompt(batchResults: unknown[]): string {
-  const serialised = batchResults
-    .map((r, i) => `--- Analysis ${i + 1} ---\n${JSON.stringify(r, null, 2)}`)
-    .join("\n\n");
-  return `Merge these ${batchResults.length} partial company profile analyses into a single comprehensive profile.
-
-Combine duplicate entries (same person, same channel) by merging their details.
-Resolve conflicts by preferring the most specific / most evidence-backed description.
-Deduplicate business_patterns, key_topics, and terminology entries.
-Return ONLY the merged JSON object (same structure, no markdown, no explanation).
-
-Partial results:
-${serialised}`;
-}
-
-/** Extract a JSON object from a Claude response that may contain markdown fences. */
 function extractJSON(text: string): Record<string, unknown> | null {
-  // 1. Direct parse
   try {
     return JSON.parse(text) as Record<string, unknown>;
   } catch {
     /* fall through */
   }
-  // 2. JSON inside ```json ... ``` or ``` ... ```
   const fenced = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
   if (fenced) {
     try {
@@ -137,7 +65,6 @@ function extractJSON(text: string): Record<string, unknown> | null {
       /* fall through */
     }
   }
-  // 3. First { ... } block in the string
   const raw = text.match(/\{[\s\S]*\}/);
   if (raw) {
     try {
@@ -147,6 +74,135 @@ function extractJSON(text: string): Record<string, unknown> | null {
     }
   }
   return null;
+}
+
+// ── Prompt builder ────────────────────────────────────────────────────────────
+
+function buildAnalysisPrompt(teamData: TeamData, sampleData: SampleData): string {
+  const { activity, mentions, channels } = teamData;
+  const { personSamples, channelSamples } = sampleData;
+
+  // Team activity section
+  const activityLines = activity
+    .slice(0, 30)
+    .map((a) => {
+      const chans = (a.channel_set ?? []).filter(Boolean).join(", ") || "unknown";
+      return (
+        `  ${a.user_name}: ${a.message_count} msgs, ` +
+        `${a.directive_count} directives, ${a.response_count} replies, ` +
+        `channels: [${chans}]`
+      );
+    })
+    .join("\n");
+
+  // Mention counts section
+  const mentionLines = mentions
+    .slice(0, 20)
+    .map((m) => `  @${m.mention_name}: ${m.mention_count}x`)
+    .join("\n");
+
+  // Channel activity section
+  const channelLines = channels
+    .map((c) => {
+      const speakers = (c.key_speakers ?? []).filter(Boolean).slice(0, 5).join(", ");
+      return (
+        `  #${c.channel_name}: ${c.message_count} msgs, ` +
+        `${c.unique_speakers} speakers, active: [${speakers}]`
+      );
+    })
+    .join("\n");
+
+  // Person samples grouped by person
+  const personMap = new Map<string, PersonSampleRow[]>();
+  for (const s of personSamples) {
+    const arr = personMap.get(s.user_name) ?? [];
+    arr.push(s);
+    personMap.set(s.user_name, arr);
+  }
+  const personSampleLines = [...personMap.entries()]
+    .map(([name, samples]) => {
+      const msgs = samples
+        .map((s) => `    [#${s.channel_name ?? "?"}] ${s.chunk_text.slice(0, 140).replace(/\n/g, " ")}`)
+        .join("\n");
+      return `  --- ${name} ---\n${msgs}`;
+    })
+    .join("\n\n");
+
+  // Channel samples grouped by channel
+  const channelMap = new Map<string, ChannelSampleRow[]>();
+  for (const s of channelSamples) {
+    const arr = channelMap.get(s.channel_name) ?? [];
+    arr.push(s);
+    channelMap.set(s.channel_name, arr);
+  }
+  const channelSampleLines = [...channelMap.entries()]
+    .map(([name, samples]) => {
+      const msgs = samples
+        .map((s) => `    [${s.user_name ?? "?"}] ${s.chunk_text.slice(0, 140).replace(/\n/g, " ")}`)
+        .join("\n");
+      return `  --- #${name} ---\n${msgs}`;
+    })
+    .join("\n\n");
+
+  return `You are building a company knowledge profile from Slack workspace data.
+
+=== TEAM ACTIVITY (behavioral signals) ===
+${activityLines || "  (no activity data)"}
+
+=== MENTION COUNTS (@-tags across all messages) ===
+${mentionLines || "  (no mention data)"}
+
+=== CHANNEL ACTIVITY ===
+${channelLines || "  (no channel data)"}
+
+=== SAMPLE MESSAGES PER PERSON ===
+${personSampleLines || "  (no samples)"}
+
+=== SAMPLE MESSAGES PER CHANNEL ===
+${channelSampleLines || "  (no samples)"}
+
+Analyze this data and build a comprehensive company knowledge profile.
+
+For each team member, assess their role based ONLY on BEHAVIORAL signals:
+- High directive_count + high @-mention count → likely a manager, lead, or decision-maker
+- High response_count → likely support, ops, or someone who handles requests
+- High message_count in technical channels → likely engineering or product
+- Frequent cross-channel presence → possibly company-wide role (COO, CEO, founder)
+- Assign confidence:
+  * "high"   — strong, consistent behavioral evidence across multiple signals
+  * "medium" — some signals but limited data or ambiguous patterns
+  * "low"    — minimal data (< 5 messages) or contradictory signals
+
+Return ONLY a valid JSON object (no markdown, no code blocks, nothing else):
+{
+  "team_members": [
+    {
+      "name": "string",
+      "detected_role": "string — inferred from behavior, not job title",
+      "confidence": "high | medium | low",
+      "active_channels": ["string"],
+      "typical_activities": "string — what they actually do in messages",
+      "notes": "string or null"
+    }
+  ],
+  "channels": [
+    {
+      "name": "string — without the # symbol",
+      "purpose": "string — what this channel is actually used for",
+      "typical_content": "string — types of messages posted here",
+      "key_people": ["string"]
+    }
+  ],
+  "business_patterns": [
+    "string — recurring workflow or operational patterns observed"
+  ],
+  "terminology": {
+    "term": "definition — company-specific jargon or shorthand"
+  },
+  "key_topics": [
+    "string — major ongoing themes across the workspace"
+  ]
+}`;
 }
 
 // ── Inngest function ──────────────────────────────────────────────────────────
@@ -164,7 +220,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
     console.log(`[knowledge-profile] Starting build for workspace ${workspaceId}`);
 
     try {
-      // ── Step 1: Set status to 'building' ────────────────────────────────────
+      // ── Step 1: Set status to 'building' ──────────────────────────────────
       await step.run("set-status-building", async () => {
         const db = createAdminSupabaseClient();
         const { error } = await db.rpc("upsert_knowledge_profile", {
@@ -175,53 +231,35 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         if (error) throw new Error(`Failed to set building status: ${error.message}`);
       });
 
-      // ── Step 2: Fetch all chunks (paginated, capped at MAX_CHUNKS) ───────────
-      const allChunks: SerialisableChunk[] = await step.run(
-        "fetch-all-chunks",
-        async () => {
-          const db = createAdminSupabaseClient();
-          const chunks: SerialisableChunk[] = [];
-          let offset = 0;
+      // ── Step 2: Extract behavioral signals (zero LLM cost) ────────────────
+      const teamData: TeamData = await step.run("extract-team-data", async () => {
+        const db = createAdminSupabaseClient();
+        const [activityRes, mentionRes, channelRes] = await Promise.all([
+          db.rpc("get_team_activity", { p_workspace_id: workspaceId }),
+          db.rpc("get_mention_counts", { p_workspace_id: workspaceId }),
+          db.rpc("get_channel_activity", { p_workspace_id: workspaceId }),
+        ]);
 
-          for (;;) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const { data, error } = await (db as any)
-              .from("document_chunks")
-              .select("chunk_text, metadata, synced_documents!inner(source_type)")
-              .eq("workspace_id", workspaceId)
-              .order("created_at", { ascending: false })
-              .range(offset, offset + FETCH_PAGE_SIZE - 1);
+        if (activityRes.error)
+          console.warn("[knowledge-profile] activity error:", activityRes.error.message);
+        if (mentionRes.error)
+          console.warn("[knowledge-profile] mention error:", mentionRes.error.message);
+        if (channelRes.error)
+          console.warn("[knowledge-profile] channel error:", channelRes.error.message);
 
-            if (error) {
-              console.error("[knowledge-profile] Fetch error:", error.message);
-              break;
-            }
-            if (!data?.length) break;
+        const activity = (activityRes.data ?? []) as TeamActivityRow[];
+        console.log(`[knowledge-profile] Found ${activity.length} team members, ` +
+          `${(channelRes.data ?? []).length} channels`);
 
-            for (const row of data as Record<string, unknown>[]) {
-              const doc = Array.isArray(row.synced_documents)
-                ? (row.synced_documents[0] as Record<string, unknown> | undefined)
-                : (row.synced_documents as Record<string, unknown> | null);
-              chunks.push({
-                chunk_text: row.chunk_text as string,
-                metadata: (row.metadata as Record<string, unknown>) ?? {},
-                source_type: (doc?.source_type as string) ?? "unknown",
-              });
-            }
+        return {
+          activity,
+          mentions: (mentionRes.data ?? []) as MentionCountRow[],
+          channels: (channelRes.data ?? []) as ChannelActivityRow[],
+        };
+      });
 
-            if (chunks.length >= MAX_CHUNKS || data.length < FETCH_PAGE_SIZE) break;
-            offset += FETCH_PAGE_SIZE;
-          }
-
-          console.log(
-            `[knowledge-profile] Fetched ${chunks.length} chunks for workspace ${workspaceId}`
-          );
-          return chunks;
-        }
-      );
-
-      // Nothing to analyse — save an empty profile and exit
-      if (allChunks.length === 0) {
+      // No data at all — save an empty profile and exit
+      if (teamData.activity.length === 0 && teamData.channels.length === 0) {
         await step.run("save-empty-profile", async () => {
           const db = createAdminSupabaseClient();
           await db.rpc("upsert_knowledge_profile", {
@@ -230,94 +268,107 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
             p_status: "ready",
           });
         });
-        console.log("[knowledge-profile] No chunks found — empty profile saved");
-        return { status: "ready", chunks: 0, batches: 0 };
+        console.log("[knowledge-profile] No data found — empty profile saved");
+        return { status: "ready", members: 0, channels: 0 };
       }
 
-      // ── Step 3: Analyse in batches of ANALYSIS_BATCH_SIZE ──────────────────
-      const batches = chunkArray(allChunks, ANALYSIS_BATCH_SIZE);
-      const batchResults: Record<string, unknown>[] = [];
+      // ── Step 3: Bulk message sampling ─────────────────────────────────────
+      const sampleData: SampleData = await step.run("build-smart-sample", async () => {
+        const db = createAdminSupabaseClient();
+        const personNames = teamData.activity.slice(0, 20).map((a) => a.user_name);
+        const channelNames = teamData.channels.slice(0, 15).map((c) => c.channel_name);
 
-      for (let i = 0; i < batches.length; i++) {
-        const result = await step.run(`analyze-batch-${i + 1}`, async () => {
-          const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-          const formatted = formatChunksForAnalysis(batches[i]);
-          const prompt = buildAnalysisPrompt(formatted, batches[i].length);
+        const [personRes, channelRes] = await Promise.all([
+          personNames.length > 0
+            ? db.rpc("get_person_samples_bulk", {
+                p_workspace_id: workspaceId,
+                p_person_names: personNames,
+                p_samples_per_person: 6,
+              })
+            : Promise.resolve({ data: [] as PersonSampleRow[], error: null }),
+          channelNames.length > 0
+            ? db.rpc("get_channel_samples_bulk", {
+                p_workspace_id: workspaceId,
+                p_channel_names: channelNames,
+                p_samples_per_channel: 5,
+              })
+            : Promise.resolve({ data: [] as ChannelSampleRow[], error: null }),
+        ]);
 
-          console.log(
-            `[knowledge-profile] Analysing batch ${i + 1}/${batches.length} ` +
-              `(${batches[i].length} chunks)`
-          );
+        if ("error" in personRes && personRes.error)
+          console.warn("[knowledge-profile] person samples error:", personRes.error.message);
+        if ("error" in channelRes && channelRes.error)
+          console.warn("[knowledge-profile] channel samples error:", channelRes.error.message);
 
-          const response = await anthropic.messages.create({
-            model: "claude-sonnet-4-20250514",
-            max_tokens: 4096,
-            messages: [{ role: "user", content: prompt }],
-          });
+        const personSamples = (personRes.data ?? []) as PersonSampleRow[];
+        const channelSamples = (channelRes.data ?? []) as ChannelSampleRow[];
+        console.log(`[knowledge-profile] Samples: ${personSamples.length} person msgs, ` +
+          `${channelSamples.length} channel msgs`);
 
-          const text =
-            response.content[0]?.type === "text" ? response.content[0].text : "";
-          const parsed = extractJSON(text);
-          if (!parsed) {
-            console.error(
-              `[knowledge-profile] Batch ${i + 1}: failed to parse JSON response`
-            );
-          }
-          return parsed ?? {};
+        return { personSamples, channelSamples };
+      });
+
+      // ── Step 4: Single Claude call to analyze all data ────────────────────
+      const finalProfile = await step.run("analyze-with-claude", async () => {
+        const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+        const prompt = buildAnalysisPrompt(teamData, sampleData);
+
+        console.log("[knowledge-profile] Calling Claude for analysis");
+
+        const response = await anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4096,
+          messages: [{ role: "user", content: prompt }],
         });
-        batchResults.push(result as Record<string, unknown>);
-      }
 
-      // ── Step 4: Merge batches (skip if only one) ────────────────────────────
-      const finalProfile =
-        batches.length === 1
-          ? batchResults[0]
-          : await step.run("merge-batches", async () => {
-              const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-              const prompt = buildMergePrompt(batchResults);
+        const text =
+          response.content[0]?.type === "text" ? response.content[0].text : "";
+        const parsed = extractJSON(text);
 
-              console.log(
-                `[knowledge-profile] Merging ${batchResults.length} batch results`
-              );
+        if (!parsed) {
+          console.error("[knowledge-profile] Failed to parse Claude response");
+          return {} as Record<string, unknown>;
+        }
 
-              const response = await anthropic.messages.create({
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 4096,
-                messages: [{ role: "user", content: prompt }],
-              });
+        const memberCount = (parsed.team_members as unknown[] | undefined)?.length ?? 0;
+        console.log(`[knowledge-profile] Claude returned ${memberCount} team members`);
+        return parsed;
+      });
 
-              const text =
-                response.content[0]?.type === "text"
-                  ? response.content[0].text
-                  : "";
-              return (extractJSON(text) ?? batchResults[0]) as Record<
-                string,
-                unknown
-              >;
-            });
-
-      // ── Step 5: Save the finished profile ──────────────────────────────────
+      // ── Step 5: Save profile ──────────────────────────────────────────────
       await step.run("save-profile", async () => {
         const db = createAdminSupabaseClient();
+
+        // Use 'pending_review' if any team member has low or medium confidence
+        const members =
+          (finalProfile.team_members as Array<{ confidence?: string }> | undefined) ?? [];
+        const needsReview = members.some(
+          (m) => m.confidence === "low" || m.confidence === "medium"
+        );
+        const status = Object.keys(finalProfile).length === 0
+          ? "error"
+          : needsReview
+          ? "pending_review"
+          : "ready";
+
         const { error } = await db.rpc("upsert_knowledge_profile", {
           p_workspace_id: workspaceId,
           p_profile: finalProfile,
-          p_status: "ready",
+          p_status: status,
         });
         if (error) throw new Error(`Failed to save profile: ${error.message}`);
         console.log(
-          `[knowledge-profile] Profile saved — workspace ${workspaceId}`
+          `[knowledge-profile] Profile saved (${status}) — workspace ${workspaceId}`
         );
       });
 
       return {
-        status: "ready",
-        chunks: allChunks.length,
-        batches: batches.length,
+        status: "saved",
+        members: teamData.activity.length,
+        channels: teamData.channels.length,
       };
     } catch (err) {
       console.error("[knowledge-profile] Build failed:", err);
-      // Best-effort status update — not a step, runs even on retry
       try {
         const db = createAdminSupabaseClient();
         await db.rpc("upsert_knowledge_profile", {
@@ -328,7 +379,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
       } catch (dbErr) {
         console.error("[knowledge-profile] Failed to set error status:", dbErr);
       }
-      throw err; // re-throw so Inngest records the failure
+      throw err;
     }
   }
 );

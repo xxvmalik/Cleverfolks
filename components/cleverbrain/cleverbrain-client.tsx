@@ -14,6 +14,9 @@ import {
   Calendar,
   Database,
   Hash,
+  UserCheck,
+  X,
+  Edit2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -65,6 +68,12 @@ type SSEEvent =
   | { type: "metadata"; conversationId: string; messageId: string }
   | { type: "done" }
   | { type: "error"; error: string };
+
+type TeamMemberForReview = {
+  name: string;
+  detected_role: string;
+  confidence: string;
+};
 
 // ── Suggestion cards ──────────────────────────────────────────────────────────
 
@@ -295,6 +304,150 @@ function ConvItem({
   );
 }
 
+// ── Profile Review Card ───────────────────────────────────────────────────────
+
+function ProfileReviewCard({
+  workspaceId,
+  members,
+  onConfirm,
+  onDismiss,
+}: {
+  workspaceId: string;
+  members: TeamMemberForReview[];
+  onConfirm: () => void;
+  onDismiss: () => void;
+}) {
+  const [roleEdits, setRoleEdits] = useState<Record<string, string>>(() =>
+    Object.fromEntries(members.map((m) => [m.name, m.detected_role]))
+  );
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [editingName, setEditingName] = useState<string | null>(null);
+
+  const uncertainMembers = members.filter(
+    (m) => m.confidence === "low" || m.confidence === "medium"
+  );
+
+  async function handleConfirm() {
+    setIsConfirming(true);
+    try {
+      // Collect only edits that differ from the detected role
+      const corrections: Record<string, string> = {};
+      for (const m of members) {
+        if (roleEdits[m.name] && roleEdits[m.name] !== m.detected_role) {
+          corrections[m.name] = roleEdits[m.name];
+        }
+      }
+      await fetch("/api/knowledge-profile/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId, corrections }),
+      });
+      onConfirm();
+    } catch {
+      /* swallow — card will just close */
+      onConfirm();
+    } finally {
+      setIsConfirming(false);
+    }
+  }
+
+  if (uncertainMembers.length === 0) return null;
+
+  return (
+    <div className="w-full bg-[#1C1F24] border border-[#3A89FF]/30 rounded-2xl p-4 mb-4">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-[#3A89FF]/15 flex items-center justify-center flex-shrink-0">
+            <UserCheck className="w-4 h-4 text-[#3A89FF]" />
+          </div>
+          <div>
+            <p className="text-white text-sm font-medium">Review team roles</p>
+            <p className="text-[#8B8F97] text-xs mt-0.5">
+              CleverBrain auto-detected these roles. Confirm or correct them for better answers.
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={onDismiss}
+          className="text-[#555A63] hover:text-[#8B8F97] transition-colors flex-shrink-0 mt-0.5"
+          aria-label="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Member rows */}
+      <div className="space-y-2 mb-3">
+        {uncertainMembers.map((m) => (
+          <div key={m.name} className="flex items-center gap-2">
+            <span className="text-[#E0E0E0] text-sm w-28 flex-shrink-0 truncate">
+              {m.name}
+            </span>
+            {editingName === m.name ? (
+              <input
+                autoFocus
+                value={roleEdits[m.name] ?? ""}
+                onChange={(e) =>
+                  setRoleEdits((prev) => ({ ...prev, [m.name]: e.target.value }))
+                }
+                onBlur={() => setEditingName(null)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === "Escape") setEditingName(null);
+                }}
+                className="flex-1 bg-[#131619] border border-[#3A89FF]/50 rounded-lg px-2 py-1 text-sm text-white outline-none"
+                placeholder="Enter role…"
+              />
+            ) : (
+              <button
+                onClick={() => setEditingName(m.name)}
+                className="flex-1 text-left flex items-center gap-1.5 group"
+              >
+                <span className="text-[#8B8F97] text-sm truncate group-hover:text-white transition-colors">
+                  {roleEdits[m.name] || "Unknown role"}
+                </span>
+                <Edit2 className="w-3 h-3 text-[#555A63] group-hover:text-[#3A89FF] transition-colors flex-shrink-0" />
+              </button>
+            )}
+            <span
+              className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0",
+                m.confidence === "low"
+                  ? "bg-[#F87171]/10 text-[#F87171]"
+                  : "bg-[#FB923C]/10 text-[#FB923C]"
+              )}
+            >
+              {m.confidence}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void handleConfirm()}
+          disabled={isConfirming}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#3A89FF] hover:bg-[#2d7aff] disabled:opacity-60 text-white text-xs font-medium rounded-lg transition-colors"
+        >
+          {isConfirming ? (
+            <Loader2 className="w-3 h-3 animate-spin" />
+          ) : (
+            <Check className="w-3 h-3" />
+          )}
+          {isConfirming ? "Saving…" : "Confirm roles"}
+        </button>
+        <button
+          onClick={onDismiss}
+          className="px-3 py-1.5 text-[#8B8F97] hover:text-white text-xs rounded-lg transition-colors"
+        >
+          Skip for now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
@@ -305,6 +458,10 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+
+  // Profile review card state
+  const [reviewMembers, setReviewMembers] = useState<TeamMemberForReview[] | null>(null);
+  const [reviewDismissed, setReviewDismissed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -319,6 +476,33 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     void fetchConversations();
   }, [fetchConversations]);
+
+  // ── Check if profile needs role review ───────────────────────────────────
+  useEffect(() => {
+    async function checkProfileReview() {
+      try {
+        const res = await fetch(
+          `/api/knowledge-profile/confirm?workspaceId=${encodeURIComponent(workspaceId)}`
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          status: string;
+          confirmed: boolean;
+          team_members: TeamMemberForReview[];
+        };
+        // Show card only when profile is pending_review and not yet confirmed
+        if (data.status === "pending_review" && !data.confirmed) {
+          const uncertain = data.team_members.filter(
+            (m) => m.confidence === "low" || m.confidence === "medium"
+          );
+          if (uncertain.length > 0) setReviewMembers(uncertain);
+        }
+      } catch {
+        /* silently ignore — the review card is optional */
+      }
+    }
+    void checkProfileReview();
+  }, [workspaceId]);
 
   // ── Auto-scroll ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -653,6 +837,16 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                   CleverBrain has access to your connected integrations. Ask about conversations,
                   documents, emails, and more.
                 </p>
+
+                {/* Profile review card */}
+                {reviewMembers && !reviewDismissed && (
+                  <ProfileReviewCard
+                    workspaceId={workspaceId}
+                    members={reviewMembers}
+                    onConfirm={() => setReviewDismissed(true)}
+                    onDismiss={() => setReviewDismissed(true)}
+                  />
+                )}
 
                 {/* Suggestion cards */}
                 <div className="grid grid-cols-2 gap-3 w-full mt-2">

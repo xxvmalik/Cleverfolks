@@ -42,7 +42,9 @@ function formatKnowledgeProfile(profile: Record<string, any>): string {
 
   const members: Array<{
     name?: string;
+    detected_role?: string;
     likely_role?: string;
+    confidence?: string;
     active_channels?: string[];
     typical_activities?: string;
     notes?: string;
@@ -51,9 +53,15 @@ function formatKnowledgeProfile(profile: Record<string, any>): string {
     const lines = members
       .filter((m) => m.name)
       .map((m) => {
+        const role = m.detected_role ?? m.likely_role ?? "unknown role";
+        const confidence = m.confidence;
+        const confidenceNote =
+          confidence === "low" || confidence === "medium"
+            ? " [role inferred — may not be exact]"
+            : "";
         const channels = (m.active_channels ?? []).join(", ");
         const extra = m.notes ? ` (${m.notes})` : "";
-        return `- ${m.name} — ${m.likely_role ?? "unknown role"}. Active in ${channels || "unknown channels"}. ${m.typical_activities ?? ""}${extra}`;
+        return `- ${m.name} — ${role}${confidenceNote}. Active in ${channels || "unknown channels"}. ${m.typical_activities ?? ""}${extra}`;
       });
     if (lines.length > 0) sections.push(`Team Members:\n${lines.join("\n")}`);
   }
@@ -172,7 +180,8 @@ function buildSystemPrompt(
   // ── Knowledge profile intelligence section ──────────────────────────────
   let intelligenceSection = "";
   if (
-    knowledgeProfile?.status === "ready" &&
+    (knowledgeProfile?.status === "ready" ||
+      knowledgeProfile?.status === "pending_review") &&
     knowledgeProfile.profile &&
     Object.keys(knowledgeProfile.profile).length > 0
   ) {
@@ -196,7 +205,9 @@ RULES:
 - When synthesizing across multiple messages, organize the information clearly
 - If the user asks a follow-up, use conversation history to understand context
 - Never be overly apologetic. If you made a mistake, briefly correct yourself and move on.
-- When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.`;
+- When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.
+- When a team member's role is listed as "[role inferred — may not be exact]", treat it as a reasonable guess and caveat your answer lightly if role attribution matters.
+- If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.`;
 }
 
 // ── Vague time reference detection ────────────────────────────────────────────
@@ -571,9 +582,10 @@ export async function POST(request: NextRequest) {
   const knowledgeProfile =
     (profileRow as KnowledgeProfileRow | null)?.profile ?? null;
 
-  // Profile is only "sufficient" if the row is ready and non-empty
+  // Profile is "sufficient" if the row is ready (or pending_review) and non-empty
+  const profileStatus = (profileRow as KnowledgeProfileRow | null)?.status;
   const profileReady =
-    (profileRow as KnowledgeProfileRow | null)?.status === "ready" &&
+    (profileStatus === "ready" || profileStatus === "pending_review") &&
     Object.keys(
       ((profileRow as KnowledgeProfileRow | null)?.profile as Record<
         string,
