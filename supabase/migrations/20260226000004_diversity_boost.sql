@@ -1,18 +1,15 @@
 -- ============================================================
--- CleverBrain: Hybrid search function + GIN index
--- (canonical reference — actual migrations are in supabase/migrations/)
+-- Sprint 4 Fix: add channel diversity boost to hybrid search
 -- ============================================================
+--
+-- After combining vector + keyword scores, determine the channel of the
+-- top-scoring result, then apply a +0.05 bonus to any result from a
+-- *different* channel.  This prevents 15 results all coming from the same
+-- channel and surfaces messages from across the workspace.
+--
+-- Safety: if the top result has no channel_id, or a result has no channel_id,
+-- no boost is applied (COALESCE / IS NOT NULL guards prevent false matches).
 
--- GIN index for full-text search on chunk_text
-CREATE INDEX IF NOT EXISTS document_chunks_text_search_idx
-  ON document_chunks USING gin(to_tsvector('english', chunk_text));
-
--- Hybrid search: combines vector cosine similarity (0.7) + keyword ranking (0.3)
--- Time filter uses metadata->>'ts' (Slack unix epoch float) rather than
--- synced_at, so "last week" queries correctly match messages sent last week
--- regardless of when the data was imported.
--- Channel diversity boost: results from channels other than the top-scoring
--- result's channel receive a +0.05 bonus so the output spans multiple channels.
 CREATE OR REPLACE FUNCTION hybrid_search_documents(
   p_workspace_id    uuid,
   p_query_embedding vector(1024),
