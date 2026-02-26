@@ -6,6 +6,7 @@ import {
   normalizeGmail,
   normalizeSlack,
   normalizeSlackReply,
+  normalizeSlackReaction,
   normalizeSlackChannel,
   normalizeSlackUser,
   normalizeCalendar,
@@ -18,10 +19,11 @@ import {
 function normalizeRecord(provider: string, model: string, raw: any): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
-      case "SlackMessage":      return normalizeSlack(raw);
-      case "SlackMessageReply": return normalizeSlackReply(raw);
-      case "SlackChannel":      return normalizeSlackChannel(raw);
-      case "SlackUser":         return normalizeSlackUser(raw);
+      case "SlackMessage":         return normalizeSlack(raw);
+      case "SlackMessageReply":    return normalizeSlackReply(raw);
+      case "SlackMessageReaction": return normalizeSlackReaction(raw);
+      case "SlackChannel":         return normalizeSlackChannel(raw);
+      case "SlackUser":            return normalizeSlackUser(raw);
       default:                  return null;
     }
   }

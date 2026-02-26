@@ -10,6 +10,7 @@ export type SyncRecord = {
     | "email"
     | "slack_message"
     | "slack_reply"
+    | "slack_reaction"
     | "calendar_event"
     | "deal"
     | "document"
@@ -238,6 +239,31 @@ export function normalizeSlackReply(raw: any): SyncRecord {
       thread_ts: raw.thread_ts ?? null,
       parent_message_ts: raw.thread_ts ?? null,
       subtype: raw.subtype ?? null,
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeSlackReaction(raw: any): SyncRecord {
+  // Nango's SlackMessageReaction model: reaction, user, message_ts, channel_id
+  const emoji: string = raw.reaction ?? raw.name ?? "unknown";
+  const user: string = raw.user ?? raw.user_id ?? "someone";
+  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const messageTs: string = raw.message_ts ?? raw.ts ?? "";
+  const uniqueId: string = raw.id ?? `${emoji}_${user}_${messageTs}`;
+
+  return {
+    external_id: uniqueId,
+    source_type: "slack_reaction",
+    title: `Reaction :${emoji}: in #${channelRef}`,
+    content: `User ${user} reacted with :${emoji}: to message in #${channelRef}`,
+    metadata: {
+      emoji,
+      user,
+      channel_id: channelRef,
+      message_ts: messageTs,
+      count: raw.count ?? null,
       _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
