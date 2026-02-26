@@ -5,6 +5,7 @@ import {
   processSyncedData,
   normalizeGmail,
   normalizeSlack,
+  normalizeSlackReply,
   normalizeSlackChannel,
   normalizeSlackUser,
   normalizeCalendar,
@@ -16,7 +17,7 @@ import {
 // All Nango models to fetch per provider
 const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   gmail:             ["GmailEmail"],
-  slack:             ["SlackMessage", "SlackChannel", "SlackUser"],
+  slack:             ["SlackMessage", "SlackMessageReply", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
   hubspot:           ["HubSpotDeal"],
   "google-drive":    ["GoogleDriveFile"],
@@ -26,9 +27,10 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
 function normalizeRecord(provider: string, model: string, raw: any): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
-      case "SlackMessage": return normalizeSlack(raw);
-      case "SlackChannel": return normalizeSlackChannel(raw);
-      case "SlackUser":    return normalizeSlackUser(raw);
+      case "SlackMessage":      return normalizeSlack(raw);
+      case "SlackMessageReply": return normalizeSlackReply(raw);
+      case "SlackChannel":      return normalizeSlackChannel(raw);
+      case "SlackUser":         return normalizeSlackUser(raw);
       default:             return null;
     }
   }

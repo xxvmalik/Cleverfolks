@@ -5,38 +5,38 @@ import {
   processSyncedData,
   normalizeGmail,
   normalizeSlack,
+  normalizeSlackReply,
+  normalizeSlackChannel,
+  normalizeSlackUser,
   normalizeCalendar,
   normalizeHubspot,
   normalizeDrive,
   type SyncRecord,
 } from "@/lib/sync-processor";
 
-const PROVIDER_MODEL_MAP: Record<string, string> = {
-  gmail: "GmailEmail",
-  slack: "SlackMessage",
-  "google-calendar": "GoogleCalendarEvent",
-  hubspot: "HubSpotDeal",
-  "google-drive": "GoogleDriveFile",
-};
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeRecord(provider: string, raw: any): SyncRecord | null {
+function normalizeRecord(provider: string, model: string, raw: any): SyncRecord | null {
+  if (provider === "slack") {
+    switch (model) {
+      case "SlackMessage":      return normalizeSlack(raw);
+      case "SlackMessageReply": return normalizeSlackReply(raw);
+      case "SlackChannel":      return normalizeSlackChannel(raw);
+      case "SlackUser":         return normalizeSlackUser(raw);
+      default:                  return null;
+    }
+  }
   switch (provider) {
-    case "gmail":           return normalizeGmail(raw);
-    case "slack":           return normalizeSlack(raw);
-    case "google-calendar": return normalizeCalendar(raw);
-    case "hubspot":         return normalizeHubspot(raw);
-    case "google-drive":    return normalizeDrive(raw);
-    default:                return null;
+    case "gmail":            return normalizeGmail(raw);
+    case "google-calendar":  return normalizeCalendar(raw);
+    case "hubspot":          return normalizeHubspot(raw);
+    case "google-drive":     return normalizeDrive(raw);
+    default:                 return null;
   }
 }
 
 export async function POST(request: NextRequest) {
-  // Verify secret
   const authHeader = request.headers.get("authorization");
-  const expectedSecret = `Bearer ${process.env.NANGO_WEBHOOK_SECRET}`;
-
-  if (authHeader !== expectedSecret) {
+  if (authHeader !== `Bearer ${process.env.NANGO_WEBHOOK_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -44,13 +44,12 @@ export async function POST(request: NextRequest) {
     const body = (await request.json()) as {
       connection_id: string;
       provider_config_key: string;
-      sync_name: string;
+      sync_name: string; // this IS the model name Nango synced
     };
 
-    const { connection_id, provider_config_key } = body;
-    console.log(`[webhook] provider=${provider_config_key} connection=${connection_id}`);
+    const { connection_id, provider_config_key, sync_name } = body;
+    console.log(`[webhook] provider=${provider_config_key} model=${sync_name} connection=${connection_id}`);
 
-    // Look up integration
     const supabase = await createServerSupabaseClient();
     const { data: integration, error: integrationError } = await supabase
       .from("integrations")
@@ -63,26 +62,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Integration not found" }, { status: 404 });
     }
 
-    const model = PROVIDER_MODEL_MAP[provider_config_key] ?? "default";
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-
-    // Fetch all records (paginated)
     const rawRecords: Record<string, unknown>[] = [];
     let cursor: string | undefined = undefined;
 
+    // Use sync_name (the model Nango just synced) — not a hardcoded map
     for (;;) {
       const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
-        await nango.listRecords({ providerConfigKey: provider_config_key, connectionId: connection_id, model, cursor });
+        await nango.listRecords({
+          providerConfigKey: provider_config_key,
+          connectionId: connection_id,
+          model: sync_name,
+          cursor,
+        });
       rawRecords.push(...page.records);
       if (!page.next_cursor) break;
       cursor = page.next_cursor;
     }
 
-    console.log(`[webhook] Fetched ${rawRecords.length} raw records`);
+    console.log(`[webhook] Fetched ${rawRecords.length} records for model=${sync_name}`);
 
     const records: SyncRecord[] = rawRecords
-      .map((raw) => normalizeRecord(provider_config_key, raw))
+      .map((raw) => normalizeRecord(provider_config_key, sync_name, raw))
       .filter((r): r is SyncRecord => r !== null);
+
+    console.log(`[webhook] Normalised ${records.length} records`);
 
     const { processed, skipped } = await processSyncedData(
       integration.workspace_id,
@@ -99,10 +103,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("[webhook] Error:", err);
     return NextResponse.json(
-      {
-        error: "Internal server error",
-        detail: err instanceof Error ? err.message : String(err),
-      },
+      { error: "Internal server error", detail: err instanceof Error ? err.message : String(err) },
       { status: 500 }
     );
   }

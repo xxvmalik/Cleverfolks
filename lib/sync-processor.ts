@@ -9,6 +9,7 @@ export type SyncRecord = {
   source_type:
     | "email"
     | "slack_message"
+    | "slack_reply"
     | "calendar_event"
     | "deal"
     | "document"
@@ -214,6 +215,29 @@ export function normalizeSlack(raw: any): SyncRecord {
       thread_ts: raw.thread_ts ?? null,
       subtype: raw.subtype ?? null,
       // preserve the full raw shape for debugging
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeSlackReply(raw: any): SyncRecord {
+  // Nango's SlackMessageReply model: same shape as SlackMessage plus thread_ts
+  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
+
+  return {
+    external_id: messageId,
+    source_type: "slack_reply",
+    title: `Reply in #${channelRef}`,
+    content: raw.text ?? "",
+    metadata: {
+      channel_id: channelRef,
+      user: raw.user ?? raw.user_id ?? raw.username,
+      ts: raw.ts,
+      thread_ts: raw.thread_ts ?? null,
+      parent_message_ts: raw.thread_ts ?? null,
+      subtype: raw.subtype ?? null,
       _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
