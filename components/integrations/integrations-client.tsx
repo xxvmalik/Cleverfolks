@@ -67,17 +67,20 @@ function getRelativeTime(dateStr: string | null): string {
 }
 
 function StatusBadge({ status, syncStatus }: { status: string; syncStatus: string | null }) {
-  // While a background sync is running, show Syncing regardless of status
-  const effective = syncStatus === "syncing" ? "syncing" : status;
+  // sync_status from DB is the source of truth while a background job runs
+  const effective =
+    syncStatus === "syncing" ? "syncing" :
+    syncStatus === "error"   ? "error"   :
+    status;
 
-  const config: Record<string, { dot: string; label: string; bg: string; text: string }> = {
-    connected:    { dot: "bg-[#4ADE80]",              label: "Connected",    bg: "bg-[#4ADE80]/10", text: "text-[#4ADE80]"  },
-    disconnected: { dot: "bg-[#8B8F97]",              label: "Disconnected", bg: "bg-[#8B8F97]/10", text: "text-[#8B8F97]"  },
-    syncing:      { dot: "bg-[#3A89FF] animate-pulse", label: "Syncing…",    bg: "bg-[#3A89FF]/10", text: "text-[#3A89FF]"  },
-    error:        { dot: "bg-[#F87171]",              label: "Error",        bg: "bg-[#F87171]/10", text: "text-[#F87171]"  },
+  const map: Record<string, { dot: string; label: string; bg: string; text: string }> = {
+    connected:    { dot: "bg-[#4ADE80]",               label: "Connected",    bg: "bg-[#4ADE80]/10", text: "text-[#4ADE80]"  },
+    disconnected: { dot: "bg-[#8B8F97]",               label: "Disconnected", bg: "bg-[#8B8F97]/10", text: "text-[#8B8F97]"  },
+    syncing:      { dot: "bg-[#3A89FF] animate-pulse", label: "Syncing…",     bg: "bg-[#3A89FF]/10", text: "text-[#3A89FF]"  },
+    error:        { dot: "bg-[#F87171]",               label: "Error",        bg: "bg-[#F87171]/10", text: "text-[#F87171]"  },
   };
 
-  const c = config[effective] ?? config.disconnected;
+  const c = map[effective] ?? map.disconnected;
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
@@ -103,7 +106,9 @@ function IntegrationCard({
 
   const status = integration?.status ?? "disconnected";
   const syncStatus = integration?.sync_status ?? null;
-  const isSyncing = syncStatus === "syncing" || loading === "sync";
+  // Drive syncing state purely from DB — local `loading` only covers the
+  // brief window between clicking and the first router.refresh() completing.
+  const isSyncing = syncStatus === "syncing";
   const isConnected = status === "connected" || status === "syncing";
 
   async function handleConnect() {
@@ -133,7 +138,7 @@ function IntegrationCard({
 
   async function handleSync() {
     if (!integration) return;
-    setLoading("sync");
+    setLoading("sync"); // prevents double-click while the request is in-flight
     setError(null);
     try {
       const res = await fetch("/api/sync", {
@@ -144,12 +149,15 @@ function IntegrationCard({
       const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
       if (!res.ok || data.error) {
         setError(data.error ?? "Failed to start sync");
-        setLoading(null);
+      } else {
+        // API sets sync_status = "syncing" in DB before returning.
+        // Refresh immediately so the DB state drives the UI from here on —
+        // isSyncing will become true via syncStatus, not local loading.
+        router.refresh();
       }
-      // Don't clear loading — polling will update the card once the job
-      // sets sync_status back to 'completed'/'error'
     } catch {
       setError("Failed to start sync");
+    } finally {
       setLoading(null);
     }
   }
@@ -170,7 +178,7 @@ function IntegrationCard({
             <div className="text-xs text-[#8B8F97]">{config.category}</div>
           </div>
         </div>
-        <StatusBadge status={status} syncStatus={isSyncing ? "syncing" : syncStatus} />
+        <StatusBadge status={status} syncStatus={syncStatus} />
       </div>
 
       {/* Meta */}
@@ -201,10 +209,10 @@ function IntegrationCard({
           <>
             <button
               onClick={handleSync}
-              disabled={!!loading || isSyncing}
+              disabled={isSyncing || loading === "sync"}
               className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#3A89FF] text-white hover:bg-[#2d7aff] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {isSyncing ? (
+              {isSyncing || loading === "sync" ? (
                 <span className="flex items-center justify-center gap-1.5">
                   <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                   Syncing…
@@ -213,7 +221,7 @@ function IntegrationCard({
             </button>
             <button
               onClick={handleDisconnect}
-              disabled={!!loading || isSyncing}
+              disabled={isSyncing || !!loading}
               className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#3A3D45] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading === "disconnect" ? "Disconnecting…" : "Disconnect"}
@@ -275,7 +283,7 @@ export function IntegrationsClient({
 
   // Poll every 5 s while any integration is actively syncing
   useEffect(() => {
-    const anySyncing = integrations.some((i) => i.sync_status === "syncing" || i.status === "syncing");
+    const anySyncing = integrations.some((i) => i.sync_status === "syncing");
     if (!anySyncing) return;
 
     const id = setInterval(() => {
