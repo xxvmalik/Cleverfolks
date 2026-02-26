@@ -30,7 +30,13 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const pathname = request.nextUrl.pathname;
-  const publicPaths = ["/login", "/auth/callback", "/create-workspace"];
+  const publicPaths = [
+    "/login",
+    "/auth/callback",
+    "/create-workspace",
+    "/api/inngest",        // Inngest dev server + cloud executor (no user session)
+    "/api/nango-webhook",  // Nango webhook calls (no user session)
+  ];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
   if (!user && !isPublic) {
