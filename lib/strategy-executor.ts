@@ -24,6 +24,13 @@ type ExecutorParams = {
   queryEmbedding: number[];
   queryText: string;
   adminSupabase: AdminDb;
+  /**
+   * When the strategy list contains ONLY surrounding_context (no main search
+   * strategies), these existing results are used as the target set instead of
+   * running a fresh search first.  This lets the agentic loop enrich current
+   * results with conversation context without re-running the primary query.
+   */
+  seedResults?: UnifiedResult[];
 };
 
 // ── Individual strategy runners ───────────────────────────────────────────────
@@ -181,6 +188,7 @@ export async function executeStrategies({
   queryEmbedding,
   queryText,
   adminSupabase,
+  seedResults,
 }: ExecutorParams): Promise<UnifiedResult[]> {
   const mainStrategies = strategies.filter(
     (s) => s.type !== "surrounding_context"
@@ -196,7 +204,12 @@ export async function executeStrategies({
     )
   );
 
-  let allResults: UnifiedResult[] = strategyResultArrays.flat();
+  // If no main strategies ran, fall back to seedResults so that a
+  // surrounding_context-only follow-up can enrich existing results.
+  let allResults: UnifiedResult[] =
+    mainStrategies.length > 0
+      ? strategyResultArrays.flat()
+      : (seedResults ?? []);
 
   // Apply surrounding context if requested
   if (surroundingStrategies.length > 0 && allResults.length > 0) {

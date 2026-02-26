@@ -7,6 +7,7 @@ import { createEmbedding } from "@/lib/embeddings";
 import { classifyIntent } from "@/lib/intent-router";
 import { planQuery } from "@/lib/query-planner";
 import { executeStrategies, type UnifiedResult } from "@/lib/strategy-executor";
+import { evaluateContext } from "@/lib/context-evaluator";
 import { searchWeb, type WebResult } from "@/lib/web-search";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -642,6 +643,9 @@ export async function POST(request: NextRequest) {
         let searchResults: UnifiedResult[] = [];
         let webResults: WebResult[] = [];
         const intent = routing.intent;
+        // Tracks whether an internal RAG search was performed so we know
+        // whether to run the agentic evaluation loop afterward.
+        let didInternalSearch = false;
 
         console.log(`[chat] intent=${intent} routing for: "${message}"`);
 
@@ -669,6 +673,7 @@ export async function POST(request: NextRequest) {
               send({ type: "activity", action: label });
             }
             searchResults = rag.results;
+            didInternalSearch = true;
           }
 
         } else if (intent === "hybrid") {
@@ -685,6 +690,7 @@ export async function POST(request: NextRequest) {
           }
           searchResults = ragResult.results;
           webResults = webRes;
+          didInternalSearch = true;
           console.log(
             `[chat] hybrid — internal: ${searchResults.length}, web: ${webResults.length}`
           );
@@ -699,15 +705,109 @@ export async function POST(request: NextRequest) {
               send({ type: "activity", action: label });
             }
             searchResults = rag.results;
+            didInternalSearch = true;
           }
         }
 
-        // Reading activity (shown when we have internal results to process)
+        // Round 1 reading activity
         if (searchResults.length > 0) {
           send({
             type: "activity",
             action: `Reading ${searchResults.length} relevant messages...`,
           });
+        }
+
+        // ── Agentic loop: up to 2 follow-up search rounds ────────────────────
+        // Only runs when an internal RAG search was performed.
+        // Max 3 total rounds (initial + 2 follow-ups); stops early if we
+        // already have ≥100 chunks or the context is evaluated as sufficient.
+        if (didInternalSearch) {
+          const MAX_FOLLOW_UPS = 2;
+          const CHUNK_CAP = 100;
+
+          for (let round = 0; round < MAX_FOLLOW_UPS; round++) {
+            if (searchResults.length >= CHUNK_CAP) {
+              console.log(
+                `[chat] agentic loop: ${searchResults.length} chunks — cap reached, stopping`
+              );
+              break;
+            }
+
+            const evaluation = await evaluateContext({
+              message,
+              chunks: searchResults,
+              knowledgeProfile,
+              conversationHistory: history,
+            });
+
+            if (evaluation.sufficient) {
+              console.log(`[chat] agentic round ${round + 2}: sufficient`);
+              break;
+            }
+            if (!evaluation.strategies.length) {
+              console.log(
+                `[chat] agentic round ${round + 2}: not sufficient but no follow-up strategies`
+              );
+              break;
+            }
+
+            const roundLabel =
+              round === 0 ? "Searching for more context..." : "Expanding search...";
+            send({ type: "activity", action: roundLabel });
+
+            // Compute embedding only if a semantic strategy is planned
+            const semanticStrategy = evaluation.strategies.find(
+              (s) => s.type === "semantic"
+            );
+            const followUpQuery = semanticStrategy?.params.query ?? message;
+            const followUpEmbedding = semanticStrategy
+              ? await createEmbedding(followUpQuery)
+              : [];
+
+            const newResults = await executeStrategies({
+              strategies: evaluation.strategies,
+              workspaceId,
+              queryEmbedding: followUpEmbedding,
+              queryText: followUpQuery,
+              adminSupabase: db,
+              // Lets surrounding_context-only plans enrich the current results
+              seedResults: searchResults,
+            });
+
+            if (!newResults.length) {
+              console.log(`[chat] agentic round ${round + 2}: no new results`);
+              break;
+            }
+
+            // Merge, deduplicating by chunk_id
+            const seen = new Map(searchResults.map((r) => [r.chunk_id, r]));
+            let added = 0;
+            for (const r of newResults) {
+              if (!seen.has(r.chunk_id)) {
+                seen.set(r.chunk_id, r);
+                added++;
+              }
+            }
+
+            if (added === 0) {
+              console.log(`[chat] agentic round ${round + 2}: all results already seen`);
+              break;
+            }
+
+            searchResults = [...seen.values()].sort((a, b) => {
+              const tsA = a.msg_ts ? new Date(a.msg_ts).getTime() : Infinity;
+              const tsB = b.msg_ts ? new Date(b.msg_ts).getTime() : Infinity;
+              return tsA - tsB;
+            });
+
+            send({
+              type: "activity",
+              action: `Found ${added} additional messages...`,
+            });
+            console.log(
+              `[chat] agentic round ${round + 2}: +${added} chunks, total=${searchResults.length}`
+            );
+          }
         }
 
         // ── Step 4: Build context block ──────────────────────────────────────
