@@ -4,8 +4,17 @@ import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { analyzeQuery } from "@/lib/query-analyzer";
 import { createEmbedding } from "@/lib/embeddings";
+import { classifyIntent } from "@/lib/intent-router";
+import { searchWeb, type WebResult } from "@/lib/web-search";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+type KnowledgeProfileRow = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  profile: Record<string, any> | null;
+  status: string | null;
+};
+
 type SearchResult = {
   chunk_id: string;
   document_id: string;
@@ -42,6 +51,71 @@ type HistoryMessage = {
   created_at: string;
 };
 
+// ── Knowledge profile formatter ───────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatKnowledgeProfile(profile: Record<string, any>): string {
+  const sections: string[] = [];
+
+  const members: Array<{
+    name?: string;
+    likely_role?: string;
+    active_channels?: string[];
+    typical_activities?: string;
+    notes?: string;
+  }> = profile.team_members ?? [];
+  if (members.length > 0) {
+    const lines = members
+      .filter((m) => m.name)
+      .map((m) => {
+        const channels = (m.active_channels ?? []).join(", ");
+        const extra = m.notes ? ` (${m.notes})` : "";
+        return `- ${m.name} — ${m.likely_role ?? "unknown role"}. Active in ${channels || "unknown channels"}. ${m.typical_activities ?? ""}${extra}`;
+      });
+    if (lines.length > 0) sections.push(`Team Members:\n${lines.join("\n")}`);
+  }
+
+  const channels: Array<{
+    name?: string;
+    purpose?: string;
+    key_people?: string[];
+  }> = profile.channels ?? [];
+  if (channels.length > 0) {
+    const lines = channels
+      .filter((c) => c.name)
+      .map((c) => {
+        const people =
+          (c.key_people ?? []).length > 0
+            ? ` Key people: ${c.key_people!.join(", ")}.`
+            : "";
+        return `- #${c.name} — ${c.purpose ?? ""}${people}`;
+      });
+    if (lines.length > 0) sections.push(`Channels:\n${lines.join("\n")}`);
+  }
+
+  const patterns: string[] = profile.business_patterns ?? [];
+  if (patterns.length > 0) {
+    sections.push(
+      `Business Patterns:\n${patterns.map((p) => `- ${p}`).join("\n")}`
+    );
+  }
+
+  const terminology: Record<string, string> = profile.terminology ?? {};
+  const termEntries = Object.entries(terminology);
+  if (termEntries.length > 0) {
+    sections.push(
+      `Terminology:\n${termEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`
+    );
+  }
+
+  const topics: string[] = profile.key_topics ?? [];
+  if (topics.length > 0) {
+    sections.push(`Key Topics:\n${topics.map((t) => `- ${t}`).join("\n")}`);
+  }
+
+  return sections.join("\n\n");
+}
+
 // ── System prompt builder ─────────────────────────────────────────────────────
 
 type WorkspaceRow = {
@@ -59,13 +133,13 @@ type OnboardingRow = {
 
 function buildSystemPrompt(
   workspace: WorkspaceRow | null,
-  onboarding: OnboardingRow | null
+  onboarding: OnboardingRow | null,
+  knowledgeProfile: KnowledgeProfileRow | null
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
   const skylerData = onboarding?.skyler_data ?? {};
 
-  // Resolve company name (several possible sources)
   const companyName =
     (settings.company_name as string | undefined)?.trim() ||
     (orgData.step1?.companyName as string | undefined)?.trim() ||
@@ -74,19 +148,16 @@ function buildSystemPrompt(
 
   const lines: string[] = [];
 
-  // Description / overview
   const description =
     (settings.description as string | undefined)?.trim() ||
     (skylerData.step8?.companyOverview as string | undefined)?.trim();
   if (description) lines.push(`Description: ${description}`);
 
-  // Industry
   const industry =
     (settings.industry as string | undefined)?.trim() ||
     (orgData.step1?.industry as string | undefined)?.trim();
   if (industry && industry !== "Other") lines.push(`Industry: ${industry}`);
 
-  // Products / services
   const rawProducts = (orgData.step4?.products ?? []) as Array<{
     name?: string;
     description?: string;
@@ -99,17 +170,14 @@ function buildSystemPrompt(
   if (productLines.length > 0)
     lines.push(`Products/services: ${productLines.join(", ")}`);
 
-  // Team structure
   const teamRoles = (settings.team_roles as string | undefined)?.trim();
   if (teamRoles) lines.push(`Team structure: ${teamRoles}`);
 
-  // Target customers
   const targetAudience =
     (orgData.step2?.targetAudience as string | undefined)?.trim() ||
     (skylerData.step8?.idealCustomerProfile as string | undefined)?.trim();
   if (targetAudience) lines.push(`Target customers: ${targetAudience}`);
 
-  // Positioning / UVP
   const positioning =
     (orgData.step2?.positioning as string | undefined)?.trim() ||
     (skylerData.step8?.uniqueValueProp as string | undefined)?.trim();
@@ -118,39 +186,52 @@ function buildSystemPrompt(
   const companySection =
     lines.length > 0 ? `\nCOMPANY CONTEXT:\n${lines.join("\n")}\n` : "";
 
+  // ── Knowledge profile intelligence section ──────────────────────────────
+  let intelligenceSection = "";
+  if (
+    knowledgeProfile?.status === "ready" &&
+    knowledgeProfile.profile &&
+    Object.keys(knowledgeProfile.profile).length > 0
+  ) {
+    const formatted = formatKnowledgeProfile(knowledgeProfile.profile);
+    if (formatted) {
+      intelligenceSection = `\nCOMPANY INTELLIGENCE (auto-generated from your connected data):\n${formatted}\n`;
+    }
+  }
+
   return `You are CleverBrain, the AI knowledge assistant for ${companyName}. You help team members find information and insights from their connected business data.
-${companySection}
+${intelligenceSection}${companySection}
 RULES:
 - Answer based on the provided context from connected integrations (Slack messages, emails, documents, etc.)
 - If context contains relevant information, give a clear, helpful answer
-- If the user's question is vague or unclear, ask a brief clarifying question before searching. For example if someone says 'check that thing' or 'what about it', ask what specifically they're referring to rather than guessing.
-- If context doesn't have enough information, say so briefly — one sentence is enough. Do NOT write long apologies, self-analysis, or lists of what went wrong.
-- When you don't find something, say "I couldn't find that in the available data" and move on. Never write essays about your mistakes.
+- If the user's question is vague or unclear, ask a brief clarifying question before searching
+- If context doesn't have enough information, say so briefly — one sentence is enough
+- When you don't find something, say "I couldn't find that in the available data" and move on
 - Reference sources naturally: 'In #channel-name, [person] mentioned...' or 'Based on a message from Feb 20...'
 - Keep responses concise and actionable — no unnecessary filler
 - Use markdown formatting for readability when helpful
 - When synthesizing across multiple messages, organize the information clearly
 - If the user asks a follow-up, use conversation history to understand context
 - Never be overly apologetic. If you made a mistake, briefly correct yourself and move on.
-- If you're unsure whether the user is asking about one thing or another, ask — don't guess.`;
+- When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.`;
 }
 
 // ── Vague time reference detection ────────────────────────────────────────────
-// Matches phrases that refer to a time period established in a prior message
-// rather than naming an explicit window (e.g. "those dates", "that week").
 
 const VAGUE_TIME_RE =
   /\b(those dates?|that period|that same period|same (time|period|dates?|week|month)|that timeframe?|that week|that month|that day|within that (time|period|week)|during that (time|period|week)|between those (dates?|times?)|those times?|in those days|over that period|around that time|in that time|at that time|back then|the same (week|month|period|dates?|time))\b/i;
 
 // ── Context helpers ───────────────────────────────────────────────────────────
 
-function getChannelName(sourceType: string, meta: Record<string, unknown>): string {
+function getChannelName(
+  sourceType: string,
+  meta: Record<string, unknown>
+): string {
   if (
     sourceType === "slack_message" ||
     sourceType === "slack_reply" ||
     sourceType === "slack_reaction"
   ) {
-    // Prefer the resolved name stored at sync time; fall back to raw ID
     const name =
       (meta.channel_name as string | undefined) ??
       (meta.channel_id as string | undefined) ??
@@ -160,9 +241,11 @@ function getChannelName(sourceType: string, meta: Record<string, unknown>): stri
   return "";
 }
 
-function getUserName(sourceType: string, meta: Record<string, unknown>): string {
+function getUserName(
+  sourceType: string,
+  meta: Record<string, unknown>
+): string {
   if (sourceType === "slack_message" || sourceType === "slack_reply") {
-    // Prefer the resolved display name; fall back to raw user ID
     return (
       (meta.user_name as string | undefined) ??
       (meta.user as string | undefined) ??
@@ -184,7 +267,6 @@ function formatSourceDate(meta: Record<string, unknown>): string {
     (meta.close_date as string | undefined);
   if (!raw) return "";
   try {
-    // Slack timestamps are unix epoch strings like "1708435200.123456"
     const asFloat = parseFloat(raw);
     const d =
       !isNaN(asFloat) && asFloat > 1_000_000_000
@@ -217,20 +299,166 @@ function deduplicateSources(results: SearchResult[]): SourceInfo[] {
   return [...seen.values()];
 }
 
-function formatTimeRangeLabel(timeRange: { after?: Date; before?: Date }): string {
+function formatTimeRangeLabel(timeRange: {
+  after?: Date;
+  before?: Date;
+}): string {
   const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
   if (timeRange.after && timeRange.before) {
     const a = timeRange.after.toLocaleDateString("en-US", opts);
     const b = timeRange.before.toLocaleDateString("en-US", opts);
     return `${a} – ${b}`;
   }
-  if (timeRange.after) {
+  if (timeRange.after)
     return `since ${timeRange.after.toLocaleDateString("en-US", opts)}`;
-  }
-  if (timeRange.before) {
+  if (timeRange.before)
     return `before ${timeRange.before.toLocaleDateString("en-US", opts)}`;
-  }
   return "the selected period";
+}
+
+// ── Internal RAG search ───────────────────────────────────────────────────────
+// Encapsulates: query analysis, vague time inheritance, broad vs hybrid search.
+
+type RAGResult = {
+  results: SearchResult[];
+  activityLabel: string;
+};
+
+async function runInternalRAGSearch(
+  message: string,
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  workspaceId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: ReturnType<typeof createAdminSupabaseClient>
+): Promise<RAGResult> {
+  const analysis = analyzeQuery(message);
+  let timeRange = analysis.timeRange;
+  const { searchTerms } = analysis;
+
+  // Inherit time range from prior messages if the current message uses a vague reference
+  if (!timeRange && VAGUE_TIME_RE.test(message)) {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === "user") {
+        const priorRange = analyzeQuery(history[i].content).timeRange;
+        if (priorRange) {
+          timeRange = priorRange;
+          console.log(
+            `[chat] Inherited time range from history[${i}]: ` +
+              `after=${priorRange.after?.toISOString() ?? "–"} ` +
+              `before=${priorRange.before?.toISOString() ?? "–"}`
+          );
+          break;
+        }
+      }
+    }
+  }
+
+  const isBroad = analysis.isBroadSummary && timeRange !== null;
+
+  if (isBroad && timeRange) {
+    const label = formatTimeRangeLabel(timeRange);
+    const activityLabel = `Fetching messages from ${label}...`;
+    console.log(
+      `[chat] broad fetch — after: ${timeRange.after?.toISOString() ?? "none"}, ` +
+        `before: ${timeRange.before?.toISOString() ?? "none"}`
+    );
+    const { data, error } = await db.rpc("fetch_chunks_by_timerange", {
+      p_workspace_id: workspaceId,
+      p_after: timeRange.after ? timeRange.after.toISOString() : null,
+      p_before: timeRange.before ? timeRange.before.toISOString() : null,
+      p_limit: 150,
+    });
+    if (error) {
+      console.error("[chat] fetch_chunks_by_timerange error:", error);
+      return { results: [], activityLabel };
+    }
+    const results = ((data ?? []) as ChronologicalResult[]).map((r) => ({
+      ...r,
+      similarity: 0,
+    }));
+    return { results, activityLabel };
+  } else {
+    const activityLabel = "Searching your business data...";
+    const queryEmbedding = await createEmbedding(message);
+    if (!queryEmbedding.length) {
+      console.warn("[chat] Empty embedding — skipping vector search");
+      return { results: [], activityLabel };
+    }
+    const queryText = searchTerms.length > 0 ? searchTerms.join(" ") : message;
+    console.log(
+      `[chat] hybrid search — queryText: "${queryText}", ` +
+        `after: ${timeRange?.after?.toISOString() ?? "none"}, ` +
+        `before: ${timeRange?.before?.toISOString() ?? "none"}`
+    );
+    const { data, error } = await db.rpc("hybrid_search_documents", {
+      p_workspace_id: workspaceId,
+      p_query_embedding: `[${queryEmbedding.join(",")}]`,
+      p_query_text: queryText,
+      p_match_count: 15,
+      p_match_threshold: 0.2,
+      p_after: timeRange?.after ? timeRange.after.toISOString() : null,
+      p_before: timeRange?.before ? timeRange.before.toISOString() : null,
+    });
+    if (error) {
+      console.error("[chat] hybrid_search_documents error:", error);
+      return { results: [], activityLabel };
+    }
+    const results = (data ?? []) as SearchResult[];
+    console.log(`[chat] hybrid search returned ${results.length} results`);
+    return { results, activityLabel };
+  }
+}
+
+// ── Context string builders ───────────────────────────────────────────────────
+
+function buildInternalContext(results: SearchResult[]): string {
+  return results
+    .map((r) => {
+      const meta = r.metadata ?? {};
+      const parts: string[] = [r.source_type];
+      const ch = getChannelName(r.source_type, meta);
+      if (ch) parts.push(ch);
+      const usr = getUserName(r.source_type, meta);
+      if (usr) parts.push(usr);
+      const dt = formatSourceDate(meta);
+      if (dt) parts.push(dt);
+      return `[Source: ${parts.join(" | ")}]\n${r.chunk_text}`;
+    })
+    .join("\n\n---\n\n");
+}
+
+function buildWebContext(webResults: WebResult[]): string {
+  if (!webResults.length) return "";
+  return (
+    "WEB SEARCH RESULTS:\n" +
+    "The following information was found on the web. Use it to supplement your answer.\n\n" +
+    webResults
+      .map((r) => `[Source: ${r.title} | ${r.url}]\n${r.content}`)
+      .join("\n\n")
+  );
+}
+
+function buildContextString(
+  searchResults: SearchResult[],
+  webResults: WebResult[]
+): string {
+  const hasBoth = searchResults.length > 0 && webResults.length > 0;
+
+  const parts: string[] = [];
+
+  if (searchResults.length > 0) {
+    const block = buildInternalContext(searchResults);
+    parts.push(hasBoth ? `YOUR BUSINESS DATA:\n${block}` : block);
+  }
+
+  if (webResults.length > 0) {
+    parts.push(buildWebContext(webResults));
+  }
+
+  return (
+    parts.join("\n\n===\n\n") ||
+    "No relevant data was found in your connected integrations for this query."
+  );
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -282,31 +510,57 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // ── Admin client for all remaining DB ops (SSE breaks cookie sessions) ────
+  // ── Admin client for all remaining DB ops ─────────────────────────────────
   const db = createAdminSupabaseClient();
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
 
-  // ── Fetch workspace + onboarding data for dynamic system prompt ───────────
-  const [{ data: workspaceRow }, { data: onboardingRow }] = await Promise.all([
-    db
-      .from("workspaces")
-      .select("name, settings")
-      .eq("id", workspaceId)
-      .single(),
+  // ── Fetch workspace/onboarding/profile + run intent router in parallel ────
+  // All four operations start simultaneously; the intent router takes ~1s so
+  // running it here (before the stream) means no perceived latency is added
+  // once the stream begins — the routing decision is ready immediately.
+  const [
+    { data: workspaceRow },
+    { data: onboardingRow },
+    { data: profileRow },
+    routing,
+  ] = await Promise.all([
+    db.from("workspaces").select("name, settings").eq("id", workspaceId).single(),
     db
       .from("onboarding_state")
       .select("org_data, skyler_data")
       .eq("workspace_id", workspaceId)
       .maybeSingle(),
+    db
+      .from("knowledge_profiles")
+      .select("profile, status")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle(),
+    classifyIntent({
+      message,
+      knowledgeProfile: null, // fetched in parallel; router classifies from message alone
+      conversationHistory: [], // history loaded inside stream; doesn't affect classification
+    }),
   ]);
 
   const systemPrompt = buildSystemPrompt(
     workspaceRow as WorkspaceRow | null,
-    onboardingRow as OnboardingRow | null
+    onboardingRow as OnboardingRow | null,
+    profileRow as KnowledgeProfileRow | null
   );
 
-  // Captured by the stream closure — set during pipeline execution
+  // Profile is only "sufficient" if the row is ready and non-empty
+  const profileReady =
+    (profileRow as KnowledgeProfileRow | null)?.status === "ready" &&
+    Object.keys(
+      ((profileRow as KnowledgeProfileRow | null)?.profile as Record<
+        string,
+        unknown
+      >) ?? {}
+    ).length > 0;
+  const effectiveProfileSufficient =
+    routing.profile_sufficient && profileReady;
+
   let conversationId: string | null = inputConversationId ?? null;
   let isNewConversation = false;
 
@@ -345,14 +599,13 @@ export async function POST(request: NextRequest) {
           p_sources: null,
         });
 
-        // ── Step 2: Load conversation history (must be before query analysis
-        //           so we can inherit time ranges from prior messages) ────────
-        let history: Array<{ role: "user" | "assistant"; content: string }> = [];
+        // ── Step 2: Load conversation history ────────────────────────────────
+        let history: Array<{ role: "user" | "assistant"; content: string }> =
+          [];
         try {
           const { data: msgs } = await db.rpc("get_conversation_messages", {
             p_conversation_id: conversationId,
           });
-          // Exclude the user message we just saved; keep last 10 turns.
           history = ((msgs ?? []) as HistoryMessage[])
             .slice(0, -1)
             .slice(-10)
@@ -361,132 +614,64 @@ export async function POST(request: NextRequest) {
               content: m.content,
             }));
         } catch (histErr) {
-          console.error("[chat] Failed to load conversation history:", histErr);
+          console.error("[chat] Failed to load history:", histErr);
         }
 
-        // ── Step 3: Query analysis with follow-up time range inheritance ─────
-        //
-        // If the current message has no explicit time window but contains a
-        // vague back-reference ("those dates", "that week", etc.), scan
-        // backward through prior user messages to inherit the last explicit
-        // time range so "did X happen within those dates?" works correctly.
-        const analysis = analyzeQuery(message);
-        let timeRange = analysis.timeRange;
-        const { searchTerms } = analysis;
-
-        if (!timeRange && VAGUE_TIME_RE.test(message)) {
-          for (let i = history.length - 1; i >= 0; i--) {
-            if (history[i].role === "user") {
-              const priorRange = analyzeQuery(history[i].content).timeRange;
-              if (priorRange) {
-                timeRange = priorRange;
-                console.log(
-                  `[chat] Inherited time range from history[${i}]: ` +
-                    `after=${priorRange.after?.toISOString() ?? "–"} ` +
-                    `before=${priorRange.before?.toISOString() ?? "–"}`
-                );
-                break;
-              }
-            }
-          }
-        }
-
-        // ── Steps 4 & 5: Retrieve context ────────────────────────────────────
-        //
-        // Two paths depending on query intent:
-        //   • Broad summary (e.g. "what happened last week?") → chronological
-        //     fetch via fetch_chunks_by_timerange; no embedding needed.
-        //   • Specific topic query → vector + keyword hybrid search.
-
+        // ── Step 3: Route based on intent ────────────────────────────────────
         let searchResults: SearchResult[] = [];
-        const isBroad = analysis.isBroadSummary && timeRange !== null;
+        let webResults: WebResult[] = [];
+        const intent = routing.intent;
 
-        if (isBroad && timeRange) {
-          // ── Broad summary path ─────────────────────────────────────────────
-          const label = formatTimeRangeLabel(timeRange);
-          send({ type: "activity", action: `Fetching messages from ${label}...` });
+        console.log(`[chat] intent=${intent} routing for: "${message}"`);
 
-          try {
-            console.log(
-              `[chat] broad summary fetch — after: ${timeRange.after?.toISOString() ?? "none"}, ` +
-                `before: ${timeRange.before?.toISOString() ?? "none"}`
-            );
-            const { data: results, error: fetchError } = await db.rpc(
-              "fetch_chunks_by_timerange",
-              {
-                p_workspace_id: workspaceId,
-                p_after: timeRange.after ? timeRange.after.toISOString() : null,
-                p_before: timeRange.before ? timeRange.before.toISOString() : null,
-                p_limit: 150,
-              }
-            );
-            if (fetchError) {
-              console.error("[chat] fetch_chunks_by_timerange error:", fetchError);
-            } else {
-              // Map to SearchResult (similarity: 0 — not ranked by relevance)
-              searchResults = ((results ?? []) as ChronologicalResult[]).map(
-                (r) => ({ ...r, similarity: 0 })
-              );
-              console.log(
-                `[chat] chronological fetch returned ${searchResults.length} chunks`
-              );
-            }
-          } catch (fetchErr) {
-            console.error("[chat] fetch_chunks_by_timerange threw:", fetchErr);
+        if (intent === "conversational") {
+          // ── Conversational: no activity, no search ─────────────────────────
+          // Respond instantly from the system prompt + history alone
+
+        } else if (intent === "general_knowledge") {
+          // ── General knowledge: Claude answers from training data ────────────
+          send({ type: "activity", action: "Thinking..." });
+
+        } else if (intent === "web_search") {
+          // ── Web search: query Tavily for external information ───────────────
+          const webQuery = routing.web_query ?? message;
+          send({ type: "activity", action: "Searching the web..." });
+          webResults = await searchWeb(webQuery);
+          console.log(`[chat] web search (${webQuery}) → ${webResults.length} results`);
+
+        } else if (intent === "internal_data") {
+          // ── Internal data: RAG search (or profile alone if sufficient) ───────
+          if (!effectiveProfileSufficient) {
+            const rag = await runInternalRAGSearch(message, history, workspaceId, db);
+            send({ type: "activity", action: rag.activityLabel });
+            searchResults = rag.results;
           }
-        } else {
-          // ── Hybrid search path ─────────────────────────────────────────────
+          // else: profile already injected into system prompt — no search needed
+
+        } else if (intent === "hybrid") {
+          // ── Hybrid: internal RAG + web search in parallel ───────────────────
           send({ type: "activity", action: "Searching your business data..." });
+          send({ type: "activity", action: "Searching the web..." });
+          const [ragResult, webRes] = await Promise.all([
+            runInternalRAGSearch(message, history, workspaceId, db),
+            searchWeb(routing.web_query ?? message),
+          ]);
+          searchResults = ragResult.results;
+          webResults = webRes;
+          console.log(
+            `[chat] hybrid — internal: ${searchResults.length}, web: ${webResults.length}`
+          );
 
-          const queryEmbedding = await createEmbedding(message);
-          console.log(`[chat] embedding length: ${queryEmbedding.length}`);
-
-          if (queryEmbedding.length > 0) {
-            try {
-              const queryText =
-                searchTerms.length > 0 ? searchTerms.join(" ") : message;
-              console.log(
-                `[chat] searching — queryText: "${queryText}", ` +
-                  `threshold: 0.2, ` +
-                  `after: ${timeRange?.after?.toISOString() ?? "none"}, ` +
-                  `before: ${timeRange?.before?.toISOString() ?? "none"}`
-              );
-              const { data: results, error: searchError } = await db.rpc(
-                "hybrid_search_documents",
-                {
-                  p_workspace_id: workspaceId,
-                  p_query_embedding: `[${queryEmbedding.join(",")}]`,
-                  p_query_text: queryText,
-                  p_match_count: 15,
-                  p_match_threshold: 0.2,
-                  p_after: timeRange?.after ? timeRange.after.toISOString() : null,
-                  p_before: timeRange?.before
-                    ? timeRange.before.toISOString()
-                    : null,
-                }
-              );
-              if (searchError) {
-                console.error("[chat] hybrid_search_documents error:", searchError);
-              } else {
-                searchResults = (results ?? []) as SearchResult[];
-                console.log(
-                  `[chat] search returned ${searchResults.length} results`
-                );
-              }
-            } catch (searchErr) {
-              console.error(
-                "[chat] Search threw — continuing without results:",
-                searchErr
-              );
-            }
-          } else {
-            console.warn(
-              "[chat] Empty embedding from Voyage — skipping vector search"
-            );
+        } else if (intent === "creative") {
+          // ── Creative: generate content, optionally enriched with internal data
+          if (routing.search_needed) {
+            send({ type: "activity", action: "Preparing context..." });
+            const rag = await runInternalRAGSearch(message, history, workspaceId, db);
+            searchResults = rag.results;
           }
         }
 
-        // ── Activity: reading results (only if search found something) ───────
+        // Reading activity (shown when we have internal results to process)
         if (searchResults.length > 0) {
           send({
             type: "activity",
@@ -494,32 +679,20 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // ── Step 6: Build context block ──────────────────────────────────────
-        let context: string;
-        if (searchResults.length === 0) {
-          context =
-            "No relevant data was found in your connected integrations for this query.";
-        } else {
-          context = searchResults
-            .map((r) => {
-              const meta = r.metadata ?? {};
-              const parts: string[] = [r.source_type];
-              const ch = getChannelName(r.source_type, meta);
-              if (ch) parts.push(ch);
-              const usr = getUserName(r.source_type, meta);
-              if (usr) parts.push(usr);
-              const dt = formatSourceDate(meta);
-              if (dt) parts.push(dt);
-              return `[Source: ${parts.join(" | ")}]\n${r.chunk_text}`;
-            })
-            .join("\n\n---\n\n");
+        // ── Step 4: Build context block ──────────────────────────────────────
+        const context = buildContextString(searchResults, webResults);
+
+        // ── Step 5: Generating activity ──────────────────────────────────────
+        if (intent !== "conversational") {
+          send({ type: "activity", action: "Generating response..." });
         }
 
-        // ── Activity: generating (sent BEFORE Claude API call) ───────────────
-        send({ type: "activity", action: "Generating response..." });
-
-        // ── Step 7: Call Claude API with streaming ───────────────────────────
-        const userMessageWithContext = `<context>\n${context}\n</context>\n\n${message}`;
+        // ── Step 6: Call Claude with streaming ───────────────────────────────
+        // For conversational intent we skip context to keep it light and fast.
+        const userMessageWithContext =
+          intent === "conversational"
+            ? message
+            : `<context>\n${context}\n</context>\n\n${message}`;
 
         const claudeMessages: Anthropic.MessageParam[] = [
           ...history,
@@ -534,7 +707,7 @@ export async function POST(request: NextRequest) {
           stream: true,
         });
 
-        // ── Step 8: Stream text tokens as SSE ───────────────────────────────
+        // ── Step 7: Stream text tokens ───────────────────────────────────────
         let fullResponse = "";
         for await (const event of claudeStream) {
           if (
@@ -550,7 +723,7 @@ export async function POST(request: NextRequest) {
         const sources = deduplicateSources(searchResults);
         send({ type: "sources", sources });
 
-        // ── Step 9: Save assistant message to DB ─────────────────────────────
+        // ── Step 8: Save assistant message ───────────────────────────────────
         const { data: assistantMsgId } = await db.rpc("create_chat_message", {
           p_conversation_id: conversationId,
           p_role: "assistant",
@@ -558,12 +731,15 @@ export async function POST(request: NextRequest) {
           p_sources: sources.length > 0 ? sources : null,
         });
 
-        // ── Metadata + done ──────────────────────────────────────────────────
-        send({ type: "metadata", conversationId, messageId: assistantMsgId ?? null });
+        send({
+          type: "metadata",
+          conversationId,
+          messageId: assistantMsgId ?? null,
+        });
         send({ type: "done" });
         controller.close();
 
-        // ── Auto-title (non-blocking, fires after stream closes) ─────────────
+        // ── Auto-title (non-blocking) ─────────────────────────────────────────
         if (isNewConversation && conversationId) {
           void (async () => {
             try {
@@ -600,10 +776,11 @@ export async function POST(request: NextRequest) {
         try {
           send({
             type: "error",
-            error: err instanceof Error ? err.message : "Internal server error",
+            error:
+              err instanceof Error ? err.message : "Internal server error",
           });
         } catch {
-          // controller may already be closed — ignore
+          /* controller may already be closed */
         }
         try {
           controller.close();
@@ -618,7 +795,7 @@ export async function POST(request: NextRequest) {
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
-      "Connection": "keep-alive",
+      Connection: "keep-alive",
     },
   });
 }

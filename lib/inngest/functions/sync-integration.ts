@@ -222,6 +222,14 @@ export const syncIntegrationFunction = inngest.createFunction(
           .eq("id", integrationId);
       });
 
+      // ── Step 4: Trigger knowledge profile rebuild ─────────────────────────
+      // Fires after every successful sync so CleverBrain's company intelligence
+      // stays current with the latest data.
+      await step.sendEvent("trigger-knowledge-profile-build", {
+        name: "knowledge/profile.build",
+        data: { workspaceId },
+      });
+
       console.log(`[inngest] sync-integration complete — processed=${totalProcessed} skipped=${totalSkipped}`);
       return { processed: totalProcessed, skipped: totalSkipped };
 
