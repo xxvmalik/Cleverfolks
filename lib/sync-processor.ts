@@ -179,6 +179,24 @@ export async function processSyncedData(
 }
 
 // ============================================================
+// Slack lookup helpers
+// ============================================================
+
+/** Plain-object maps for JSON serialization across Inngest step boundaries. */
+export type SlackLookups = {
+  users: Record<string, string>;    // user_id → display name
+  channels: Record<string, string>; // channel_id → channel name
+};
+
+export function resolveSlackUser(userId: string, lookups?: SlackLookups): string {
+  return lookups?.users[userId] ?? userId;
+}
+
+export function resolveSlackChannel(channelId: string, lookups?: SlackLookups): string {
+  return lookups?.channels[channelId] ?? channelId;
+}
+
+// ============================================================
 // Integration normalizers
 // ============================================================
 
@@ -219,20 +237,25 @@ export function normalizeGmail(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeSlack(raw: any): SyncRecord {
+export function normalizeSlack(raw: any, lookups?: SlackLookups): SyncRecord {
   // Nango's SlackMessage model: id, ts, text, channel_id, user, thread_ts, etc.
-  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const channelId: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const userId: string = raw.user ?? raw.user_id ?? raw.username ?? "";
+  const channelName = resolveSlackChannel(channelId, lookups);
+  const userName = userId ? resolveSlackUser(userId, lookups) : undefined;
   const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
   const text: string = raw.text ?? "";
 
   return {
     external_id: messageId,
     source_type: "slack_message",
-    title: `Slack message in #${channelRef}`,
+    title: `Slack message in #${channelName}`,
     content: text,
     metadata: {
-      channel_id: channelRef,
-      user: raw.user ?? raw.user_id ?? raw.username,
+      channel_id: channelId,
+      channel_name: channelName,
+      user: userId,
+      ...(userName ? { user_name: userName } : {}),
       ts: raw.ts,
       thread_ts: raw.thread_ts ?? null,
       subtype: raw.subtype ?? null,
@@ -243,19 +266,24 @@ export function normalizeSlack(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeSlackReply(raw: any): SyncRecord {
+export function normalizeSlackReply(raw: any, lookups?: SlackLookups): SyncRecord {
   // Nango's SlackMessageReply model: same shape as SlackMessage plus thread_ts
-  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const channelId: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const userId: string = raw.user ?? raw.user_id ?? raw.username ?? "";
+  const channelName = resolveSlackChannel(channelId, lookups);
+  const userName = userId ? resolveSlackUser(userId, lookups) : undefined;
   const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
 
   return {
     external_id: messageId,
     source_type: "slack_reply",
-    title: `Reply in #${channelRef}`,
+    title: `Reply in #${channelName}`,
     content: raw.text ?? "",
     metadata: {
-      channel_id: channelRef,
-      user: raw.user ?? raw.user_id ?? raw.username,
+      channel_id: channelId,
+      channel_name: channelName,
+      user: userId,
+      ...(userName ? { user_name: userName } : {}),
       ts: raw.ts,
       thread_ts: raw.thread_ts ?? null,
       parent_message_ts: raw.thread_ts ?? null,
@@ -266,26 +294,30 @@ export function normalizeSlackReply(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeSlackReaction(raw: any): SyncRecord {
+export function normalizeSlackReaction(raw: any, lookups?: SlackLookups): SyncRecord {
   // Nango's SlackMessageReaction model: reaction, user, message_ts, channel_id
   const emoji: string = raw.reaction ?? raw.name ?? "unknown";
-  const user: string = raw.user ?? raw.user_id ?? "unknown";
-  const channelRef: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const userId: string = raw.user ?? raw.user_id ?? "unknown";
+  const channelId: string = raw.channel_id ?? raw.channel ?? "unknown";
+  const channelName = resolveSlackChannel(channelId, lookups);
+  const userName = resolveSlackUser(userId, lookups);
   const messageTs: string = raw.message_ts ?? raw.ts ?? "";
 
   // Always build a composite key — raw.id is often the parent message ts
   // (shared across all reactions on that message) and cannot be used alone.
-  const uniqueId = `reaction-${messageTs}-${emoji}-${user}`;
+  const uniqueId = `reaction-${messageTs}-${emoji}-${userId}`;
 
   return {
     external_id: uniqueId,
     source_type: "slack_reaction",
-    title: `Reaction :${emoji}: in #${channelRef}`,
-    content: `User ${user} reacted with :${emoji}: to message in #${channelRef}`,
+    title: `Reaction :${emoji}: in #${channelName}`,
+    content: `${userName} reacted with :${emoji}: to message in #${channelName}`,
     metadata: {
       emoji,
-      user,
-      channel_id: channelRef,
+      user: userId,
+      user_name: userName,
+      channel_id: channelId,
+      channel_name: channelName,
       message_ts: messageTs,
       count: raw.count ?? null,
       _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),

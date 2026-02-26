@@ -7,8 +7,9 @@ CREATE INDEX IF NOT EXISTS document_chunks_text_search_idx
   ON document_chunks USING gin(to_tsvector('english', chunk_text));
 
 -- Hybrid search: combines vector cosine similarity (0.7) + keyword ranking (0.3)
--- Optional time filter on the parent synced_document's synced_at column.
--- Original search_documents function is preserved unchanged.
+-- Time filter uses the actual message timestamp (metadata->>'ts' as Slack unix
+-- epoch float) rather than synced_at, so "last week" queries correctly match
+-- messages sent last week regardless of when the data was imported.
 CREATE OR REPLACE FUNCTION hybrid_search_documents(
   p_workspace_id    uuid,
   p_query_embedding vector(1024),
@@ -40,8 +41,20 @@ BEGIN
     FROM document_chunks dc
     JOIN synced_documents sd ON sd.id = dc.document_id
     WHERE dc.workspace_id = p_workspace_id
-      AND (p_after  IS NULL OR sd.synced_at >= p_after)
-      AND (p_before IS NULL OR sd.synced_at <= p_before)
+      AND (p_after  IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) >= p_after)
+      AND (p_before IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) <= p_before)
   ),
   keyword_search AS (
     SELECT
@@ -53,8 +66,20 @@ BEGIN
     WHERE dc.workspace_id = p_workspace_id
       AND to_tsvector('english', dc.chunk_text)
             @@ plainto_tsquery('english', p_query_text)
-      AND (p_after  IS NULL OR sd.synced_at >= p_after)
-      AND (p_before IS NULL OR sd.synced_at <= p_before)
+      AND (p_after  IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) >= p_after)
+      AND (p_before IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) <= p_before)
   ),
   combined AS (
     SELECT

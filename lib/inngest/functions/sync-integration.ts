@@ -13,11 +13,14 @@ import {
   normalizeHubspot,
   normalizeDrive,
   type SyncRecord,
+  type SlackLookups,
 } from "@/lib/sync-processor";
 
 // All Nango models to fetch per provider
 const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   gmail:             ["GmailEmail"],
+  // SlackUser + SlackChannel are fetched first (in buildSlackLookups step) to
+  // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
   hubspot:           ["HubSpotDeal"],
@@ -25,12 +28,12 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeRecord(provider: string, model: string, raw: any): SyncRecord | null {
+function normalizeRecord(provider: string, model: string, raw: any, lookups?: SlackLookups): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
-      case "SlackMessage":         return normalizeSlack(raw);
-      case "SlackMessageReply":    return normalizeSlackReply(raw);
-      case "SlackMessageReaction": return normalizeSlackReaction(raw);
+      case "SlackMessage":         return normalizeSlack(raw, lookups);
+      case "SlackMessageReply":    return normalizeSlackReply(raw, lookups);
+      case "SlackMessageReaction": return normalizeSlackReaction(raw, lookups);
       case "SlackChannel":         return normalizeSlackChannel(raw);
       case "SlackUser":            return normalizeSlackUser(raw);
       default:             return null;
@@ -43,6 +46,46 @@ function normalizeRecord(provider: string, model: string, raw: any): SyncRecord 
     case "google-drive":     return normalizeDrive(raw);
     default:                 return null;
   }
+}
+
+/** Fetch SlackUser + SlackChannel records from Nango and build lookup maps.
+ *  Returns plain objects (JSON-serialisable for Inngest step boundaries). */
+async function fetchSlackLookups(
+  nango: Nango,
+  connectionId: string
+): Promise<{ users: Record<string, string>; channels: Record<string, string> }> {
+  const users: Record<string, string> = {};
+  const channels: Record<string, string> = {};
+
+  for (const model of ["SlackUser", "SlackChannel"]) {
+    let cursor: string | undefined;
+    for (;;) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const page: { records: Record<string, any>[]; next_cursor: string | null } =
+        await nango.listRecords({ providerConfigKey: "slack", connectionId, model, cursor });
+
+      for (const raw of page.records) {
+        if (model === "SlackUser" && raw.id) {
+          // Use profile.display_name → real_name → name → id (descending preference)
+          const profile = raw.profile ?? {};
+          const name =
+            (profile.display_name as string | undefined)?.trim() ||
+            (raw.real_name as string | undefined)?.trim() ||
+            (raw.name as string | undefined) ||
+            raw.id;
+          users[raw.id as string] = name;
+        } else if (model === "SlackChannel" && raw.id) {
+          channels[raw.id as string] = (raw.name as string | undefined) ?? raw.id;
+        }
+      }
+
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+  }
+
+  console.log(`[inngest] Slack lookups built — ${Object.keys(users).length} users, ${Object.keys(channels).length} channels`);
+  return { users, channels };
 }
 
 // ── Serialisable SyncRecord (no Buffer — files are handled separately) ──────
@@ -70,7 +113,17 @@ export const syncIntegrationFunction = inngest.createFunction(
     console.log(`[inngest] sync-integration started — provider=${provider} integrationId=${integrationId}`);
 
     try {
-      // ── Step 1: Fetch + normalise all records from Nango ────────────────
+      // ── Step 1a (Slack only): pre-fetch users + channels for ID resolution ──
+      // Plain-object maps that survive Inngest's JSON step boundary.
+      const slackLookups: { users: Record<string, string>; channels: Record<string, string> } | null =
+        provider === "slack"
+          ? await step.run("build-slack-lookups", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              return fetchSlackLookups(nango, connectionId);
+            })
+          : null;
+
+      // ── Step 1b: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {
@@ -103,7 +156,7 @@ export const syncIntegrationFunction = inngest.createFunction(
               }
 
               for (const raw of page.records) {
-                const rec = normalizeRecord(provider, model, raw);
+                const rec = normalizeRecord(provider, model, raw, slackLookups ?? undefined);
                 if (rec) {
                   // Drop non-serialisable `file` field
                   const { file: _file, ...serialisable } = rec;

@@ -49,15 +49,24 @@ type HistoryMessage = {
 
 function getChannelName(sourceType: string, meta: Record<string, unknown>): string {
   if (sourceType === "slack_message" || sourceType === "slack_reply" || sourceType === "slack_reaction") {
-    const ch = (meta.channel_id as string | undefined) ?? "";
-    return ch ? `#${ch}` : "";
+    // Prefer the resolved name stored at sync time; fall back to raw ID
+    const name =
+      (meta.channel_name as string | undefined) ??
+      (meta.channel_id as string | undefined) ??
+      "";
+    return name ? `#${name}` : "";
   }
   return "";
 }
 
 function getUserName(sourceType: string, meta: Record<string, unknown>): string {
   if (sourceType === "slack_message" || sourceType === "slack_reply") {
-    return (meta.user as string | undefined) ?? "";
+    // Prefer the resolved display name; fall back to raw user ID
+    return (
+      (meta.user_name as string | undefined) ??
+      (meta.user as string | undefined) ??
+      ""
+    );
   }
   if (sourceType === "email") {
     return (meta.from as string | undefined) ?? "";
