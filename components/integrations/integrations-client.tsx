@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Nango from "@nangohq/frontend";
 import type { ConnectUIEvent } from "@nangohq/frontend";
@@ -14,6 +14,9 @@ type Integration = {
   workspace_id: string;
   provider: string;
   status: string;
+  sync_status: string | null;
+  sync_error: string | null;
+  synced_count: number | null;
   nango_connection_id: string | null;
   last_synced_at: string | null;
 };
@@ -26,25 +29,27 @@ type IntegrationConfig = {
 };
 
 const CORE_INTEGRATIONS: IntegrationConfig[] = [
-  { provider: "gmail", name: "Gmail", category: "Email", color: "#EA4335" },
-  { provider: "slack", name: "Slack", category: "Communication", color: "#4A154B" },
-  { provider: "google-calendar", name: "Google Calendar", category: "Calendar", color: "#1A73E8" },
-  { provider: "hubspot", name: "HubSpot", category: "CRM", color: "#FF7A59" },
-  { provider: "google-drive", name: "Google Drive", category: "Knowledge", color: "#34A853" },
+  { provider: "gmail",           name: "Gmail",           category: "Email",         color: "#EA4335" },
+  { provider: "slack",           name: "Slack",           category: "Communication", color: "#4A154B" },
+  { provider: "google-calendar", name: "Google Calendar", category: "Calendar",      color: "#1A73E8" },
+  { provider: "hubspot",         name: "HubSpot",         category: "CRM",           color: "#FF7A59" },
+  { provider: "google-drive",    name: "Google Drive",    category: "Knowledge",     color: "#34A853" },
 ];
 
 const COMING_SOON_INTEGRATIONS: IntegrationConfig[] = [
-  { provider: "salesforce", name: "Salesforce", category: "CRM", color: "#00A1E0" },
-  { provider: "outlook", name: "Outlook", category: "Email", color: "#0072C6" },
-  { provider: "microsoft-teams", name: "Microsoft Teams", category: "Communication", color: "#6264A7" },
-  { provider: "notion", name: "Notion", category: "Knowledge", color: "#000000" },
-  { provider: "confluence", name: "Confluence", category: "Knowledge", color: "#172B4D" },
-  { provider: "zendesk", name: "Zendesk", category: "Support", color: "#03363D" },
-  { provider: "intercom", name: "Intercom", category: "Support", color: "#286EFA" },
-  { provider: "stripe", name: "Stripe", category: "Payments", color: "#635BFF" },
-  { provider: "linear", name: "Linear", category: "Project Mgmt", color: "#5E6AD2" },
-  { provider: "apollo", name: "Apollo.io", category: "Sales", color: "#F06623" },
+  { provider: "salesforce",       name: "Salesforce",       category: "CRM",          color: "#00A1E0" },
+  { provider: "outlook",          name: "Outlook",          category: "Email",         color: "#0072C6" },
+  { provider: "microsoft-teams",  name: "Microsoft Teams",  category: "Communication", color: "#6264A7" },
+  { provider: "notion",           name: "Notion",           category: "Knowledge",     color: "#000000" },
+  { provider: "confluence",       name: "Confluence",       category: "Knowledge",     color: "#172B4D" },
+  { provider: "zendesk",          name: "Zendesk",          category: "Support",       color: "#03363D" },
+  { provider: "intercom",         name: "Intercom",         category: "Support",       color: "#286EFA" },
+  { provider: "stripe",           name: "Stripe",           category: "Payments",      color: "#635BFF" },
+  { provider: "linear",           name: "Linear",           category: "Project Mgmt",  color: "#5E6AD2" },
+  { provider: "apollo",           name: "Apollo.io",        category: "Sales",         color: "#F06623" },
 ];
+
+const POLL_INTERVAL_MS = 5000;
 
 function getRelativeTime(dateStr: string | null): string {
   if (!dateStr) return "Never";
@@ -61,15 +66,18 @@ function getRelativeTime(dateStr: string | null): string {
   return `${diffDays}d ago`;
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, syncStatus }: { status: string; syncStatus: string | null }) {
+  // While a background sync is running, show Syncing regardless of status
+  const effective = syncStatus === "syncing" ? "syncing" : status;
+
   const config: Record<string, { dot: string; label: string; bg: string; text: string }> = {
-    connected: { dot: "bg-[#4ADE80]", label: "Connected", bg: "bg-[#4ADE80]/10", text: "text-[#4ADE80]" },
-    disconnected: { dot: "bg-[#8B8F97]", label: "Disconnected", bg: "bg-[#8B8F97]/10", text: "text-[#8B8F97]" },
-    syncing: { dot: "bg-[#3A89FF] animate-pulse", label: "Syncing", bg: "bg-[#3A89FF]/10", text: "text-[#3A89FF]" },
-    error: { dot: "bg-[#F87171]", label: "Error", bg: "bg-[#F87171]/10", text: "text-[#F87171]" },
+    connected:    { dot: "bg-[#4ADE80]",              label: "Connected",    bg: "bg-[#4ADE80]/10", text: "text-[#4ADE80]"  },
+    disconnected: { dot: "bg-[#8B8F97]",              label: "Disconnected", bg: "bg-[#8B8F97]/10", text: "text-[#8B8F97]"  },
+    syncing:      { dot: "bg-[#3A89FF] animate-pulse", label: "Syncing…",    bg: "bg-[#3A89FF]/10", text: "text-[#3A89FF]"  },
+    error:        { dot: "bg-[#F87171]",              label: "Error",        bg: "bg-[#F87171]/10", text: "text-[#F87171]"  },
   };
 
-  const c = config[status] ?? config.disconnected;
+  const c = config[effective] ?? config.disconnected;
   return (
     <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${c.bg} ${c.text}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />
@@ -91,10 +99,12 @@ function IntegrationCard({
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState<"sync" | "connect" | "disconnect" | null>(null);
-  const [syncResult, setSyncResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const status = integration?.status ?? "disconnected";
+  const syncStatus = integration?.sync_status ?? null;
+  const isSyncing = syncStatus === "syncing" || loading === "sync";
+  const isConnected = status === "connected" || status === "syncing";
 
   async function handleConnect() {
     setLoading("connect");
@@ -114,11 +124,8 @@ function IntegrationCard({
     setError(null);
     try {
       const result = await disconnectIntegrationAction(integration.id);
-      if (result.error) {
-        setError(result.error);
-      } else {
-        router.refresh();
-      }
+      if (result.error) setError(result.error);
+      else router.refresh();
     } finally {
       setLoading(null);
     }
@@ -127,7 +134,6 @@ function IntegrationCard({
   async function handleSync() {
     if (!integration) return;
     setLoading("sync");
-    setSyncResult(null);
     setError(null);
     try {
       const res = await fetch("/api/sync", {
@@ -135,22 +141,22 @@ function IntegrationCard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ integrationId: integration.id }),
       });
-      const data = (await res.json()) as { ok?: boolean; processed?: number; skipped?: number; error?: string };
+      const data = (await res.json()) as { ok?: boolean; message?: string; error?: string };
       if (!res.ok || data.error) {
-        setError(data.error ?? "Sync failed");
-      } else {
-        setSyncResult(`${data.processed ?? 0} records synced`);
-        router.refresh();
+        setError(data.error ?? "Failed to start sync");
+        setLoading(null);
       }
+      // Don't clear loading — polling will update the card once the job
+      // sets sync_status back to 'completed'/'error'
     } catch {
-      setError("Sync failed");
-    } finally {
+      setError("Failed to start sync");
       setLoading(null);
     }
   }
 
   return (
     <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl p-5 flex flex-col gap-4">
+      {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div
@@ -164,38 +170,50 @@ function IntegrationCard({
             <div className="text-xs text-[#8B8F97]">{config.category}</div>
           </div>
         </div>
-        <StatusBadge status={loading === "sync" ? "syncing" : status} />
+        <StatusBadge status={status} syncStatus={isSyncing ? "syncing" : syncStatus} />
       </div>
 
-      <div className="text-xs text-[#8B8F97]">
-        Last synced: {getRelativeTime(integration?.last_synced_at ?? null)}
+      {/* Meta */}
+      <div className="flex items-center justify-between text-xs text-[#8B8F97]">
+        <span>Last synced: {getRelativeTime(integration?.last_synced_at ?? null)}</span>
+        {integration?.synced_count != null && integration.synced_count > 0 && (
+          <span className="text-[#8B8F97]">{integration.synced_count.toLocaleString()} records</span>
+        )}
       </div>
 
+      {/* Error from sync_error column */}
+      {syncStatus === "error" && integration?.sync_error && (
+        <div className="text-xs text-[#F87171] bg-[#F87171]/10 rounded-lg px-3 py-2 break-words">
+          {integration.sync_error}
+        </div>
+      )}
+
+      {/* Local error (connect/disconnect) */}
       {error && (
         <div className="text-xs text-[#F87171] bg-[#F87171]/10 rounded-lg px-3 py-2">
           {error}
         </div>
       )}
 
-      {syncResult && (
-        <div className="text-xs text-[#4ADE80] bg-[#4ADE80]/10 rounded-lg px-3 py-2">
-          {syncResult}
-        </div>
-      )}
-
+      {/* Actions */}
       <div className="flex gap-2 mt-auto">
-        {status === "connected" || status === "syncing" ? (
+        {isConnected ? (
           <>
             <button
               onClick={handleSync}
-              disabled={!!loading}
+              disabled={!!loading || isSyncing}
               className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#3A89FF] text-white hover:bg-[#2d7aff] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading === "sync" ? "Syncing…" : "Sync Now"}
+              {isSyncing ? (
+                <span className="flex items-center justify-center gap-1.5">
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Syncing…
+                </span>
+              ) : "Sync Now"}
             </button>
             <button
               onClick={handleDisconnect}
-              disabled={!!loading}
+              disabled={!!loading || isSyncing}
               className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#3A3D45] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading === "disconnect" ? "Disconnecting…" : "Disconnect"}
@@ -241,26 +259,39 @@ function ComingSoonCard({ config }: { config: IntegrationConfig }) {
 }
 
 export function IntegrationsClient({
-  integrations,
+  integrations: initialIntegrations,
   workspaceId,
 }: {
   integrations: Integration[];
   workspaceId: string;
 }) {
   const router = useRouter();
+  const [integrations, setIntegrations] = useState(initialIntegrations);
+
+  // Keep local state in sync when the server re-renders (router.refresh)
+  useEffect(() => {
+    setIntegrations(initialIntegrations);
+  }, [initialIntegrations]);
+
+  // Poll every 5 s while any integration is actively syncing
+  useEffect(() => {
+    const anySyncing = integrations.some((i) => i.sync_status === "syncing" || i.status === "syncing");
+    if (!anySyncing) return;
+
+    const id = setInterval(() => {
+      router.refresh();
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(id);
+  }, [integrations, router]);
+
   const integrationsByProvider = Object.fromEntries(
     integrations.map((i) => [i.provider, i])
   );
 
-  /**
-   * Opens the Nango Connect UI for a given provider.
-   * 1. Fetches a session token from our backend.
-   * 2. Opens the Nango iframe.
-   * 3. On 'connect' event: saves the connection to our DB, triggers first sync.
-   */
   const handleConnect = useCallback(
     async (provider: string) => {
-      // 1. Get session token
+      // 1. Get Nango session token
       const tokenRes = await fetch("/api/nango-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -284,7 +315,6 @@ export function IntegrationsClient({
               const { connectionId, providerConfigKey } = event.payload;
 
               try {
-                // 3. Save to our DB
                 const result = await connectIntegrationAction(
                   workspaceId,
                   providerConfigKey,
@@ -297,7 +327,7 @@ export function IntegrationsClient({
                   return;
                 }
 
-                // 4. Trigger first sync automatically
+                // Kick off first sync as a background job
                 if (result.integrationId) {
                   fetch("/api/sync", {
                     method: "POST",
@@ -317,7 +347,6 @@ export function IntegrationsClient({
               connectUI.close();
               reject(new Error(event.payload.errorMessage));
             } else if (event.type === "close") {
-              // User closed without connecting — not an error
               resolve();
             }
           },

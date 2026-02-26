@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { extractText } from "@/lib/file-processor";
 import { chunkText } from "@/lib/chunking";
@@ -21,9 +22,12 @@ export type SyncRecord = {
 export async function processSyncedData(
   workspaceId: string,
   integrationId: string,
-  records: SyncRecord[]
+  records: SyncRecord[],
+  /** Pass a pre-built client (e.g. admin client from Inngest). Falls back to
+   *  cookie-based server client when called from API routes. */
+  supabaseOverride?: SupabaseClient
 ): Promise<{ processed: number; skipped: number }> {
-  const supabase = await createServerSupabaseClient();
+  const supabase = supabaseOverride ?? await createServerSupabaseClient();
   let processed = 0;
   let skipped = 0;
   const total = records.length;
