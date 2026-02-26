@@ -70,45 +70,48 @@ function extractJSON(text: string): QueryPlan | null {
   return null;
 }
 
-// ── Profile summary helper ────────────────────────────────────────────────────
+// ── Profile section builders ──────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildProfileSummary(profile: Record<string, any>): string {
+function buildKnownTeamSection(profile: Record<string, any>): string {
   const members: Array<{
     name?: string;
     detected_role?: string;
     likely_role?: string;
+    active_channels?: string[];
   }> = profile.team_members ?? [];
 
+  if (!members.length) return "";
+
+  const lines = members
+    .filter((m) => m.name)
+    .slice(0, 15)
+    .map((m) => {
+      const role = m.detected_role ?? m.likely_role ?? "unknown role";
+      const channels = (m.active_channels ?? []).filter(Boolean);
+      const channelStr =
+        channels.length > 0 ? ` — active in ${channels.map((c) => `#${c}`).join(", ")}` : "";
+      return `- ${m.name}: ${role}${channelStr}`;
+    });
+
+  return `KNOWN TEAM MEMBERS:\n${lines.join("\n")}`;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildKnownChannelsSection(profile: Record<string, any>): string {
   const channels: Array<{
     name?: string;
     purpose?: string;
   }> = profile.channels ?? [];
 
-  const parts: string[] = [];
+  if (!channels.length) return "";
 
-  if (members.length > 0) {
-    const memberLines = members
-      .filter((m) => m.name)
-      .slice(0, 12)
-      .map((m) => {
-        const role = m.detected_role ?? m.likely_role ?? "unknown role";
-        return `  - ${m.name} (${role})`;
-      })
-      .join("\n");
-    parts.push(`Team members and roles:\n${memberLines}`);
-  }
+  const lines = channels
+    .filter((c) => c.name)
+    .slice(0, 12)
+    .map((c) => `- #${c.name}${c.purpose ? `: ${c.purpose}` : ""}`);
 
-  if (channels.length > 0) {
-    const channelLines = channels
-      .filter((c) => c.name)
-      .slice(0, 10)
-      .map((c) => `  - #${c.name}${c.purpose ? `: ${c.purpose}` : ""}`)
-      .join("\n");
-    parts.push(`Channels:\n${channelLines}`);
-  }
-
-  return parts.join("\n\n") || "(no profile data)";
+  return `KNOWN CHANNELS:\n${lines.join("\n")}`;
 }
 
 // ── Prompt builder ────────────────────────────────────────────────────────────
@@ -128,44 +131,59 @@ function buildPlannerPrompt(
           .join("\n")
       : "(no prior conversation)";
 
-  const profileSummary =
+  const teamSection =
     knowledgeProfile && Object.keys(knowledgeProfile).length > 0
-      ? buildProfileSummary(knowledgeProfile)
+      ? buildKnownTeamSection(knowledgeProfile)
+      : "";
+  const channelSection =
+    knowledgeProfile && Object.keys(knowledgeProfile).length > 0
+      ? buildKnownChannelsSection(knowledgeProfile)
+      : "";
+
+  const profileBlock =
+    teamSection || channelSection
+      ? [teamSection, channelSection].filter(Boolean).join("\n\n")
       : "(no profile available)";
 
   const timeRangeInfo = queryAnalysis.timeRange
     ? `after=${queryAnalysis.timeRange.after?.toISOString() ?? "none"}, before=${queryAnalysis.timeRange.before?.toISOString() ?? "none"}`
     : "none detected";
 
-  return `You are a search strategist for a business AI assistant. Given the user's question, company profile, conversation history, and extracted time range, decide the optimal search strategy.
+  return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
+
+${profileBlock}
+
+CRITICAL INSTRUCTIONS:
+1. When the user mentions a ROLE (designer, manager, support lead, etc.), first check if any team member above has that role. If yes, use person_search with their exact name.
+2. If NO team member matches the role, think about which CHANNEL relates to that role and use channel_search. Examples: 'designer' → #graphics-contents, 'support' → #order-complaints, 'payments' → #payment-complaints.
+3. When the user mentions a CHANNEL by name or topic that maps to a known channel, use channel_search with that channel name.
+4. When the user mentions a PERSON by name, use person_search.
+5. ONLY use generic semantic search when you cannot map the question to a specific person or channel from the profile above.
+6. You can and should combine strategies when helpful (e.g., channel_search + person_search).
+7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
+
+EXAMPLES:
+- "When did our designer post designs?" → no designer in profile → channel_search on #graphics-contents
+- "What has the Operations Manager been doing?" → Operation Manager is in profile → person_search for "Operation Manager"
+- "Any complaints this week?" → channel_search on #order-complaints with time range
+- "What did toyin announce?" → person_search for "toyin"
+- "Who is on the team?" → profile_only
+- "What's happening in #operations?" → channel_search for "operations"
+- "Compare complaints this week vs last week" → channel_search #order-complaints with this week's range + channel_search with last week's range
+- "Why is ALLI frustrated?" → person_search for "ALLI" + surrounding_context
 
 Available strategies:
-- semantic: Standard hybrid search (vector + keyword). Best for specific topic questions.
-- broad_fetch: Fetch all messages from a time period. Best for summary/overview questions. Requires a time range.
-- person_search: Search by person name. Best when asking about a specific person's activity. Requires person_name.
-- channel_search: Search by channel. Best when asking about a specific channel. Requires channel_name.
-- surrounding_context: After finding results, fetch surrounding messages for context. Use when the question asks about reasons, context, or 'why' something happened.
-- profile_only: The knowledge profile alone can answer this. No search needed.
-
-You can combine multiple strategies. For example:
-- 'Why are we celebrating Hassan?' → semantic search for 'celebrating Hassan' + surrounding_context on results
-- 'What has Peters been working on this week?' → person_search for 'Peters' with time range
-- 'What's happening in #operations?' → channel_search for 'operations'
-- 'Who is on the team?' → profile_only
-- 'Compare complaints this week vs last week' → broad_fetch for this week + broad_fetch for last week
-
-When the user asks about a team member by name or role, use person_search with their exact name from the profile.
-When the user asks about a channel by name or purpose, use channel_search with the channel name.
-When the user asks about a role (e.g. "what is the engineering lead working on?"), resolve the role to a name using the profile, then use person_search.
+- semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match.
+- broad_fetch: Fetch all messages from a time period. Best for summary questions over a date range.
+- person_search: Search by person name. Requires person_name param.
+- channel_search: Search by channel name. Requires channel_name param.
+- surrounding_context: Fetch surrounding messages for context around found results.
+- profile_only: Answer from profile alone — no search needed.
 
 RECENT CONVERSATION:
 ${recentHistory}
 
-COMPANY PROFILE:
-${profileSummary}
-
 USER MESSAGE: "${message}"
-
 EXTRACTED TIME RANGE: ${timeRangeInfo}
 
 Return ONLY a valid JSON object (no markdown, no explanation):
@@ -175,8 +193,8 @@ Return ONLY a valid JSON object (no markdown, no explanation):
       "type": "semantic | broad_fetch | person_search | channel_search | surrounding_context | profile_only",
       "params": {
         "query": "search query if semantic",
-        "person_name": "name if person_search",
-        "channel_name": "name if channel_search",
+        "person_name": "exact name from profile if person_search",
+        "channel_name": "channel name without # if channel_search",
         "after": "ISO date string if time-filtered",
         "before": "ISO date string if time-filtered",
         "apply_to": "all or strategy index number for surrounding_context"
@@ -244,9 +262,18 @@ export async function planQuery({
       }
     }
 
+    // Full plan debug log
+    const strategyDetails = parsed.strategies.map((s) => {
+      const params = Object.entries(s.params ?? {})
+        .filter(([, v]) => v !== null && v !== undefined)
+        .map(([k, v]) => `${k}=${String(v)}`)
+        .join(", ");
+      return params ? `${s.type}(${params})` : s.type;
+    });
     console.log(
-      `[query-planner] plan: ${parsed.strategies.map((s) => s.type).join(" + ")} — ${parsed.reasoning}`
+      `[query-planner] plan: [${strategyDetails.join(" + ")}] — ${parsed.reasoning}`
     );
+
     return parsed;
   } catch (err) {
     console.error("[query-planner] planQuery failed:", err);

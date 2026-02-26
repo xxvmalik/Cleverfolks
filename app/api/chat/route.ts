@@ -207,7 +207,20 @@ RULES:
 - Never be overly apologetic. If you made a mistake, briefly correct yourself and move on.
 - When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.
 - When a team member's role is listed as "[role inferred — may not be exact]", treat it as a reasonable guess and caveat your answer lightly if role attribution matters.
-- If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.`;
+- If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.
+
+ROLE DISCOVERY:
+- When a user asks about a role (e.g., "our designer", "the accountant", "whoever handles refunds") and NO ONE in the Company Intelligence section has that role:
+  - Search the retrieved data to identify who is most active in the relevant area
+  - Answer the user's question with what you found from the data AND ask for confirmation at the end: "Based on their activity in #[channel], [name] appears to handle [function] — they last posted [brief detail]. Is [name] your [role]?"
+  - Do NOT refuse to answer just because you are unsure who the person is. Give your best answer from the data and ask for confirmation.
+- When a user CONFIRMS a role (e.g., "yes", "that's right", "correct", "yep"):
+  - Acknowledge naturally in 1 sentence
+  - Append this exact tag at the very end of your response (after everything else): [ROLE_UPDATE: name=<person name>, role=<role title>]
+  - This tag is invisible to the user and is used to update the company profile automatically.
+- When a user CORRECTS a role with a different name (e.g., "no, it's actually Hassan"):
+  - Acknowledge the correction naturally
+  - Append: [ROLE_UPDATE: name=<correct person name>, role=<role title>]`;
 }
 
 // ── Vague time reference detection ────────────────────────────────────────────
@@ -492,6 +505,93 @@ function buildContextString(
     parts.join("\n\n===\n\n") ||
     "No relevant data was found in your connected integrations for this query."
   );
+}
+
+// ── Role update helpers ───────────────────────────────────────────────────────
+
+const ROLE_UPDATE_RE = /\[ROLE_UPDATE:\s*name=([^,\]]+),\s*role=([^\]]+)\]/i;
+
+/** Strip all [ROLE_UPDATE: ...] tags from a response string. */
+function stripRoleUpdateTag(text: string): string {
+  return text.replace(/\[ROLE_UPDATE:[^\]]*\]/gi, "").trimEnd();
+}
+
+/**
+ * Parse, apply, and persist a role update extracted from the assistant response.
+ * Silently no-ops on any error so the main response stream is never blocked.
+ */
+async function applyRoleUpdate(
+  rawMatch: RegExpMatchArray,
+  workspaceId: string,
+  db: ReturnType<typeof createAdminSupabaseClient>
+): Promise<void> {
+  const personName = rawMatch[1].trim();
+  const newRole = rawMatch[2].trim();
+  if (!personName || !newRole) return;
+
+  try {
+    const { data: profileRow } = await db
+      .from("knowledge_profiles")
+      .select("profile, status")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+
+    if (!profileRow?.profile) return;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const profile = profileRow.profile as Record<string, any>;
+    const members: Array<{
+      name?: string;
+      detected_role?: string;
+      likely_role?: string;
+      confidence?: string;
+      active_channels?: string[];
+      typical_activities?: string;
+      notes?: string;
+    }> = profile.team_members ?? [];
+
+    const lowerTarget = personName.toLowerCase();
+    let matched = false;
+
+    const updated = members.map((m) => {
+      if (!m.name) return m;
+      const lowerName = m.name.toLowerCase();
+      if (lowerName.includes(lowerTarget) || lowerTarget.includes(lowerName)) {
+        matched = true;
+        return { ...m, detected_role: newRole, confidence: "confirmed" };
+      }
+      return m;
+    });
+
+    // If no existing member matched, add a new entry
+    if (!matched) {
+      updated.push({
+        name: personName,
+        detected_role: newRole,
+        confidence: "confirmed",
+        active_channels: [],
+        typical_activities: "",
+        notes: "Added via conversation",
+      });
+    }
+
+    const newProfile = { ...profile, team_members: updated };
+    const { error } = await db.rpc("upsert_knowledge_profile", {
+      p_workspace_id: workspaceId,
+      p_profile: newProfile,
+      p_status: "ready",
+    });
+
+    if (error) {
+      console.error("[chat] role-update save failed:", error.message);
+    } else {
+      console.log(
+        `[chat] role-update applied: ${personName} → "${newRole}" (${matched ? "updated" : "added"})`
+      );
+    }
+  } catch (err) {
+    console.error("[chat] applyRoleUpdate error:", err);
+  }
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -850,26 +950,82 @@ export async function POST(request: NextRequest) {
         });
 
         // ── Step 7: Stream text tokens ───────────────────────────────────────
+        // We buffer the last 80 characters to catch the [ROLE_UPDATE: ...] tag
+        // that may arrive split across multiple delta tokens.  Once we detect
+        // the opening "[ROLE_UPDATE" in the buffer we hold back further tokens
+        // until the closing "]" arrives or the stream ends, then discard the tag.
         let fullResponse = "";
+        let tagBuffer = "";          // accumulates potential tag characters
+        let suppressingTag = false;  // true once "[ROLE_UPDATE" detected
+
         for await (const event of claudeStream) {
           if (
             event.type === "content_block_delta" &&
             event.delta.type === "text_delta"
           ) {
-            send({ type: "text", text: event.delta.text });
-            fullResponse += event.delta.text;
+            const chunk = event.delta.text;
+            fullResponse += chunk;
+
+            if (suppressingTag) {
+              // We are inside the tag — buffer until "]" found
+              tagBuffer += chunk;
+              if (tagBuffer.includes("]")) {
+                suppressingTag = false;
+                tagBuffer = "";
+              }
+              // Don't send anything while suppressing
+            } else {
+              // Check if this chunk or its tail opens a tag
+              const combined = tagBuffer + chunk;
+              const tagStart = combined.indexOf("[ROLE_UPDATE");
+              if (tagStart !== -1) {
+                // Send everything before the tag start
+                const safe = combined.slice(0, tagStart);
+                if (safe) send({ type: "text", text: safe });
+                suppressingTag = true;
+                tagBuffer = combined.slice(tagStart);
+                // If the entire tag is already in buffer, close it immediately
+                if (tagBuffer.includes("]")) {
+                  suppressingTag = false;
+                  tagBuffer = "";
+                }
+              } else {
+                // No tag — flush safe prefix, keep last 12 chars as lookahead
+                const LOOKAHEAD = 12;
+                const safe = combined.slice(0, Math.max(0, combined.length - LOOKAHEAD));
+                if (safe) send({ type: "text", text: safe });
+                tagBuffer = combined.slice(Math.max(0, combined.length - LOOKAHEAD));
+              }
+            }
           }
+        }
+
+        // Flush any remaining buffered text that wasn't a tag
+        if (tagBuffer && !suppressingTag) {
+          send({ type: "text", text: tagBuffer });
         }
 
         // ── Sources (deduplicated by document_id) ────────────────────────────
         const sources = deduplicateSources(searchResults);
         send({ type: "sources", sources });
 
-        // ── Step 8: Save assistant message ───────────────────────────────────
+        // ── Step 8: Check for role update tag ────────────────────────────────
+        const roleMatch = fullResponse.match(ROLE_UPDATE_RE);
+        // Strip the tag before saving — users should never see it
+        const savedContent = roleMatch
+          ? stripRoleUpdateTag(fullResponse)
+          : fullResponse;
+
+        if (roleMatch) {
+          // Run async, non-blocking — don't await so stream closes first
+          void applyRoleUpdate(roleMatch, workspaceId, db);
+        }
+
+        // ── Step 9: Save assistant message ───────────────────────────────────
         const { data: assistantMsgId } = await db.rpc("create_chat_message", {
           p_conversation_id: conversationId,
           p_role: "assistant",
-          p_content: fullResponse,
+          p_content: savedContent,
           p_sources: sources.length > 0 ? sources : null,
         });
 
