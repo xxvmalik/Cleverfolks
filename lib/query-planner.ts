@@ -8,7 +8,6 @@ export type StrategyType =
   | "broad_fetch"
   | "person_search"
   | "channel_search"
-  | "aggregation"
   | "surrounding_context"
   | "profile_only";
 
@@ -25,10 +24,6 @@ export type SearchStrategy = {
     /** Which prior strategy's results to enrich with surrounding context.
      *  "all" = every strategy's results; number = zero-based strategy index. */
     apply_to?: "all" | number | string;
-    /** 'person' | 'channel' — which dimension to aggregate by */
-    aggregate_by?: string;
-    /** Optional ILIKE keyword array filter on chunk_text for the aggregation strategy */
-    keywords?: string[];
   };
 };
 
@@ -171,6 +166,7 @@ CRITICAL INSTRUCTIONS:
 5. ONLY use generic semantic search when you cannot map the question to a specific person or channel from the profile above.
 6. You can and should combine strategies when helpful (e.g., channel_search + person_search).
 7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
+8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), fetch ALL messages so Claude can count accurately — use channel_search on relevant channels (preferred) or broad_fetch if no specific channel is obvious. Do NOT use semantic search for counting questions.
 
 EXAMPLES:
 - "When did our designer post designs?" → no designer in profile → channel_search on #graphics-contents
@@ -181,17 +177,17 @@ EXAMPLES:
 - "What's happening in #operations?" → channel_search for "operations"
 - "Compare complaints this week vs last week" → channel_search #order-complaints with this week's range + channel_search with last week's range
 - "Why is ALLI frustrated?" → person_search for "ALLI" + surrounding_context
-- "Who reported the most complaints this month?" → aggregation(aggregate_by=person, keyword=complaint, time range)
-- "Which channel has the most failed orders?" → aggregation(aggregate_by=channel, keyword=failed)
-- "How many messages did each person send last week?" → aggregation(aggregate_by=person, time range)
-- "Top 5 most active people this month?" → aggregation(aggregate_by=person, time range)
+- "Who reported the most complaints this month?" → channel_search on #order-complaints + channel_search on #payment-complaints with time range (Claude reads all messages and counts)
+- "Which channel has the most failed orders?" → broad_fetch with time range (Claude counts per channel across all messages)
+- "How many messages did each person send last week?" → broad_fetch with time range
+- "Top 5 most active people this month?" → broad_fetch with time range
+- "Rank everyone by complaints reported" → channel_search on complaint channels with time range
 
 Available strategies:
-- semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match.
-- broad_fetch: Fetch all messages from a time period. Best for summary questions over a date range.
+- semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match. Do NOT use for counting/ranking questions.
+- broad_fetch: Fetch ALL messages from a time period. Use for summary questions AND for counting/ranking questions when no specific channel is obvious — Claude reads everything and counts accurately.
 - person_search: Search by person name. Requires person_name param.
-- channel_search: Search by channel name. Requires channel_name param.
-- aggregation: Direct SQL count of messages grouped by person or channel. Use when the user asks for rankings, totals, "who sent the most", "how many", "top N", or comparisons of quantities. Requires aggregate_by ("person" or "channel"). Optional keywords array filters chunk_text with ILIKE OR logic — use it to scope the count to a topic (e.g., keywords=["failed","error","issue"] for "who reported the most failed orders"). SKIP RAG entirely when this is used.
+- channel_search: Search by channel name. Requires channel_name param. Use for counting/ranking when the relevant channel(s) are known.
 - surrounding_context: Fetch surrounding messages for context around found results.
 - profile_only: Answer from profile alone — no search needed.
 
@@ -205,16 +201,14 @@ Return ONLY a valid JSON object (no markdown, no explanation):
 {
   "strategies": [
     {
-      "type": "semantic | broad_fetch | person_search | channel_search | aggregation | surrounding_context | profile_only",
+      "type": "semantic | broad_fetch | person_search | channel_search | surrounding_context | profile_only",
       "params": {
         "query": "search query if semantic",
         "person_name": "exact name from profile if person_search",
         "channel_name": "channel name without # if channel_search",
         "after": "ISO date string if time-filtered",
         "before": "ISO date string if time-filtered",
-        "apply_to": "all or strategy index number for surrounding_context",
-        "aggregate_by": "person or channel — required for aggregation",
-        "keywords": ["optional", "topic", "keywords", "for", "aggregation", "ILIKE", "filter"]
+        "apply_to": "all or strategy index number for surrounding_context"
       }
     }
   ],
@@ -272,7 +266,6 @@ export async function planQuery({
       "broad_fetch",
       "person_search",
       "channel_search",
-      "aggregation",
       "surrounding_context",
       "profile_only",
     ];

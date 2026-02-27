@@ -338,7 +338,7 @@ function formatTimeRangeLabel(timeRange: {
 
 // ── Activity labels from query plan ──────────────────────────────────────────
 
-import type { SearchStrategy, QueryPlan } from "@/lib/query-planner";
+import type { SearchStrategy } from "@/lib/query-planner";
 
 function getStrategyActivityLabels(
   strategies: SearchStrategy[],
@@ -363,13 +363,6 @@ function getStrategyActivityLabels(
         : inheritedTimeRange?.before;
       const label = formatTimeRangeLabel({ after, before });
       labels.push(`Fetching messages from ${label}...`);
-    } else if (strategy.type === "aggregation") {
-      const groupBy  = strategy.params.aggregate_by ?? "person";
-      const keywords = strategy.params.keywords;
-      const kwLabel  = keywords?.length
-        ? ` mentioning "${keywords.slice(0, 2).join('", "')}${keywords.length > 2 ? '"...' : '"'}`
-        : "";
-      labels.push(`Counting messages by ${groupBy}${kwLabel}...`);
     } else if (strategy.type === "semantic") {
       labels.push("Searching your business data...");
     }
@@ -383,145 +376,23 @@ function getStrategyActivityLabels(
   return labels;
 }
 
-// ── Aggregation plan builder ──────────────────────────────────────────────────
-
-/** Words that appear in aggregation queries but describe the action of sending
- *  messages, not the topic. We strip these so the keyword is the domain noun. */
-const AGGREGATION_VERBS = new Set([
-  "sent", "posted", "wrote", "said", "replied", "responded", "messaged",
-  "submitted", "reported", "raised", "filed", "flagged", "mentioned",
-  "messages", "message", "times", "activity", "active", "posts", "replies",
-  "reply", "breakdown", "rank", "ranking", "count", "total", "tally",
-  "leaderboard", "frequency",
-]);
-
-/**
- * Use Claude Haiku to expand a single aggregation keyword into a list of
- * domain-relevant synonyms. Uses business context when available for
- * domain-specific expansion; falls back to generic expansion without it.
- * Always returns at least [initialKeyword] on any failure.
- */
-async function expandAggregationKeywords(
-  initialKeyword: string,
-  businessContext: string | undefined
-): Promise<string[]> {
-  console.log(
-    `[expand] called — keyword="${initialKeyword}" ` +
-    `businessContext=${businessContext ? `"${businessContext.slice(0, 120).replace(/\n/g, " ")}..."` : "undefined (will use generic prompt)"}`
-  );
-
-  const prompt = businessContext
-    ? `You are a keyword expansion assistant for a business search tool.\n\nBusiness context: "${businessContext}"\nInitial keyword: "${initialKeyword}"\n\nExpand "${initialKeyword}" into 3–8 related lowercase terms that would appear in Slack messages about this topic in this specific business. Include the original term plus synonyms, abbreviations, and domain-specific variants relevant to this business.\n\nReturn ONLY a JSON array of strings, nothing else. Example: ["complaint","issue","problem","error","failed"]`
-    : `Expand the business keyword "${initialKeyword}" into 3–8 related lowercase terms that might appear in workplace Slack messages about this topic. Include the original term plus common synonyms and variants.\n\nReturn ONLY a JSON array of strings, nothing else. Example: ["complaint","issue","problem","error","failed"]`;
-
-  try {
-    console.log(`[expand] calling Haiku (model=claude-haiku-4-5-20251001, hasContext=${!!businessContext})`);
-    const haiku = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-    const response = await haiku.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 200,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text =
-      response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
-    console.log(`[expand] Haiku raw response: "${text.slice(0, 400)}"`);
-
-    // Use greedy match to capture the full array (handles multiline responses)
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) {
-      console.warn(`[expand] no JSON array found in Haiku response — falling back to ["${initialKeyword}"]`);
-      return [initialKeyword.toLowerCase()];
-    }
-
-    console.log(`[expand] matched JSON fragment: "${match[0].slice(0, 300)}"`);
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(match[0]);
-    } catch (parseErr) {
-      console.warn(`[expand] JSON.parse failed on "${match[0].slice(0, 200)}" — error:`, parseErr);
-      return [initialKeyword.toLowerCase()];
-    }
-
-    if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((s) => typeof s === "string")) {
-      console.warn(`[expand] parsed value is not a non-empty string array:`, parsed);
-      return [initialKeyword.toLowerCase()];
-    }
-
-    const keywords = (parsed as string[]).map((k) => k.toLowerCase());
-    // Ensure the original keyword is always present
-    if (!keywords.includes(initialKeyword.toLowerCase())) {
-      keywords.unshift(initialKeyword.toLowerCase());
-    }
-
-    console.log(`[expand] success — "${initialKeyword}" → [${keywords.join(", ")}]`);
-    return keywords;
-
-  } catch (err) {
-    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-    console.error(`[expand] Haiku call threw — ${errMsg}`);
-    return [initialKeyword.toLowerCase()];
-  }
-}
-
-async function buildAggregationPlan(
-  message: string,
-  searchTerms: string[],
-  timeRange: TimeRange | null,
-  businessContext?: string
-): Promise<QueryPlan> {
-  const lq = message.toLowerCase();
-
-  // Determine dimension: channel if user mentions "channel", else person
-  const aggregateBy: string =
-    /\b(channel|channels|per\s+channel|by\s+channel|which\s+channel)\b/.test(lq)
-      ? "channel"
-      : "person";
-
-  // Extract the first meaningful domain keyword (not a generic aggregation verb)
-  const initialKeyword = searchTerms.find((w) => !AGGREGATION_VERBS.has(w));
-
-  console.log(
-    `[chat] buildAggregationPlan — searchTerms=[${searchTerms.join(", ")}] ` +
-    `initialKeyword="${initialKeyword ?? "none"}" ` +
-    `aggregateBy=${aggregateBy} ` +
-    `businessContext=${businessContext ? "present" : "missing"}`
-  );
-
-  let keywords: string[] | undefined;
-  if (initialKeyword) {
-    // Always call expansion — uses business context when present for domain-specific
-    // synonyms; falls back to generic Haiku expansion without it.
-    keywords = await expandAggregationKeywords(initialKeyword, businessContext);
-  } else {
-    console.log("[chat] buildAggregationPlan — no initialKeyword found, no keyword filter will be applied");
-  }
-
-  console.log(`[chat] buildAggregationPlan — final keywords: ${keywords ? `[${keywords.join(", ")}]` : "none"}`);
-
-  return {
-    strategies: [
-      {
-        type: "aggregation",
-        params: {
-          aggregate_by: aggregateBy,
-          ...(keywords ? { keywords } : {}),
-          ...(timeRange?.after  ? { after:  timeRange.after.toISOString()  } : {}),
-          ...(timeRange?.before ? { before: timeRange.before.toISOString() } : {}),
-        },
-      },
-    ],
-    reasoning: `Aggregation by ${aggregateBy}${keywords ? ` filtered by [${keywords.join(", ")}]` : ""}`,
-  };
-}
-
 // ── Internal RAG search ───────────────────────────────────────────────────────
 
 type RAGResult = {
   results: UnifiedResult[];
   activityLabels: string[];
+  /** True when the query was a counting/ranking question — used to pick activity label */
+  isAggregation: boolean;
 };
+
+/**
+ * Detects follow-up phrases that refer back to a previous query's scope,
+ * e.g. "what about the rest of the team", "show me the full list".
+ * When matched, the planner message is enriched with the previous user query
+ * so the planner reuses the same channels and time range.
+ */
+const CONTINUATION_RE =
+  /\b(rest of (the )?team|everyone else|full (list|ranking|results?|breakdown)|show (me )?(all|more|the rest|everyone|the full)|all of them|what about (the others?|everyone|the rest)|other (team members?|people|channels?)|who else|what else|and (the )?rest|continue|more (people|results?|channels?)|full (ranking|breakdown|count))\b/i;
 
 async function runInternalRAGSearch(
   message: string,
@@ -557,28 +428,25 @@ async function runInternalRAGSearch(
   const effectiveAnalysis = { ...analysis, timeRange };
   const queryText = searchTerms.length > 0 ? searchTerms.join(" ") : message;
 
-  // Short-circuit for aggregation: skip the LLM planner entirely and build the
-  // plan directly from regex extraction. This avoids LLM latency AND prevents
-  // the planner from choosing RAG for counting/ranking questions.
-  if (effectiveAnalysis.isAggregation) {
-    const aggPlan = await buildAggregationPlan(message, searchTerms, timeRange, businessContext);
-    console.log(`[chat] aggregation short-circuit: ${aggPlan.reasoning}`);
-    const activityLabels = getStrategyActivityLabels(aggPlan.strategies, timeRange);
-    const results = await executeStrategies({
-      strategies: aggPlan.strategies,
-      workspaceId,
-      queryEmbedding: [], // aggregation doesn't use embeddings
-      queryText,
-      adminSupabase: db,
-    });
-    console.log(`[chat] aggregation executor returned ${results.length} result(s)`);
-    return { results, activityLabels };
+  // ── Continuation enrichment ─────────────────────────────────────────────────
+  // When the user asks a follow-up like "show me the full list" or "what about
+  // the rest of the team", find the most recent non-continuation user message
+  // and prepend it so the planner reuses the same channels and time range.
+  let plannerMessage = message;
+  if (CONTINUATION_RE.test(message)) {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i].role === "user" && !CONTINUATION_RE.test(history[i].content)) {
+        plannerMessage = `${history[i].content} — follow-up: ${message}`;
+        console.log(`[chat] continuation detected — enriched planner query: "${plannerMessage}"`);
+        break;
+      }
+    }
   }
 
   // Run planner and embedding in parallel to minimise latency
   const [plan, queryEmbedding] = await Promise.all([
     planQuery({
-      message,
+      message: plannerMessage,
       knowledgeProfile,
       conversationHistory: history,
       queryAnalysis: effectiveAnalysis,
@@ -587,8 +455,7 @@ async function runInternalRAGSearch(
     createEmbedding(message),
   ]);
 
-  // If planner fell back to defaults AND this looks like a broad summary,
-  // override with the proven broad_fetch path so quality doesn't regress.
+  // Override 1: planner fallback + broad summary → broad_fetch
   let effectivePlan = plan;
   if (plan.isFallback && effectiveAnalysis.isBroadSummary && timeRange) {
     effectivePlan = {
@@ -604,6 +471,28 @@ async function runInternalRAGSearch(
       reasoning: "Broad summary with time range — chronological fetch",
     };
     console.log(`[chat] planner fallback → broad_fetch override for: "${message}"`);
+  }
+
+  // Override 2: aggregation/counting question but planner only gave semantic search →
+  // force broad_fetch so Claude gets all messages to count accurately, not just
+  // the top semantically-similar ones.
+  if (
+    effectiveAnalysis.isAggregation &&
+    effectivePlan.strategies.every((s) => s.type === "semantic")
+  ) {
+    effectivePlan = {
+      strategies: [
+        {
+          type: "broad_fetch",
+          params: {
+            after: timeRange?.after?.toISOString(),
+            before: timeRange?.before?.toISOString(),
+          },
+        },
+      ],
+      reasoning: "Counting/ranking question — broad_fetch so Claude reads all messages",
+    };
+    console.log(`[chat] aggregation safeguard: semantic-only plan → broad_fetch`);
   }
 
   console.log(
@@ -624,7 +513,7 @@ async function runInternalRAGSearch(
   });
 
   console.log(`[chat] executor returned ${results.length} results`);
-  return { results, activityLabels };
+  return { results, activityLabels, isAggregation: effectiveAnalysis.isAggregation };
 }
 
 // ── Context string builders ───────────────────────────────────────────────────
@@ -632,12 +521,6 @@ async function runInternalRAGSearch(
 function buildInternalContext(results: UnifiedResult[]): string {
   return results
     .map((r) => {
-      // Aggregation results are pre-formatted data tables — render as-is,
-      // no source header needed (it would just add noise for Claude).
-      if (r.source_type === "aggregation_result") {
-        return r.chunk_text;
-      }
-
       const meta = r.metadata ?? {};
       const parts: string[] = [r.source_type];
       const ch = getChannelName(r.source_type, meta);
@@ -1003,6 +886,8 @@ export async function POST(request: NextRequest) {
         // Tracks whether an internal RAG search was performed so we know
         // whether to run the agentic evaluation loop afterward.
         let didInternalSearch = false;
+        // Tracks whether the query was a counting/ranking question
+        let ragIsAggregation = false;
 
         console.log(`[chat] intent=${intent} routing for: "${message}"`);
 
@@ -1031,6 +916,7 @@ export async function POST(request: NextRequest) {
               send({ type: "activity", action: label });
             }
             searchResults = rag.results;
+            ragIsAggregation = rag.isAggregation;
             didInternalSearch = true;
           }
 
@@ -1049,6 +935,7 @@ export async function POST(request: NextRequest) {
             send({ type: "activity", action: "Searching the web..." });
           }
           searchResults = ragResult.results;
+          ragIsAggregation = ragResult.isAggregation;
           webResults = webRes;
           didInternalSearch = true;
           console.log(
@@ -1065,19 +952,17 @@ export async function POST(request: NextRequest) {
               send({ type: "activity", action: label });
             }
             searchResults = rag.results;
+            ragIsAggregation = rag.isAggregation;
             didInternalSearch = true;
           }
         }
 
         // Round 1 reading activity
         if (searchResults.length > 0) {
-          const isAggregation = searchResults.some(
-            (r) => r.source_type === "aggregation_result"
-          );
           send({
             type: "activity",
-            action: isAggregation
-              ? "Analyzing counts..."
+            action: ragIsAggregation
+              ? `Counting and ranking across ${searchResults.length} messages...`
               : `Reading ${searchResults.length} relevant messages...`,
           });
         }
