@@ -437,6 +437,14 @@ async function runInternalRAGSearch(
   const effectiveAnalysis = { ...analysis, timeRange };
   const queryText = searchTerms.length > 0 ? searchTerms.join(" ") : message;
 
+  // ── Log 1: query analysis result ─────────────────────────────────────────────
+  console.log(
+    `[chat:analyze] isAggregation=${effectiveAnalysis.isAggregation} ` +
+    `isBroadSummary=${effectiveAnalysis.isBroadSummary} ` +
+    `timeRange=${timeRange ? `after=${timeRange.after?.toISOString() ?? "–"} before=${timeRange.before?.toISOString() ?? "–"}` : "none"} ` +
+    `message="${message.slice(0, 100)}"`
+  );
+
   // ── Continuation enrichment ─────────────────────────────────────────────────
   // When the user asks a follow-up like "show me the full list" or "what about
   // the rest of the team", find the most recent non-continuation user message
@@ -452,6 +460,12 @@ async function runInternalRAGSearch(
     }
   }
 
+  // ── Log 2: what the planner receives ─────────────────────────────────────────
+  console.log(
+    `[chat:planner-in] isAggregation=${effectiveAnalysis.isAggregation} ` +
+    `plannerMessage="${plannerMessage.slice(0, 120)}"`
+  );
+
   // Run planner and embedding in parallel to minimise latency
   const [plan, queryEmbedding] = await Promise.all([
     planQuery({
@@ -463,6 +477,12 @@ async function runInternalRAGSearch(
     }),
     createEmbedding(message),
   ]);
+
+  // ── Log 3: raw planner output ─────────────────────────────────────────────────
+  console.log(
+    `[chat:planner-out] strategies=[${plan.strategies.map((s) => s.type).join(",")}] ` +
+    `isFallback=${plan.isFallback} reasoning="${plan.reasoning}"`
+  );
 
   // Override 1: planner fallback + broad summary → broad_fetch
   let effectivePlan = plan;
@@ -482,32 +502,51 @@ async function runInternalRAGSearch(
     console.log(`[chat] planner fallback → broad_fetch override for: "${message}"`);
   }
 
-  // Override 2: aggregation/counting question but planner only gave semantic search →
-  // force hybrid_aggregation so Claude gets exact SQL counts regardless of volume,
-  // not just the top semantically-similar results.
+  // Override 2: aggregation/counting question and plan has no hybrid_aggregation →
+  // force hybrid_aggregation regardless of what the planner chose (it may have
+  // picked channel_search, broad_fetch, or semantic — none are accurate for counting).
+  // Preserve any channel names the planner identified as dedicated_channels.
   if (
     effectiveAnalysis.isAggregation &&
-    effectivePlan.strategies.every((s) => s.type === "semantic")
+    !effectivePlan.strategies.some((s) => s.type === "hybrid_aggregation")
   ) {
+    // Carry forward any channels the planner identified so the SQL call is targeted
+    const plannerChannels = effectivePlan.strategies
+      .filter((s) => s.type === "channel_search" && s.params.channel_name)
+      .map((s) => s.params.channel_name!);
+
+    // Use search terms as keyword fallback for non-dedicated channels
+    const keywordFallback = effectiveAnalysis.searchTerms.slice(0, 10);
+
+    const overriddenFrom = effectivePlan.strategies.map((s) => s.type).join(",");
     effectivePlan = {
       strategies: [
         {
           type: "hybrid_aggregation",
           params: {
-            dedicated_channels: [],
-            keywords: [],
+            dedicated_channels: plannerChannels,
+            keywords: keywordFallback,
             after: timeRange?.after?.toISOString(),
             before: timeRange?.before?.toISOString(),
           },
         },
       ],
-      reasoning: "Counting/ranking question — hybrid_aggregation for exact SQL counts + sample",
+      reasoning: `Counting/ranking — upgraded from [${overriddenFrom}] to hybrid_aggregation`,
     };
-    console.log(`[chat] aggregation safeguard: semantic-only plan → hybrid_aggregation`);
+    console.log(
+      `[chat:agg-safeguard] isAggregation=true, plan was [${overriddenFrom}] → hybrid_aggregation ` +
+      `dedicated_channels=[${plannerChannels.join(",")}] keywords=[${keywordFallback.join(",")}]`
+    );
+  } else if (effectiveAnalysis.isAggregation) {
+    console.log(
+      `[chat:agg-safeguard] isAggregation=true, planner already output hybrid_aggregation — no override needed`
+    );
   }
 
+  // ── Log 4: final effective plan before executor ───────────────────────────────
   console.log(
-    `[chat] plan: [${effectivePlan.strategies.map((s) => s.type).join(", ")}] — ${effectivePlan.reasoning}`
+    `[chat:executor-in] final strategies=[${effectivePlan.strategies.map((s) => s.type).join(",")}] ` +
+    `reasoning="${effectivePlan.reasoning}"`
   );
 
   const activityLabels = getStrategyActivityLabels(
@@ -515,6 +554,8 @@ async function runInternalRAGSearch(
     timeRange
   );
 
+  // ── Log 5: executor output ────────────────────────────────────────────────────
+  // (logged inside executeStrategies per-strategy, then here after all finish)
   const results = await executeStrategies({
     strategies: effectivePlan.strategies,
     workspaceId,
@@ -523,7 +564,11 @@ async function runInternalRAGSearch(
     adminSupabase: db,
   });
 
-  console.log(`[chat] executor returned ${results.length} results`);
+  const hasCountResult = results.some((r) => r.source_type === "aggregation_counts");
+  console.log(
+    `[chat:executor-out] ${results.length} results, hasCountResult=${hasCountResult}, ` +
+    `isAggregation=${effectiveAnalysis.isAggregation}`
+  );
   return { results, activityLabels, isAggregation: effectiveAnalysis.isAggregation };
 }
 

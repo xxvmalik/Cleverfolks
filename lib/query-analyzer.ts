@@ -281,12 +281,22 @@ export function detectBroadSummary(
  * Patterns that signal the user wants a count, ranking, or comparison of
  * quantities rather than a semantic search over message content.
  * When matched, the aggregation strategy (direct SQL) is used instead of RAG.
+ *
+ * Deliberately broad — covers:
+ *  - "how many", "total number of"
+ *  - "who [verb] the most/least" (all tenses + variants)
+ *  - "who has been [verb]ing the most"
+ *  - "most active / most complaints / top N people"
+ *  - "rank [by/everyone]", "sort by [activity]"
+ *  - "leaderboard", "breakdown by person", "[noun] per person"
  */
 const AGGREGATION_RE =
-  /\b(how\s+many|total\s+(?:number\s+of\s+)?(?:messages?|complaints?|orders?|issues?|reports?)|(?:who|which\s+(?:person|team\s+member|user|channel))\s+(?:has|have|had|sent|posted|reported|raised|filed|flagged|complained|mentioned|submitted)\s+the\s+(?:most|least)|most\s+(?:active|messages?|complaints?|reports?|issues?)|least\s+(?:active|messages?)|rank(?:ing)?\s+(?:by|of|everyone)|compare\s+(?:all|everyone|each)|top\s+\d*\s*(?:people|persons?|users?|channels?|senders?|reporters?)|breakdown\s+(?:of|by)\s+(?:messages?|complaints?|activity|channel|person)|count\s+(?:of\s+)?(?:messages?|complaints?|reports?)|(?:messages?|complaints?|reports?)\s+(?:per|by)\s+(?:person|user|channel|team\s+member)|who\s+(?:sends?|posts?|reports?|raises?|files?|flags?|complains?)\s+(?:most|the\s+most|more)|leaderboard|tallied?|frequency\s+of)\b/i;
+  /\b(how\s+many|total\s+(?:number\s+of\s+)?(?:messages?|complaints?|orders?|issues?|reports?|tickets?)|(?:who|which\s+(?:person|team\s+member|user|staff|channel))\s+(?:(?:has|have|had|sent|posted|reported|raised|filed|flagged|complained|mentioned|submitted|logged|created|opened|escalated|resolved|handled|responded|replied)\s+the\s+(?:most|least|more|fewer|fewest)|(?:is|are|was|were)\s+(?:the\s+)?(?:most|least)\s+(?:active|engaged|responsive|productive)|(?:sends?|sent|posts?|posted|reports?|reported|raises?|raised|files?|filed|flags?|flagged|complains?|complained|complaining|logs?|logged|creates?|created|escalates?|escalated|handles?|handled|responds?|responded|replies|replied)\s+(?:the\s+)?most)|who\s+(?:has\s+been|have\s+been|was)\s+\w+(?:ing)?\s+(?:the\s+)?most|most\s+(?:active|messages?|complaints?|reports?|issues?|tickets?|engaged|responsive|productive)|least\s+(?:active|messages?|responsive)|rank(?:ing|ed|s)?\s+(?:everyone|all|people|users?|team|by)|rank\s+(?:the\s+)?\w+\s+by|sort(?:ed|ing)?\s+by\s+(?:messages?|complaints?|activity|count|number|most)|compare\s+(?:all|everyone|each|team|channels?)|top\s+\d+\s+(?:people|persons?|users?|channels?|senders?|reporters?|team\s+members?|staff)|top\s+(?:people|persons?|users?|channels?|senders?|reporters?|team\s+members?)|breakdown\s+(?:of|by)\s+(?:messages?|complaints?|activity|channel|person|user)|count\s+(?:of\s+)?(?:messages?|complaints?|reports?|issues?|tickets?)|(?:messages?|complaints?|reports?|issues?|tickets?)\s+(?:per|by)\s+(?:person|user|channel|team\s+member|staff)|leaderboard|tallied?|frequency\s+of|most\s+(?:messages?\s+)?(?:sent|posted|reported|complained|flagged|filed)|who\s+(?:is|are|was|were)\s+(?:the\s+)?(?:most|top|highest|busiest)\s+\w+)\b/i;
 
 export function detectAggregation(query: string): boolean {
-  return AGGREGATION_RE.test(query);
+  const result = AGGREGATION_RE.test(query);
+  console.log(`[query-analyzer] detectAggregation="${result}" for: "${query.slice(0, 120)}"`);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

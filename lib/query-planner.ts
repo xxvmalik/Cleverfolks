@@ -160,6 +160,10 @@ function buildPlannerPrompt(
     ? `after=${queryAnalysis.timeRange.after?.toISOString() ?? "none"}, before=${queryAnalysis.timeRange.before?.toISOString() ?? "none"}`
     : "none detected";
 
+  const aggregationFlag = queryAnalysis.isAggregation
+    ? `\n⚠️  AGGREGATION DETECTED: This query requires counting or ranking people/channels. You MUST use hybrid_aggregation — do NOT use channel_search, broad_fetch, or semantic for this query.\n`
+    : "";
+
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
 
 ${profileBlock}
@@ -210,9 +214,10 @@ Available strategies:
 
 RECENT CONVERSATION:
 ${recentHistory}
-
+${aggregationFlag}
 USER MESSAGE: "${message}"
 EXTRACTED TIME RANGE: ${timeRangeInfo}
+IS AGGREGATION QUERY: ${queryAnalysis.isAggregation ? "YES — must use hybrid_aggregation" : "no"}
 
 Return ONLY a valid JSON object (no markdown, no explanation):
 {
