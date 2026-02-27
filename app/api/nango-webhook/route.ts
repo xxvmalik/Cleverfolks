@@ -3,30 +3,51 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { inngest } from "@/lib/inngest/client";
 
 export async function POST(request: NextRequest) {
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.NANGO_WEBHOOK_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   try {
     const body = (await request.json()) as {
-      connection_id: string;
-      provider_config_key: string;
-      sync_name: string;
+      connectionId?: string;
+      providerConfigKey?: string;
+      syncName?: string;
+      from?: string;
+      model?: string;
+      type?: string;
+      syncType?: string;
+      success?: boolean;
     };
 
-    const { connection_id, provider_config_key } = body;
-    console.log(`[webhook] provider=${provider_config_key} connection=${connection_id}`);
+    // Verify this is a genuine Nango webhook: body must include from="nango"
+    if (body.from !== "nango") {
+      console.warn("[webhook] Rejected: missing from=nango in body");
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Optionally enforce shared secret if NANGO_WEBHOOK_SECRET is configured
+    const secret = process.env.NANGO_WEBHOOK_SECRET;
+    if (secret) {
+      const authHeader = request.headers.get("authorization");
+      if (authHeader !== `Bearer ${secret}`) {
+        console.warn("[webhook] Rejected: invalid NANGO_WEBHOOK_SECRET");
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+    }
+
+    const { connectionId, providerConfigKey } = body;
+
+    if (!connectionId) {
+      return NextResponse.json({ error: "Missing connectionId" }, { status: 400 });
+    }
+
+    console.log(`[webhook] provider=${providerConfigKey} connection=${connectionId}`);
 
     const supabase = createAdminSupabaseClient();
     const { data: integration, error: integrationError } = await supabase
       .from("integrations")
       .select("id, workspace_id")
-      .eq("nango_connection_id", connection_id)
+      .eq("nango_connection_id", connectionId)
       .single();
 
     if (integrationError || !integration) {
-      console.error("[webhook] Integration not found:", integrationError);
+      console.error("[webhook] Integration not found for connectionId:", connectionId, integrationError);
       return NextResponse.json({ error: "Integration not found" }, { status: 404 });
     }
 
@@ -41,8 +62,8 @@ export async function POST(request: NextRequest) {
       data: {
         workspaceId: integration.workspace_id,
         integrationId: integration.id,
-        provider: provider_config_key,
-        connectionId: connection_id,
+        provider: providerConfigKey ?? "",
+        connectionId,
       },
     });
 
