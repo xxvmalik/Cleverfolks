@@ -8,6 +8,7 @@ import { Select } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StepNav } from "@/components/onboarding/step-nav";
 import { saveOnboardingStepAction } from "@/app/actions/onboarding";
+import { updateWorkspaceSettingsAction } from "@/app/actions/workspace";
 
 const GOALS = [
   "Generate more qualified leads",
@@ -30,6 +31,7 @@ export function Step07Goals({ workspaceId, savedData }: Props) {
   const [selectedGoals, setSelectedGoals] = useState<string[]>((s.goals as string[]) ?? []);
   const [bottleneck, setBottleneck] = useState((s.bottleneck as string) ?? "");
   const [heardAbout, setHeardAbout] = useState((s.heardAbout as string) ?? "");
+  const [businessContext, setBusinessContext] = useState((s.businessContext as string) ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,11 +42,19 @@ export function Step07Goals({ workspaceId, savedData }: Props) {
   async function handleContinue() {
     if (selectedGoals.length === 0) { setError("Please select at least one goal"); return; }
     setLoading(true); setError(null);
-    const result = await saveOnboardingStepAction({
-      workspaceId, step: 7,
-      orgData: { step7: { goals: selectedGoals, bottleneck, heardAbout } },
-    });
-    if (result.error) { setError(result.error); setLoading(false); return; }
+
+    const [saveResult, settingsResult] = await Promise.all([
+      saveOnboardingStepAction({
+        workspaceId, step: 7,
+        orgData: { step7: { goals: selectedGoals, bottleneck, heardAbout, businessContext } },
+      }),
+      businessContext.trim()
+        ? updateWorkspaceSettingsAction(workspaceId, { business_context: businessContext.trim() })
+        : Promise.resolve({} as { error?: string }),
+    ]);
+
+    if (saveResult.error) { setError(saveResult.error); setLoading(false); return; }
+    if (settingsResult.error) { setError(settingsResult.error); setLoading(false); return; }
     router.push("/onboarding?step=phase1done");
   }
 
@@ -80,6 +90,23 @@ export function Step07Goals({ workspaceId, savedData }: Props) {
             onChange={e => setBottleneck(e.target.value)}
             placeholder="e.g. Not enough time to follow up with every lead consistently"
             rows={3}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="businessContext">
+            Help CleverBrain understand your business language{" "}
+            <span className="text-[#8B8F97] text-xs">(optional)</span>
+          </Label>
+          <p className="text-[#8B8F97] text-xs -mt-0.5">
+            Add any terms, ID formats, or internal jargon your team uses so CleverBrain interprets messages correctly.
+          </p>
+          <Textarea
+            id="businessContext"
+            value={businessContext}
+            onChange={e => setBusinessContext(e.target.value)}
+            rows={5}
+            placeholder={`Service IDs are 4-digit numbers (e.g., 1467). When staff say "[number] failed", it means orders for that service are failing.\nOrder IDs are 6-7 digit numbers (e.g., 6543872). These appear with actions like "speed up", "refill", or "cancel".\n"SMM" refers to Social Media Marketing panel services, our core product.`}
           />
         </div>
 

@@ -177,6 +177,12 @@ function buildSystemPrompt(
   const companySection =
     lines.length > 0 ? `\nCOMPANY CONTEXT:\n${lines.join("\n")}\n` : "";
 
+  // ── Business language context (set by team admin) ───────────────────────
+  const businessContext = (settings.business_context as string | undefined)?.trim();
+  const businessContextSection = businessContext
+    ? `\nBUSINESS LANGUAGE & TERMINOLOGY:\n${businessContext}\n`
+    : "";
+
   // ── Knowledge profile intelligence section ──────────────────────────────
   let intelligenceSection = "";
   if (
@@ -192,7 +198,7 @@ function buildSystemPrompt(
   }
 
   return `You are CleverBrain, the AI knowledge assistant for ${companyName}. You help team members find information and insights from their connected business data.
-${intelligenceSection}${companySection}
+${businessContextSection}${intelligenceSection}${companySection}
 RULES:
 - Answer based on the provided context from connected integrations (Slack messages, emails, documents, etc.)
 - If context contains relevant information, give a clear, helpful answer
@@ -208,6 +214,12 @@ RULES:
 - When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.
 - When a team member's role is listed as "[role inferred — may not be exact]", treat it as a reasonable guess and caveat your answer lightly if role attribution matters.
 - If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.
+
+DATA INTERPRETATION — CRITICAL:
+- When a user says something "isn't an X" or corrects a label (e.g., "8115 isn't an order ID, it's a service ID"), they are correcting the CATEGORY or TERMINOLOGY — not saying the data point doesn't exist. Do NOT abandon the original data point. Stay on it and re-answer using the correct label.
+- When a user asks a follow-up about a specific ID or data point (e.g., "what about 8115?"), stay locked on that exact ID. Never silently switch to a different one.
+- If the user says "I need names not IDs" or "who is that?", resolve the identifiers to human names using available context. This is a formatting correction — it does not mean the original data was wrong.
+- Only abandon a data point if the user explicitly says "that's wrong", "that doesn't exist", or "ignore that" about the data itself — not about how you labelled or described it.
 
 ROLE DISCOVERY:
 - Never suggest bot accounts or integration accounts as team members. Accounts with "bot", "integration", "nango", "developer", "cleverfolks_ai", or similar patterns in the name are automated systems, not people.
@@ -1113,7 +1125,7 @@ export async function POST(request: NextRequest) {
                 messages: [
                   {
                     role: "user",
-                    content: `Generate a short title (max 6 words) for a conversation that starts with this message. Return only the title, nothing else.\n\n"${message}"`,
+                    content: `Generate a short, specific title (max 6 words) for a conversation based on the user's question and the assistant's response. Use names, IDs, or topics from the actual content — avoid generic titles. Return only the title, nothing else.\n\nUser question: "${message}"\n\nAssistant response (first 300 chars): "${savedContent.slice(0, 300)}"`,
                   },
                 ],
               });
