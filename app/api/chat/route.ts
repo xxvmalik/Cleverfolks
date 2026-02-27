@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import { analyzeQuery, type TimeRange } from "@/lib/query-analyzer";
+import { analyzeQuery, type TimeRange, type ComparisonPeriod } from "@/lib/query-analyzer";
 import { createEmbedding } from "@/lib/embeddings";
 import { classifyIntent } from "@/lib/intent-router";
 import { planQuery } from "@/lib/query-planner";
@@ -355,23 +355,31 @@ function getStrategyActivityLabels(
     } else if (strategy.type === "channel_search" && strategy.params.channel_name) {
       labels.push(`Searching #${strategy.params.channel_name}...`);
     } else if (strategy.type === "broad_fetch") {
-      const after = strategy.params.after
-        ? new Date(strategy.params.after)
-        : inheritedTimeRange?.after;
-      const before = strategy.params.before
-        ? new Date(strategy.params.before)
-        : inheritedTimeRange?.before;
-      const label = formatTimeRangeLabel({ after, before });
-      labels.push(`Fetching messages from ${label}...`);
+      if (strategy.params.label) {
+        labels.push(`Fetching ${strategy.params.label} messages...`);
+      } else {
+        const after = strategy.params.after
+          ? new Date(strategy.params.after)
+          : inheritedTimeRange?.after;
+        const before = strategy.params.before
+          ? new Date(strategy.params.before)
+          : inheritedTimeRange?.before;
+        const label = formatTimeRangeLabel({ after, before });
+        labels.push(`Fetching messages from ${label}...`);
+      }
     } else if (strategy.type === "hybrid_aggregation") {
-      const after = strategy.params.after
-        ? new Date(strategy.params.after)
-        : inheritedTimeRange?.after;
-      const before = strategy.params.before
-        ? new Date(strategy.params.before)
-        : inheritedTimeRange?.before;
-      const timeLabel = (after || before) ? ` for ${formatTimeRangeLabel({ after, before })}` : "";
-      labels.push(`Counting messages across all channels${timeLabel}...`);
+      if (strategy.params.label) {
+        labels.push(`Counting messages for ${strategy.params.label}...`);
+      } else {
+        const after = strategy.params.after
+          ? new Date(strategy.params.after)
+          : inheritedTimeRange?.after;
+        const before = strategy.params.before
+          ? new Date(strategy.params.before)
+          : inheritedTimeRange?.before;
+        const timeLabel = (after || before) ? ` for ${formatTimeRangeLabel({ after, before })}` : "";
+        labels.push(`Counting messages across all channels${timeLabel}...`);
+      }
     } else if (strategy.type === "semantic") {
       labels.push("Searching your business data...");
     }
@@ -440,6 +448,8 @@ async function runInternalRAGSearch(
   // ── Log 1: query analysis result ─────────────────────────────────────────────
   console.log(
     `[chat:analyze] isAggregation=${effectiveAnalysis.isAggregation} ` +
+    `isComparison=${effectiveAnalysis.isComparison} ` +
+    `comparisonPeriods=${effectiveAnalysis.comparisonPeriods ? effectiveAnalysis.comparisonPeriods.map((p: ComparisonPeriod) => p.label).join(" vs ") : "none"} ` +
     `isBroadSummary=${effectiveAnalysis.isBroadSummary} ` +
     `timeRange=${timeRange ? `after=${timeRange.after?.toISOString() ?? "–"} before=${timeRange.before?.toISOString() ?? "–"}` : "none"} ` +
     `message="${message.slice(0, 100)}"`
@@ -502,12 +512,66 @@ async function runInternalRAGSearch(
     console.log(`[chat] planner fallback → broad_fetch override for: "${message}"`);
   }
 
-  // Override 2: aggregation/counting question and plan has no hybrid_aggregation →
+  // Override 2: comparison query — build a two-period plan directly from the
+  // extracted periods so we always fetch both sides simultaneously.
+  // We also harvest any channel/keyword intelligence the planner already identified
+  // (from its raw output) and carry it into both period strategies.
+  if (effectiveAnalysis.isComparison && effectiveAnalysis.comparisonPeriods) {
+    const [p1, p2] = effectiveAnalysis.comparisonPeriods;
+    const isAgg = effectiveAnalysis.isAggregation;
+    const stratType = isAgg ? "hybrid_aggregation" : "broad_fetch";
+
+    // Harvest channel/keyword intelligence from the raw planner output
+    const plannerHybrid = plan.strategies.find((s) => s.type === "hybrid_aggregation");
+    const plannerChannels =
+      plannerHybrid?.params.dedicated_channels ??
+      plan.strategies
+        .filter((s) => s.type === "channel_search" && s.params.channel_name)
+        .map((s) => s.params.channel_name!);
+    const plannerKeywords =
+      plannerHybrid?.params.keywords ?? effectiveAnalysis.searchTerms.slice(0, 8);
+
+    const baseParams = isAgg
+      ? { dedicated_channels: plannerChannels, keywords: plannerKeywords }
+      : {};
+
+    effectivePlan = {
+      strategies: [
+        {
+          type: stratType,
+          params: {
+            ...baseParams,
+            label: p1.label,
+            after: p1.after?.toISOString(),
+            before: p1.before?.toISOString(),
+          },
+        },
+        {
+          type: stratType,
+          params: {
+            ...baseParams,
+            label: p2.label,
+            after: p2.after?.toISOString(),
+            before: p2.before?.toISOString(),
+          },
+        },
+      ],
+      reasoning: `Comparison query — ${stratType} for "${p1.label}" and "${p2.label}"`,
+    };
+    console.log(
+      `[chat:comparison] two-period plan: [${p1.label}] vs [${p2.label}] ` +
+      `strategy=${stratType} channels=[${plannerChannels.join(",")}]`
+    );
+  }
+
+  // Override 3: aggregation/counting question and plan has no hybrid_aggregation →
   // force hybrid_aggregation regardless of what the planner chose (it may have
   // picked channel_search, broad_fetch, or semantic — none are accurate for counting).
-  // Preserve any channel names the planner identified as dedicated_channels.
+  // Skip if comparison override (Override 2) already built a two-period plan,
+  // since that plan already uses the right strategy type.
   if (
     effectiveAnalysis.isAggregation &&
+    !effectiveAnalysis.isComparison &&
     !effectivePlan.strategies.some((s) => s.type === "hybrid_aggregation")
   ) {
     // Carry forward any channels the planner identified so the SQL call is targeted
@@ -574,39 +638,73 @@ async function runInternalRAGSearch(
 
 // ── Context string builders ───────────────────────────────────────────────────
 
+/** Renders one UnifiedResult as a [Source: ...] block. */
+function renderResultBlock(r: UnifiedResult): string {
+  const meta = r.metadata ?? {};
+  const srcParts: string[] = [r.source_type];
+  const ch = getChannelName(r.source_type, meta);
+  if (ch) srcParts.push(ch);
+  const usr = getUserName(r.source_type, meta);
+  if (usr) srcParts.push(usr);
+  const dt = formatSourceDate(meta);
+  if (dt) srcParts.push(dt);
+  // For person_search results: tell CleverBrain whether this is a message
+  // FROM the person or a message that merely mentions them.
+  if (r.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
+  return `[Source: ${srcParts.join(" | ")}]\n${r.chunk_text}`;
+}
+
 function buildInternalContext(results: UnifiedResult[]): string {
   // Aggregation counts go first as plain structured data (no source header).
-  // These come from SQL aggregates and may cover thousands of messages.
-  const countResult = results.find((r) => r.source_type === "aggregation_counts");
+  // Multiple count rows when it's a comparison query (one per period).
+  const countResults = results.filter((r) => r.source_type === "aggregation_counts");
   const regularResults = results.filter((r) => r.source_type !== "aggregation_counts");
 
   const parts: string[] = [];
 
-  if (countResult) {
-    parts.push(countResult.chunk_text);
+  if (countResults.length > 0) {
+    parts.push(countResults.map((r) => r.chunk_text).join("\n\n"));
   }
 
   if (regularResults.length > 0) {
-    const sampleHeader = countResult
-      ? `MESSAGE SAMPLE (${regularResults.length} messages — qualitative context):\n`
-      : "";
-    const rendered = regularResults
-      .map((r) => {
-        const meta = r.metadata ?? {};
-        const srcParts: string[] = [r.source_type];
-        const ch = getChannelName(r.source_type, meta);
-        if (ch) srcParts.push(ch);
-        const usr = getUserName(r.source_type, meta);
-        if (usr) srcParts.push(usr);
-        const dt = formatSourceDate(meta);
-        if (dt) srcParts.push(dt);
-        // For person_search results: tell CleverBrain whether this is a message
-        // FROM the person or a message that merely mentions them.
-        if (r.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
-        return `[Source: ${srcParts.join(" | ")}]\n${r.chunk_text}`;
-      })
-      .join("\n\n---\n\n");
-    parts.push(sampleHeader + rendered);
+    // Detect comparison mode: multiple distinct period labels
+    const periodLabels = [
+      ...new Set(
+        regularResults
+          .map((r) => r.metadata?.period_label as string | undefined)
+          .filter(Boolean)
+      ),
+    ] as string[];
+
+    if (periodLabels.length > 1) {
+      // Comparison mode: render each period as a clearly labelled section
+      const sampleHeader =
+        countResults.length > 0
+          ? `MESSAGE SAMPLE (qualitative context for both periods):\n`
+          : "";
+      const periodSections = periodLabels.map((label) => {
+        const periodResults = regularResults.filter(
+          (r) => (r.metadata?.period_label as string | undefined) === label
+        );
+        const rendered = periodResults.map(renderResultBlock).join("\n\n---\n\n");
+        return `PERIOD: ${label} (${periodResults.length} messages)\n${rendered}`;
+      });
+      // Any unlabelled results (shouldn't happen in comparison mode but handle gracefully)
+      const unlabelled = regularResults.filter(
+        (r) => !(r.metadata?.period_label as string | undefined)
+      );
+      if (unlabelled.length > 0) {
+        periodSections.push(unlabelled.map(renderResultBlock).join("\n\n---\n\n"));
+      }
+      parts.push(sampleHeader + periodSections.join("\n\n===\n\n"));
+    } else {
+      // Normal (single-period) mode
+      const sampleHeader =
+        countResults.length > 0
+          ? `MESSAGE SAMPLE (${regularResults.length} messages — qualitative context):\n`
+          : "";
+      parts.push(sampleHeader + regularResults.map(renderResultBlock).join("\n\n---\n\n"));
+    }
   }
 
   return parts.join("\n\n===\n\n");

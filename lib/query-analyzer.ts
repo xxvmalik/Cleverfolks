@@ -12,6 +12,14 @@ export type TimeRange = {
   before?: Date;
 };
 
+/** One side of a two-period comparison query (e.g. "last week" or "this week"). */
+export type ComparisonPeriod = {
+  /** Human-readable label, e.g. "Feb 14–20" */
+  label: string;
+  after?: Date;
+  before?: Date;
+};
+
 export type QueryAnalysis = {
   timeRange: TimeRange | null;
   searchTerms: string[];
@@ -22,6 +30,11 @@ export type QueryAnalysis = {
   /** True when the query asks for a count, ranking, or comparison of quantities.
    *  Triggers the direct-SQL aggregation path instead of RAG. */
   isAggregation: boolean;
+  /** True when the query compares two time periods ("this week vs last week"). */
+  isComparison: boolean;
+  /** The two periods to compare, when extractable from the query text.
+   *  Null when comparison is detected but periods cannot be inferred. */
+  comparisonPeriods: [ComparisonPeriod, ComparisonPeriod] | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -300,16 +313,157 @@ export function detectAggregation(query: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Comparison detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a short human-readable label for a time window, e.g. "Feb 14–20".
+ * Exported so route.ts can use it for activity labels.
+ */
+export function formatPeriodLabel(after?: Date, before?: Date): string {
+  const opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric" };
+  if (after && before) {
+    const sameMonthYear =
+      after.getMonth() === before.getMonth() &&
+      after.getFullYear() === before.getFullYear();
+    if (sameMonthYear) {
+      return `${after.toLocaleDateString("en-US", { month: "short" })} ${after.getDate()}–${before.getDate()}`;
+    }
+    return `${after.toLocaleDateString("en-US", opts)}–${before.toLocaleDateString("en-US", opts)}`;
+  }
+  if (after) return `since ${after.toLocaleDateString("en-US", opts)}`;
+  if (before) return `before ${before.toLocaleDateString("en-US", opts)}`;
+  return "unknown period";
+}
+
+/**
+ * Matches queries that compare two time periods, e.g.
+ * "compare this week to last week", "better or worse", "month over month".
+ */
+const COMPARISON_RE =
+  /\b(compare|vs\.?|versus|compared\s+to|better\s+or\s+worse|worse\s+or\s+better|trending|trend(?:ing)?|month[\s-]over[\s-]month|week[\s-]over[\s-]week|year[\s-]over[\s-]year|over\s+time|improving|getting\s+(?:better|worse)|more\s+or\s+less|increasing|decreasing|growing|declining|improve(?:ment|d)?|worsen(?:ing|ed)?|going\s+up|going\s+down)\b/i;
+
+export function detectComparison(query: string): boolean {
+  return COMPARISON_RE.test(query);
+}
+
+/**
+ * Extracts the two time periods being compared.  Returns null when the query
+ * uses comparison language but periods cannot be inferred from the text —
+ * the caller falls back to a default or lets the planner handle it.
+ */
+export function extractComparisonPeriods(
+  query: string,
+  now = new Date()
+): [ComparisonPeriod, ComparisonPeriod] | null {
+  const q = query.toLowerCase();
+  const today = startOfDay(now);
+
+  // "this week vs last week" (in any order)
+  if (/this\s+week/.test(q) && /last\s+week/.test(q)) {
+    const lastWeekStart = startOfWeek(addDays(today, -7));
+    const lastWeekEnd = endOfDay(addDays(lastWeekStart, 6));
+    const thisWeekStart = startOfWeek(today);
+    return [
+      { label: formatPeriodLabel(lastWeekStart, lastWeekEnd), after: lastWeekStart, before: lastWeekEnd },
+      { label: formatPeriodLabel(thisWeekStart, now), after: thisWeekStart, before: now },
+    ];
+  }
+
+  // "this month vs last month" / "month over month"
+  if (
+    (/this\s+month/.test(q) && /last\s+month/.test(q)) ||
+    /month[\s-]over[\s-]month/.test(q)
+  ) {
+    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    const lastMonthEnd = endOfMonth(lastMonthStart);
+    const thisMonthStart = startOfMonth(today);
+    return [
+      { label: formatPeriodLabel(lastMonthStart, lastMonthEnd), after: lastMonthStart, before: lastMonthEnd },
+      { label: formatPeriodLabel(thisMonthStart, now), after: thisMonthStart, before: now },
+    ];
+  }
+
+  // "today vs yesterday" (in any order)
+  if (/today/.test(q) && /yesterday/.test(q)) {
+    const yesterday = addDays(today, -1);
+    const yesterdayEnd = endOfDay(yesterday);
+    return [
+      { label: formatPeriodLabel(yesterday, yesterdayEnd), after: yesterday, before: yesterdayEnd },
+      { label: formatPeriodLabel(today, now), after: today, before: now },
+    ];
+  }
+
+  // "this year vs last year"
+  if (/this\s+year/.test(q) && /last\s+year/.test(q)) {
+    const lastYearStart = startOfYear(new Date(today.getFullYear() - 1, 0, 1));
+    const lastYearEnd = new Date(today.getFullYear() - 1, 11, 31, 23, 59, 59, 999);
+    const thisYearStart = startOfYear(today);
+    return [
+      { label: String(today.getFullYear() - 1), after: lastYearStart, before: lastYearEnd },
+      { label: String(today.getFullYear()), after: thisYearStart, before: now },
+    ];
+  }
+
+  // "last N days vs N days before" / "past N days vs previous N days"
+  const daysCompareMatch = q.match(
+    /(?:last|past)\s+(\d+)\s+days?.*?(?:vs\.?|versus|compared\s+to)\s+(?:the\s+)?(?:(\d+)\s+days?\s+(?:before|prior|ago|earlier)|previous|prior)/
+  );
+  if (daysCompareMatch) {
+    const n = parseInt(daysCompareMatch[1], 10);
+    const p2Start = addDays(today, -n);
+    const p1End = endOfDay(addDays(today, -n - 1));
+    const p1Start = addDays(today, -n * 2);
+    return [
+      { label: formatPeriodLabel(p1Start, p1End), after: p1Start, before: p1End },
+      { label: formatPeriodLabel(p2Start, now), after: p2Start, before: now },
+    ];
+  }
+
+  // Single time range detected + comparison language →
+  // treat that range as "period 2" and create "period 1" as the same duration immediately before.
+  const singleRange = extractTimeRange(query, now);
+  if (singleRange?.after) {
+    const p2Start = singleRange.after;
+    const p2End = singleRange.before ?? now;
+    const duration = p2End.getTime() - p2Start.getTime();
+    if (duration > 0) {
+      const p1End = endOfDay(new Date(p2Start.getTime() - 1));
+      const p1Start = new Date(p2Start.getTime() - duration);
+      return [
+        { label: formatPeriodLabel(p1Start, p1End), after: p1Start, before: p1End },
+        { label: formatPeriodLabel(p2Start, p2End), after: p2Start, before: p2End },
+      ];
+    }
+  }
+
+  // Generic fallback: last 7 days vs the 7 days before that
+  const p2Start = addDays(today, -7);
+  const p1Start = addDays(today, -14);
+  const p1End = endOfDay(addDays(today, -8));
+  return [
+    { label: formatPeriodLabel(p1Start, p1End), after: p1Start, before: p1End },
+    { label: formatPeriodLabel(p2Start, now), after: p2Start, before: now },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Main exported function
 // ---------------------------------------------------------------------------
 
 export function analyzeQuery(query: string, now = new Date()): QueryAnalysis {
   const timeRange = extractTimeRange(query, now);
+  const isComparison = detectComparison(query);
+  const comparisonPeriods = isComparison
+    ? extractComparisonPeriods(query, now)
+    : null;
   return {
     timeRange,
     searchTerms: extractSearchTerms(query),
     originalQuery: query,
     isBroadSummary: detectBroadSummary(query, timeRange),
     isAggregation: detectAggregation(query),
+    isComparison,
+    comparisonPeriods,
   };
 }

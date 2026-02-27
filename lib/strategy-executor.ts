@@ -120,15 +120,21 @@ async function runStrategy(
         ? sorted.map(([name, count]) => `${name}: ${count}`).join("\n")
         : "(no results — keywords may need adjustment)";
 
+    const periodHeader = strategy.params.label
+      ? `EXACT MESSAGE COUNTS — ${strategy.params.label} (SQL aggregate):\n`
+      : `EXACT MESSAGE COUNTS (SQL aggregate — scales to any volume):\n`;
+
     const countResult: UnifiedResult = {
-      chunk_id: "aggregation_counts",
-      document_id: "aggregation_counts",
+      // Use a unique chunk_id per period so comparison queries produce two distinct count rows
+      chunk_id: `aggregation_counts_${strategy.params.label ?? "default"}`,
+      document_id: `aggregation_counts_${strategy.params.label ?? "default"}`,
       title: "Aggregated Message Counts",
-      chunk_text: `EXACT MESSAGE COUNTS (SQL aggregate — scales to any volume):\n${countText}`,
+      chunk_text: periodHeader + countText,
       source_type: "aggregation_counts",
       metadata: {
         dedicated_channels: dedicatedChannels,
         keywords,
+        period_label: strategy.params.label,
       },
       similarity: 1,
       msg_ts: null,
@@ -312,9 +318,23 @@ export async function executeStrategies({
 
   // If no main strategies ran, fall back to seedResults so that a
   // surrounding_context-only follow-up can enrich existing results.
+  // When a strategy has params.label (comparison query), tag every result it
+  // produced with period_label in metadata so the context builder can group them.
   let allResults: UnifiedResult[] =
     mainStrategies.length > 0
-      ? strategyResultArrays.flat()
+      ? strategyResultArrays.flatMap((results, i) => {
+          const label = mainStrategies[i].params.label;
+          if (!label) return results;
+          return results.map((r) => ({
+            ...r,
+            metadata: {
+              ...(r.metadata ?? {}),
+              // Don't overwrite if the result already carries a period label
+              // (hybrid_aggregation sets it on the count result itself)
+              period_label: (r.metadata?.period_label as string | undefined) ?? label,
+            },
+          }));
+        })
       : (seedResults ?? []);
 
   // Apply surrounding context if requested

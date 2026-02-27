@@ -30,6 +30,9 @@ export type SearchStrategy = {
     dedicated_channels?: string[];
     /** hybrid_aggregation: keywords for counting topic mentions in non-dedicated channels. */
     keywords?: string[];
+    /** Human-readable period label for comparison queries, e.g. "Feb 14–20".
+     *  When set, results from this strategy are tagged with this label. */
+    label?: string;
   };
 };
 
@@ -164,6 +167,10 @@ function buildPlannerPrompt(
     ? `\n⚠️  AGGREGATION DETECTED: This query requires counting or ranking people/channels. You MUST use hybrid_aggregation — do NOT use channel_search, broad_fetch, or semantic for this query.\n`
     : "";
 
+  const comparisonFlag = queryAnalysis.isComparison
+    ? `\n⚠️  COMPARISON DETECTED: This query compares two time periods. You MUST output TWO separate strategies (one per period) — e.g. two broad_fetch strategies with different after/before ranges, or two hybrid_aggregation strategies for counting comparisons. Use "label" param on each strategy with the period name (e.g. "Last week", "This week").\n`
+    : "";
+
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
 
 ${profileBlock}
@@ -214,10 +221,11 @@ Available strategies:
 
 RECENT CONVERSATION:
 ${recentHistory}
-${aggregationFlag}
+${aggregationFlag}${comparisonFlag}
 USER MESSAGE: "${message}"
 EXTRACTED TIME RANGE: ${timeRangeInfo}
 IS AGGREGATION QUERY: ${queryAnalysis.isAggregation ? "YES — must use hybrid_aggregation" : "no"}
+IS COMPARISON QUERY: ${queryAnalysis.isComparison ? "YES — must output two strategies with different time ranges" : "no"}
 
 Return ONLY a valid JSON object (no markdown, no explanation):
 {
