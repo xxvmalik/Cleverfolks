@@ -1,6 +1,7 @@
 import { Nango } from "@nangohq/node";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { buildUserMap } from "@/lib/slack-user-resolver";
 import {
   processSyncedData,
   normalizeGmail,
@@ -49,33 +50,26 @@ function normalizeRecord(provider: string, model: string, raw: any, lookups?: Sl
 }
 
 /** Fetch SlackUser + SlackChannel records from Nango and build lookup maps.
+ *  Uses buildUserMap for correct name priority (real_name first) and bot exclusion.
  *  Returns plain objects (JSON-serialisable for Inngest step boundaries). */
 async function fetchSlackLookups(
   nango: Nango,
   connectionId: string
 ): Promise<{ users: Record<string, string>; channels: Record<string, string> }> {
-  const users: Record<string, string> = {};
+  const userRecords: Record<string, unknown>[] = [];
   const channels: Record<string, string> = {};
 
   for (const model of ["SlackUser", "SlackChannel"]) {
     let cursor: string | undefined;
     for (;;) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const page: { records: Record<string, any>[]; next_cursor: string | null } =
+      const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
         await nango.listRecords({ providerConfigKey: "slack", connectionId, model, cursor });
 
       for (const raw of page.records) {
-        if (model === "SlackUser" && raw.id) {
-          // Use profile.display_name → real_name → name → id (descending preference)
-          const profile = raw.profile ?? {};
-          const name =
-            (profile.display_name as string | undefined)?.trim() ||
-            (raw.real_name as string | undefined)?.trim() ||
-            (raw.name as string | undefined) ||
-            raw.id;
-          users[raw.id as string] = name;
+        if (model === "SlackUser") {
+          userRecords.push(raw);
         } else if (model === "SlackChannel" && raw.id) {
-          channels[raw.id as string] = (raw.name as string | undefined) ?? raw.id;
+          channels[raw.id as string] = (raw.name as string | undefined) ?? (raw.id as string);
         }
       }
 
@@ -84,6 +78,8 @@ async function fetchSlackLookups(
     }
   }
 
+  // buildUserMap: real_name → display_name → handle, skips bots/deleted
+  const users = buildUserMap(userRecords);
   console.log(`[inngest] Slack lookups built — ${Object.keys(users).length} users, ${Object.keys(channels).length} channels`);
   return { users, channels };
 }

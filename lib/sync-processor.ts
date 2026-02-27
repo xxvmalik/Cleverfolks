@@ -3,6 +3,7 @@ import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { extractText } from "@/lib/file-processor";
 import { chunkText } from "@/lib/chunking";
 import { createEmbeddings } from "@/lib/embeddings";
+import { resolveSlackMentions } from "@/lib/slack-user-resolver";
 
 export type SyncRecord = {
   external_id: string;
@@ -244,7 +245,8 @@ export function normalizeSlack(raw: any, lookups?: SlackLookups): SyncRecord {
   const channelName = resolveSlackChannel(channelId, lookups);
   const userName = userId ? resolveSlackUser(userId, lookups) : undefined;
   const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
-  const text: string = raw.text ?? "";
+  const rawText: string = raw.text ?? "";
+  const text = lookups?.users ? resolveSlackMentions(rawText, lookups.users) : rawText;
 
   return {
     external_id: messageId,
@@ -273,12 +275,14 @@ export function normalizeSlackReply(raw: any, lookups?: SlackLookups): SyncRecor
   const channelName = resolveSlackChannel(channelId, lookups);
   const userName = userId ? resolveSlackUser(userId, lookups) : undefined;
   const messageId: string = raw.id ?? raw.ts ?? raw.client_msg_id ?? "";
+  const rawText: string = raw.text ?? "";
+  const resolvedText = lookups?.users ? resolveSlackMentions(rawText, lookups.users) : rawText;
 
   return {
     external_id: messageId,
     source_type: "slack_reply",
     title: `Reply in #${channelName}`,
-    content: raw.text ?? "",
+    content: resolvedText,
     metadata: {
       channel_id: channelId,
       channel_name: channelName,
