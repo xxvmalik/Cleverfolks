@@ -19,6 +19,9 @@ export type QueryAnalysis = {
   /** True when the query asks for a broad summary of a time period rather than
    *  searching for a specific topic.  Triggers the chronological fetch path. */
   isBroadSummary: boolean;
+  /** True when the query asks for a count, ranking, or comparison of quantities.
+   *  Triggers the direct-SQL aggregation path instead of RAG. */
+  isAggregation: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -271,6 +274,22 @@ export function detectBroadSummary(
 }
 
 // ---------------------------------------------------------------------------
+// Aggregation detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Patterns that signal the user wants a count, ranking, or comparison of
+ * quantities rather than a semantic search over message content.
+ * When matched, the aggregation strategy (direct SQL) is used instead of RAG.
+ */
+const AGGREGATION_RE =
+  /\b(how\s+many|total\s+(?:number\s+of\s+)?(?:messages?|complaints?|orders?|issues?|reports?)|(?:who|which\s+(?:person|team\s+member|user|channel))\s+(?:has|have|had|sent|posted|reported|raised|filed|flagged|complained|mentioned|submitted)\s+the\s+(?:most|least)|most\s+(?:active|messages?|complaints?|reports?|issues?)|least\s+(?:active|messages?)|rank(?:ing)?\s+(?:by|of|everyone)|compare\s+(?:all|everyone|each)|top\s+\d*\s*(?:people|persons?|users?|channels?|senders?|reporters?)|breakdown\s+(?:of|by)\s+(?:messages?|complaints?|activity|channel|person)|count\s+(?:of\s+)?(?:messages?|complaints?|reports?)|(?:messages?|complaints?|reports?)\s+(?:per|by)\s+(?:person|user|channel|team\s+member)|who\s+(?:sends?|posts?|reports?|raises?|files?|flags?|complains?)\s+(?:most|the\s+most|more)|leaderboard|tallied?|frequency\s+of)\b/i;
+
+export function detectAggregation(query: string): boolean {
+  return AGGREGATION_RE.test(query);
+}
+
+// ---------------------------------------------------------------------------
 // Main exported function
 // ---------------------------------------------------------------------------
 
@@ -281,5 +300,6 @@ export function analyzeQuery(query: string, now = new Date()): QueryAnalysis {
     searchTerms: extractSearchTerms(query),
     originalQuery: query,
     isBroadSummary: detectBroadSummary(query, timeRange),
+    isAggregation: detectAggregation(query),
   };
 }

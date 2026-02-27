@@ -140,6 +140,97 @@ async function runStrategy(
     }));
   }
 
+  if (strategy.type === "aggregation") {
+    const aggregateBy = strategy.params.aggregate_by ?? "person";
+    const rpcName =
+      aggregateBy === "channel" ? "aggregate_by_channel" : "aggregate_by_person";
+
+    type PersonRow   = { user_name: string; message_count: number };
+    type ChannelRow  = { channel_name: string; message_count: number };
+
+    const rpcParams =
+      aggregateBy === "channel"
+        ? {
+            p_workspace_id: workspaceId,
+            p_after:        strategy.params.after   ?? null,
+            p_before:       strategy.params.before  ?? null,
+            p_keyword:      strategy.params.keyword ?? null,
+            p_limit:        25,
+          }
+        : {
+            p_workspace_id: workspaceId,
+            p_channel_name: strategy.params.channel_name ?? null,
+            p_after:        strategy.params.after   ?? null,
+            p_before:       strategy.params.before  ?? null,
+            p_keyword:      strategy.params.keyword ?? null,
+            p_limit:        25,
+          };
+
+    const { data, error } = await adminSupabase.rpc(rpcName, rpcParams);
+    if (error) {
+      console.error(`[strategy-executor] aggregation(${aggregateBy}) error:`, error);
+      return [];
+    }
+
+    const rows = (data ?? []) as (PersonRow | ChannelRow)[];
+    if (!rows.length) {
+      return [{
+        chunk_id:    "agg-empty",
+        document_id: "agg-empty",
+        title:       "Aggregation result",
+        chunk_text:  "No messages found matching the aggregation criteria.",
+        source_type: "aggregation_result",
+        metadata:    { aggregate_by: aggregateBy, keyword: strategy.params.keyword },
+        similarity:  1,
+        msg_ts:      null,
+      }];
+    }
+
+    // Build a human-readable ranked table
+    const keyword   = strategy.params.keyword;
+    const afterStr  = strategy.params.after  ? new Date(strategy.params.after).toLocaleDateString("en-US", { month: "short", day: "numeric" })  : null;
+    const beforeStr = strategy.params.before ? new Date(strategy.params.before).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
+    const timeLabel =
+      afterStr && beforeStr ? ` (${afterStr} – ${beforeStr})`
+      : afterStr  ? ` (since ${afterStr})`
+      : beforeStr ? ` (before ${beforeStr})`
+      : "";
+
+    const header = aggregateBy === "channel"
+      ? `Messages per channel${keyword ? ` mentioning "${keyword}"` : ""}${timeLabel}:`
+      : `Messages per person${keyword ? ` mentioning "${keyword}"` : ""}${timeLabel}:`;
+
+    const lines = rows.map((r, i) => {
+      const name =
+        aggregateBy === "channel"
+          ? `#${(r as ChannelRow).channel_name ?? "unknown"}`
+          : (r as PersonRow).user_name ?? "unknown";
+      const count = r.message_count;
+      return `${i + 1}. ${name} — ${count} message${count === 1 ? "" : "s"}`;
+    });
+
+    const total = rows.reduce((sum, r) => sum + r.message_count, 0);
+    lines.push(`\nTotal: ${total} message${total === 1 ? "" : "s"}`);
+
+    const chunk_text = `${header}\n${lines.join("\n")}`;
+    const syntheticId = `agg-${aggregateBy}-${Date.now()}`;
+
+    console.log(
+      `[strategy-executor] aggregation(${aggregateBy}) → ${rows.length} rows, total=${total}`
+    );
+
+    return [{
+      chunk_id:    syntheticId,
+      document_id: syntheticId,
+      title:       `Aggregation by ${aggregateBy}${keyword ? ` — ${keyword}` : ""}`,
+      chunk_text,
+      source_type: "aggregation_result",
+      metadata:    { aggregate_by: aggregateBy, keyword, row_count: rows.length, total },
+      similarity:  1,
+      msg_ts:      null,
+    }];
+  }
+
   return [];
 }
 

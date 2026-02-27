@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import { analyzeQuery } from "@/lib/query-analyzer";
+import { analyzeQuery, type TimeRange } from "@/lib/query-analyzer";
 import { createEmbedding } from "@/lib/embeddings";
 import { classifyIntent } from "@/lib/intent-router";
 import { planQuery } from "@/lib/query-planner";
@@ -338,8 +338,7 @@ function formatTimeRangeLabel(timeRange: {
 
 // ── Activity labels from query plan ──────────────────────────────────────────
 
-import type { SearchStrategy } from "@/lib/query-planner";
-import type { TimeRange } from "@/lib/query-analyzer";
+import type { SearchStrategy, QueryPlan } from "@/lib/query-planner";
 
 function getStrategyActivityLabels(
   strategies: SearchStrategy[],
@@ -364,6 +363,12 @@ function getStrategyActivityLabels(
         : inheritedTimeRange?.before;
       const label = formatTimeRangeLabel({ after, before });
       labels.push(`Fetching messages from ${label}...`);
+    } else if (strategy.type === "aggregation") {
+      const groupBy  = strategy.params.aggregate_by ?? "person";
+      const keyword  = strategy.params.keyword;
+      labels.push(
+        `Counting messages by ${groupBy}${keyword ? ` mentioning "${keyword}"` : ""}...`
+      );
     } else if (strategy.type === "semantic") {
       labels.push("Searching your business data...");
     }
@@ -375,6 +380,50 @@ function getStrategyActivityLabels(
   }
 
   return labels;
+}
+
+// ── Aggregation plan builder ──────────────────────────────────────────────────
+
+/** Words that appear in aggregation queries but describe the action of sending
+ *  messages, not the topic. We strip these so the keyword is the domain noun. */
+const AGGREGATION_VERBS = new Set([
+  "sent", "posted", "wrote", "said", "replied", "responded", "messaged",
+  "submitted", "reported", "raised", "filed", "flagged", "mentioned",
+  "messages", "message", "times", "activity", "active", "posts", "replies",
+  "reply", "breakdown", "rank", "ranking", "count", "total", "tally",
+  "leaderboard", "frequency",
+]);
+
+function buildAggregationPlan(
+  message: string,
+  searchTerms: string[],
+  timeRange: TimeRange | null
+): QueryPlan {
+  const lq = message.toLowerCase();
+
+  // Determine dimension: channel if user mentions "channel", else person
+  const aggregateBy: string =
+    /\b(channel|channels|per\s+channel|by\s+channel|which\s+channel)\b/.test(lq)
+      ? "channel"
+      : "person";
+
+  // Extract the first meaningful domain keyword (not a generic aggregation verb)
+  const keyword = searchTerms.find((w) => !AGGREGATION_VERBS.has(w));
+
+  return {
+    strategies: [
+      {
+        type: "aggregation",
+        params: {
+          aggregate_by: aggregateBy,
+          ...(keyword ? { keyword } : {}),
+          ...(timeRange?.after  ? { after:  timeRange.after.toISOString()  } : {}),
+          ...(timeRange?.before ? { before: timeRange.before.toISOString() } : {}),
+        },
+      },
+    ],
+    reasoning: `Aggregation by ${aggregateBy}${keyword ? ` filtered by "${keyword}"` : ""}`,
+  };
 }
 
 // ── Internal RAG search ───────────────────────────────────────────────────────
@@ -416,6 +465,24 @@ async function runInternalRAGSearch(
 
   const effectiveAnalysis = { ...analysis, timeRange };
   const queryText = searchTerms.length > 0 ? searchTerms.join(" ") : message;
+
+  // Short-circuit for aggregation: skip the LLM planner entirely and build the
+  // plan directly from regex extraction. This avoids LLM latency AND prevents
+  // the planner from choosing RAG for counting/ranking questions.
+  if (effectiveAnalysis.isAggregation) {
+    const aggPlan = buildAggregationPlan(message, searchTerms, timeRange);
+    console.log(`[chat] aggregation short-circuit: ${aggPlan.reasoning}`);
+    const activityLabels = getStrategyActivityLabels(aggPlan.strategies, timeRange);
+    const results = await executeStrategies({
+      strategies: aggPlan.strategies,
+      workspaceId,
+      queryEmbedding: [], // aggregation doesn't use embeddings
+      queryText,
+      adminSupabase: db,
+    });
+    console.log(`[chat] aggregation executor returned ${results.length} result(s)`);
+    return { results, activityLabels };
+  }
 
   // Run planner and embedding in parallel to minimise latency
   const [plan, queryEmbedding] = await Promise.all([
@@ -473,6 +540,12 @@ async function runInternalRAGSearch(
 function buildInternalContext(results: UnifiedResult[]): string {
   return results
     .map((r) => {
+      // Aggregation results are pre-formatted data tables — render as-is,
+      // no source header needed (it would just add noise for Claude).
+      if (r.source_type === "aggregation_result") {
+        return r.chunk_text;
+      }
+
       const meta = r.metadata ?? {};
       const parts: string[] = [r.source_type];
       const ch = getChannelName(r.source_type, meta);
@@ -902,9 +975,14 @@ export async function POST(request: NextRequest) {
 
         // Round 1 reading activity
         if (searchResults.length > 0) {
+          const isAggregation = searchResults.some(
+            (r) => r.source_type === "aggregation_result"
+          );
           send({
             type: "activity",
-            action: `Reading ${searchResults.length} relevant messages...`,
+            action: isAggregation
+              ? "Analyzing counts..."
+              : `Reading ${searchResults.length} relevant messages...`,
           });
         }
 
