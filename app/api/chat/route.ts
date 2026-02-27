@@ -363,6 +363,15 @@ function getStrategyActivityLabels(
         : inheritedTimeRange?.before;
       const label = formatTimeRangeLabel({ after, before });
       labels.push(`Fetching messages from ${label}...`);
+    } else if (strategy.type === "hybrid_aggregation") {
+      const after = strategy.params.after
+        ? new Date(strategy.params.after)
+        : inheritedTimeRange?.after;
+      const before = strategy.params.before
+        ? new Date(strategy.params.before)
+        : inheritedTimeRange?.before;
+      const timeLabel = (after || before) ? ` for ${formatTimeRangeLabel({ after, before })}` : "";
+      labels.push(`Counting messages across all channels${timeLabel}...`);
     } else if (strategy.type === "semantic") {
       labels.push("Searching your business data...");
     }
@@ -474,8 +483,8 @@ async function runInternalRAGSearch(
   }
 
   // Override 2: aggregation/counting question but planner only gave semantic search →
-  // force broad_fetch so Claude gets all messages to count accurately, not just
-  // the top semantically-similar ones.
+  // force hybrid_aggregation so Claude gets exact SQL counts regardless of volume,
+  // not just the top semantically-similar results.
   if (
     effectiveAnalysis.isAggregation &&
     effectivePlan.strategies.every((s) => s.type === "semantic")
@@ -483,16 +492,18 @@ async function runInternalRAGSearch(
     effectivePlan = {
       strategies: [
         {
-          type: "broad_fetch",
+          type: "hybrid_aggregation",
           params: {
+            dedicated_channels: [],
+            keywords: [],
             after: timeRange?.after?.toISOString(),
             before: timeRange?.before?.toISOString(),
           },
         },
       ],
-      reasoning: "Counting/ranking question — broad_fetch so Claude reads all messages",
+      reasoning: "Counting/ranking question — hybrid_aggregation for exact SQL counts + sample",
     };
-    console.log(`[chat] aggregation safeguard: semantic-only plan → broad_fetch`);
+    console.log(`[chat] aggregation safeguard: semantic-only plan → hybrid_aggregation`);
   }
 
   console.log(
@@ -519,22 +530,41 @@ async function runInternalRAGSearch(
 // ── Context string builders ───────────────────────────────────────────────────
 
 function buildInternalContext(results: UnifiedResult[]): string {
-  return results
-    .map((r) => {
-      const meta = r.metadata ?? {};
-      const parts: string[] = [r.source_type];
-      const ch = getChannelName(r.source_type, meta);
-      if (ch) parts.push(ch);
-      const usr = getUserName(r.source_type, meta);
-      if (usr) parts.push(usr);
-      const dt = formatSourceDate(meta);
-      if (dt) parts.push(dt);
-      // For person_search results: tell CleverBrain whether this is a message
-      // FROM the person or a message that merely mentions them.
-      if (r.match_type === "mentioned") parts.push("person_mentioned_not_author");
-      return `[Source: ${parts.join(" | ")}]\n${r.chunk_text}`;
-    })
-    .join("\n\n---\n\n");
+  // Aggregation counts go first as plain structured data (no source header).
+  // These come from SQL aggregates and may cover thousands of messages.
+  const countResult = results.find((r) => r.source_type === "aggregation_counts");
+  const regularResults = results.filter((r) => r.source_type !== "aggregation_counts");
+
+  const parts: string[] = [];
+
+  if (countResult) {
+    parts.push(countResult.chunk_text);
+  }
+
+  if (regularResults.length > 0) {
+    const sampleHeader = countResult
+      ? `MESSAGE SAMPLE (${regularResults.length} messages — qualitative context):\n`
+      : "";
+    const rendered = regularResults
+      .map((r) => {
+        const meta = r.metadata ?? {};
+        const srcParts: string[] = [r.source_type];
+        const ch = getChannelName(r.source_type, meta);
+        if (ch) srcParts.push(ch);
+        const usr = getUserName(r.source_type, meta);
+        if (usr) srcParts.push(usr);
+        const dt = formatSourceDate(meta);
+        if (dt) srcParts.push(dt);
+        // For person_search results: tell CleverBrain whether this is a message
+        // FROM the person or a message that merely mentions them.
+        if (r.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
+        return `[Source: ${srcParts.join(" | ")}]\n${r.chunk_text}`;
+      })
+      .join("\n\n---\n\n");
+    parts.push(sampleHeader + rendered);
+  }
+
+  return parts.join("\n\n===\n\n");
 }
 
 function buildWebContext(webResults: WebResult[]): string {
@@ -959,9 +989,17 @@ export async function POST(request: NextRequest) {
 
         // Round 1 reading activity
         if (searchResults.length > 0) {
+          const hasExactCounts = searchResults.some(
+            (r) => r.source_type === "aggregation_counts"
+          );
+          const sampleCount = searchResults.filter(
+            (r) => r.source_type !== "aggregation_counts"
+          ).length;
           send({
             type: "activity",
-            action: ragIsAggregation
+            action: hasExactCounts
+              ? `Analyzing counts and reading ${sampleCount} sample messages...`
+              : ragIsAggregation
               ? `Counting and ranking across ${searchResults.length} messages...`
               : `Reading ${searchResults.length} relevant messages...`,
           });

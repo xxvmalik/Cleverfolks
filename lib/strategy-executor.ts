@@ -52,6 +52,107 @@ async function runStrategy(
     return [];
   }
 
+  if (strategy.type === "hybrid_aggregation") {
+    const dedicatedChannels = (strategy.params.dedicated_channels ?? []).filter(Boolean);
+    const keywords = (strategy.params.keywords ?? []).filter(Boolean);
+
+    // Run both SQL aggregations + a 300-message qualitative sample in parallel.
+    // dedicated channels: count ALL messages (no keyword filter)
+    // other channels: count keyword-matched messages only
+    // sample: chronological broad fetch for qualitative context
+    const [dedicatedResult, othersResult, sampleResult] = await Promise.all([
+      dedicatedChannels.length > 0
+        ? adminSupabase.rpc("aggregate_by_person_in_channels", {
+            p_workspace_id: workspaceId,
+            p_channels: dedicatedChannels,
+            p_after: strategy.params.after ?? null,
+            p_before: strategy.params.before ?? null,
+            p_limit: 100,
+          })
+        : Promise.resolve({ data: [], error: null }),
+      keywords.length > 0
+        ? adminSupabase.rpc("aggregate_by_person_keyword_others", {
+            p_workspace_id: workspaceId,
+            p_keywords: keywords,
+            p_exclude_channels: dedicatedChannels.length > 0 ? dedicatedChannels : null,
+            p_after: strategy.params.after ?? null,
+            p_before: strategy.params.before ?? null,
+            p_limit: 100,
+          })
+        : Promise.resolve({ data: [], error: null }),
+      adminSupabase.rpc("fetch_chunks_by_timerange", {
+        p_workspace_id: workspaceId,
+        p_after: strategy.params.after ?? null,
+        p_before: strategy.params.before ?? null,
+        p_limit: 300,
+      }),
+    ]);
+
+    if (dedicatedResult.error) {
+      console.error("[strategy-executor] hybrid_aggregation dedicated error:", dedicatedResult.error);
+    }
+    if (othersResult.error) {
+      console.error("[strategy-executor] hybrid_aggregation others error:", othersResult.error);
+    }
+    if (sampleResult.error) {
+      console.error("[strategy-executor] hybrid_aggregation sample error:", sampleResult.error);
+    }
+
+    // Merge counts per person: sum dedicated + other-channel counts
+    type CountRow = { user_name: string; message_count: number | string };
+    const totals = new Map<string, number>();
+    for (const row of (dedicatedResult.data ?? []) as CountRow[]) {
+      if (row.user_name) {
+        totals.set(row.user_name, (totals.get(row.user_name) ?? 0) + Number(row.message_count));
+      }
+    }
+    for (const row of (othersResult.data ?? []) as CountRow[]) {
+      if (row.user_name) {
+        totals.set(row.user_name, (totals.get(row.user_name) ?? 0) + Number(row.message_count));
+      }
+    }
+
+    // Sort by total descending
+    const sorted = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+
+    const countText =
+      sorted.length > 0
+        ? sorted.map(([name, count]) => `${name}: ${count}`).join("\n")
+        : "(no results — keywords may need adjustment)";
+
+    const countResult: UnifiedResult = {
+      chunk_id: "aggregation_counts",
+      document_id: "aggregation_counts",
+      title: "Aggregated Message Counts",
+      chunk_text: `EXACT MESSAGE COUNTS (SQL aggregate — scales to any volume):\n${countText}`,
+      source_type: "aggregation_counts",
+      metadata: {
+        dedicated_channels: dedicatedChannels,
+        keywords,
+      },
+      similarity: 1,
+      msg_ts: null,
+    };
+
+    const sampleMessages = (
+      (sampleResult.data ?? []) as Omit<UnifiedResult, "similarity">[]
+    ).map((r) => ({
+      ...r,
+      document_id: r.document_id ?? r.chunk_id,
+      title: r.title ?? "",
+      similarity: 0,
+    }));
+
+    console.log(
+      `[strategy-executor] hybrid_aggregation: ${sorted.length} people counted, ` +
+      `${sampleMessages.length} sample messages (dedicated=${dedicatedChannels.join(",") || "none"}, ` +
+      `keywords=${keywords.length})`
+    );
+
+    // Count result goes first so Claude sees it immediately before the sample
+    return [countResult, ...sampleMessages];
+  }
+
   if (strategy.type === "semantic") {
     if (!queryEmbedding.length) {
       console.warn("[strategy-executor] No embedding — skipping semantic");

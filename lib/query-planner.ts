@@ -9,7 +9,8 @@ export type StrategyType =
   | "person_search"
   | "channel_search"
   | "surrounding_context"
-  | "profile_only";
+  | "profile_only"
+  | "hybrid_aggregation";
 
 export type SearchStrategy = {
   type: StrategyType;
@@ -24,6 +25,11 @@ export type SearchStrategy = {
     /** Which prior strategy's results to enrich with surrounding context.
      *  "all" = every strategy's results; number = zero-based strategy index. */
     apply_to?: "all" | number | string;
+    /** hybrid_aggregation: channels whose entire purpose matches the query topic —
+     *  ALL messages in these channels are counted (no keyword filter). */
+    dedicated_channels?: string[];
+    /** hybrid_aggregation: keywords for counting topic mentions in non-dedicated channels. */
+    keywords?: string[];
   };
 };
 
@@ -166,7 +172,17 @@ CRITICAL INSTRUCTIONS:
 5. ONLY use generic semantic search when you cannot map the question to a specific person or channel from the profile above.
 6. You can and should combine strategies when helpful (e.g., channel_search + person_search).
 7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
-8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), fetch ALL messages so Claude can count accurately — use channel_search on relevant channels (preferred) or broad_fetch if no specific channel is obvious. Do NOT use semantic search for counting questions.
+8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), ALWAYS use hybrid_aggregation. Identify DEDICATED channels (channels whose entire purpose is about the query topic — count ALL their messages), plus extract 6-10 keywords for catching topic mentions in other channels.
+
+HYBRID_AGGREGATION GUIDE:
+- dedicated_channels: list channel names (without #) that are entirely about the query topic
+  - For "complaints": ["order-complaints", "payment-complaints"]
+  - For "sales": ["sales", "deals", "revenue"]
+  - If no channel is dedicated to the topic, use []
+- keywords: 6-10 terms that would appear in relevant messages in non-dedicated channels
+  - For "complaints": ["complaint", "issue", "problem", "failed", "error", "refund", "broken", "wrong"]
+  - For "sales": ["sale", "deal", "closed", "won", "revenue", "customer", "contract"]
+  - Extract from business context and query intent; be inclusive, not restrictive
 
 EXAMPLES:
 - "When did our designer post designs?" → no designer in profile → channel_search on #graphics-contents
@@ -177,19 +193,20 @@ EXAMPLES:
 - "What's happening in #operations?" → channel_search for "operations"
 - "Compare complaints this week vs last week" → channel_search #order-complaints with this week's range + channel_search with last week's range
 - "Why is ALLI frustrated?" → person_search for "ALLI" + surrounding_context
-- "Who reported the most complaints this month?" → channel_search on #order-complaints + channel_search on #payment-complaints with time range (Claude reads all messages and counts)
-- "Which channel has the most failed orders?" → broad_fetch with time range (Claude counts per channel across all messages)
-- "How many messages did each person send last week?" → broad_fetch with time range
-- "Top 5 most active people this month?" → broad_fetch with time range
-- "Rank everyone by complaints reported" → channel_search on complaint channels with time range
+- "Who reported the most complaints this month?" → hybrid_aggregation with dedicated_channels=["order-complaints","payment-complaints"], keywords=["complaint","issue","problem","failed","refund","wrong","error"], time range
+- "Which channel has the most failed orders?" → broad_fetch with time range (channel-level breakdown, not person-level)
+- "How many messages did each person send last week?" → hybrid_aggregation with dedicated_channels=[], keywords=[], time range (counts everything)
+- "Top 5 most active people this month?" → hybrid_aggregation with dedicated_channels=[], keywords=[], time range
+- "Rank everyone by complaints reported" → hybrid_aggregation with dedicated_channels=["order-complaints","payment-complaints"], keywords=["complaint","issue","problem","failed","refund"]
 
 Available strategies:
 - semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match. Do NOT use for counting/ranking questions.
-- broad_fetch: Fetch ALL messages from a time period. Use for summary questions AND for counting/ranking questions when no specific channel is obvious — Claude reads everything and counts accurately.
+- broad_fetch: Fetch messages from a time period. Use for SUMMARY questions and CHANNEL-level breakdowns. Do NOT use for person-level counting (use hybrid_aggregation instead).
 - person_search: Search by person name. Requires person_name param.
-- channel_search: Search by channel name. Requires channel_name param. Use for counting/ranking when the relevant channel(s) are known.
+- channel_search: Search by channel name. Requires channel_name param.
 - surrounding_context: Fetch surrounding messages for context around found results.
 - profile_only: Answer from profile alone — no search needed.
+- hybrid_aggregation: SQL counts per person (dedicated channels: all messages; other channels: keyword-matched) + 300-message sample. Use for ALL person-level counting and ranking questions.
 
 RECENT CONVERSATION:
 ${recentHistory}
@@ -201,14 +218,16 @@ Return ONLY a valid JSON object (no markdown, no explanation):
 {
   "strategies": [
     {
-      "type": "semantic | broad_fetch | person_search | channel_search | surrounding_context | profile_only",
+      "type": "semantic | broad_fetch | person_search | channel_search | surrounding_context | profile_only | hybrid_aggregation",
       "params": {
         "query": "search query if semantic",
         "person_name": "exact name from profile if person_search",
         "channel_name": "channel name without # if channel_search",
         "after": "ISO date string if time-filtered",
         "before": "ISO date string if time-filtered",
-        "apply_to": "all or strategy index number for surrounding_context"
+        "apply_to": "all or strategy index number for surrounding_context",
+        "dedicated_channels": ["channel-name-1", "channel-name-2"],
+        "keywords": ["keyword1", "keyword2", "keyword3"]
       }
     }
   ],
@@ -268,6 +287,7 @@ export async function planQuery({
       "channel_search",
       "surrounding_context",
       "profile_only",
+      "hybrid_aggregation",
     ];
     for (const s of parsed.strategies) {
       if (!validTypes.includes(s.type as StrategyType)) {
