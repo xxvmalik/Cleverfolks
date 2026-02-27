@@ -27,8 +27,8 @@ export type SearchStrategy = {
     apply_to?: "all" | number | string;
     /** 'person' | 'channel' — which dimension to aggregate by */
     aggregate_by?: string;
-    /** Optional ILIKE keyword filter on chunk_text for the aggregation strategy */
-    keyword?: string;
+    /** Optional ILIKE keyword array filter on chunk_text for the aggregation strategy */
+    keywords?: string[];
   };
 };
 
@@ -126,7 +126,8 @@ function buildPlannerPrompt(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   knowledgeProfile: Record<string, any> | null,
   conversationHistory: Array<{ role: string; content: string }>,
-  queryAnalysis: QueryAnalysis
+  queryAnalysis: QueryAnalysis,
+  businessContext?: string
 ): string {
   const recentHistory =
     conversationHistory.length > 0
@@ -150,6 +151,10 @@ function buildPlannerPrompt(
       ? [teamSection, channelSection].filter(Boolean).join("\n\n")
       : "(no profile available)";
 
+  const businessContextBlock = businessContext
+    ? `BUSINESS CONTEXT:\n${businessContext}`
+    : "";
+
   const timeRangeInfo = queryAnalysis.timeRange
     ? `after=${queryAnalysis.timeRange.after?.toISOString() ?? "none"}, before=${queryAnalysis.timeRange.before?.toISOString() ?? "none"}`
     : "none detected";
@@ -157,7 +162,7 @@ function buildPlannerPrompt(
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
 
 ${profileBlock}
-
+${businessContextBlock ? `\n${businessContextBlock}\n` : ""}
 CRITICAL INSTRUCTIONS:
 1. When the user mentions a ROLE (designer, manager, support lead, etc.), first check if any team member above has that role. If yes, use person_search with their exact name.
 2. If NO team member matches the role, think about which CHANNEL relates to that role and use channel_search. Examples: 'designer' → #graphics-contents, 'support' → #order-complaints, 'payments' → #payment-complaints.
@@ -186,7 +191,7 @@ Available strategies:
 - broad_fetch: Fetch all messages from a time period. Best for summary questions over a date range.
 - person_search: Search by person name. Requires person_name param.
 - channel_search: Search by channel name. Requires channel_name param.
-- aggregation: Direct SQL count of messages grouped by person or channel. Use when the user asks for rankings, totals, "who sent the most", "how many", "top N", or comparisons of quantities. Requires aggregate_by ("person" or "channel"). Optional keyword param filters chunk_text with ILIKE — use it to scope the count to a topic (e.g., keyword="failed" for "who reported the most failed orders"). SKIP RAG entirely when this is used.
+- aggregation: Direct SQL count of messages grouped by person or channel. Use when the user asks for rankings, totals, "who sent the most", "how many", "top N", or comparisons of quantities. Requires aggregate_by ("person" or "channel"). Optional keywords array filters chunk_text with ILIKE OR logic — use it to scope the count to a topic (e.g., keywords=["failed","error","issue"] for "who reported the most failed orders"). SKIP RAG entirely when this is used.
 - surrounding_context: Fetch surrounding messages for context around found results.
 - profile_only: Answer from profile alone — no search needed.
 
@@ -209,7 +214,7 @@ Return ONLY a valid JSON object (no markdown, no explanation):
         "before": "ISO date string if time-filtered",
         "apply_to": "all or strategy index number for surrounding_context",
         "aggregate_by": "person or channel — required for aggregation",
-        "keyword": "optional topic keyword for aggregation ILIKE filter"
+        "keywords": ["optional", "topic", "keywords", "for", "aggregation", "ILIKE", "filter"]
       }
     }
   ],
@@ -224,12 +229,14 @@ export async function planQuery({
   knowledgeProfile,
   conversationHistory,
   queryAnalysis,
+  businessContext,
 }: {
   message: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   knowledgeProfile: Record<string, any> | null;
   conversationHistory: Array<{ role: string; content: string }>;
   queryAnalysis: QueryAnalysis;
+  businessContext?: string;
 }): Promise<QueryPlan> {
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -237,7 +244,8 @@ export async function planQuery({
       message,
       knowledgeProfile,
       conversationHistory,
-      queryAnalysis
+      queryAnalysis,
+      businessContext
     );
 
     const response = await anthropic.messages.create({

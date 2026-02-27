@@ -365,10 +365,11 @@ function getStrategyActivityLabels(
       labels.push(`Fetching messages from ${label}...`);
     } else if (strategy.type === "aggregation") {
       const groupBy  = strategy.params.aggregate_by ?? "person";
-      const keyword  = strategy.params.keyword;
-      labels.push(
-        `Counting messages by ${groupBy}${keyword ? ` mentioning "${keyword}"` : ""}...`
-      );
+      const keywords = strategy.params.keywords;
+      const kwLabel  = keywords?.length
+        ? ` mentioning "${keywords.slice(0, 2).join('", "')}${keywords.length > 2 ? '"...' : '"'}`
+        : "";
+      labels.push(`Counting messages by ${groupBy}${kwLabel}...`);
     } else if (strategy.type === "semantic") {
       labels.push("Searching your business data...");
     }
@@ -394,11 +395,68 @@ const AGGREGATION_VERBS = new Set([
   "leaderboard", "frequency",
 ]);
 
-function buildAggregationPlan(
+/**
+ * Use Claude Haiku to expand a single aggregation keyword into a list of
+ * domain-relevant synonyms using the workspace's business context.
+ * Falls back to `[initialKeyword]` on any error.
+ */
+async function expandAggregationKeywords(
+  initialKeyword: string,
+  businessContext: string
+): Promise<string[]> {
+  try {
+    const haiku = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await haiku.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 200,
+      messages: [
+        {
+          role: "user",
+          content: `You are a keyword expansion assistant for a business search tool.
+
+Business context: "${businessContext}"
+Initial keyword: "${initialKeyword}"
+
+Expand "${initialKeyword}" into 3–8 related lowercase terms that would appear in business messages about this topic, considering the business context above. Include the original term plus synonyms, abbreviations, and domain-specific variants.
+
+Return ONLY a JSON array of strings. Example: ["complaint","issue","problem","error","failed"]`,
+        },
+      ],
+    });
+
+    const text =
+      response.content[0]?.type === "text" ? response.content[0].text : "";
+    const match = text.match(/\[[\s\S]*?\]/);
+    if (match) {
+      const parsed = JSON.parse(match[0]) as unknown;
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every((s) => typeof s === "string")
+      ) {
+        const keywords = parsed as string[];
+        // Ensure the original keyword is always present
+        if (!keywords.map((k) => k.toLowerCase()).includes(initialKeyword.toLowerCase())) {
+          keywords.unshift(initialKeyword.toLowerCase());
+        }
+        console.log(
+          `[chat] keyword expansion: "${initialKeyword}" → [${keywords.join(", ")}]`
+        );
+        return keywords;
+      }
+    }
+  } catch (err) {
+    console.error("[chat] expandAggregationKeywords failed:", err);
+  }
+  return [initialKeyword.toLowerCase()];
+}
+
+async function buildAggregationPlan(
   message: string,
   searchTerms: string[],
-  timeRange: TimeRange | null
-): QueryPlan {
+  timeRange: TimeRange | null,
+  businessContext?: string
+): Promise<QueryPlan> {
   const lq = message.toLowerCase();
 
   // Determine dimension: channel if user mentions "channel", else person
@@ -408,7 +466,16 @@ function buildAggregationPlan(
       : "person";
 
   // Extract the first meaningful domain keyword (not a generic aggregation verb)
-  const keyword = searchTerms.find((w) => !AGGREGATION_VERBS.has(w));
+  const initialKeyword = searchTerms.find((w) => !AGGREGATION_VERBS.has(w));
+
+  let keywords: string[] | undefined;
+  if (initialKeyword) {
+    if (businessContext) {
+      keywords = await expandAggregationKeywords(initialKeyword, businessContext);
+    } else {
+      keywords = [initialKeyword];
+    }
+  }
 
   return {
     strategies: [
@@ -416,13 +483,13 @@ function buildAggregationPlan(
         type: "aggregation",
         params: {
           aggregate_by: aggregateBy,
-          ...(keyword ? { keyword } : {}),
+          ...(keywords ? { keywords } : {}),
           ...(timeRange?.after  ? { after:  timeRange.after.toISOString()  } : {}),
           ...(timeRange?.before ? { before: timeRange.before.toISOString() } : {}),
         },
       },
     ],
-    reasoning: `Aggregation by ${aggregateBy}${keyword ? ` filtered by "${keyword}"` : ""}`,
+    reasoning: `Aggregation by ${aggregateBy}${keywords ? ` filtered by [${keywords.join(", ")}]` : ""}`,
   };
 }
 
@@ -439,7 +506,8 @@ async function runInternalRAGSearch(
   workspaceId: string,
   db: ReturnType<typeof createAdminSupabaseClient>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  knowledgeProfile: Record<string, any> | null
+  knowledgeProfile: Record<string, any> | null,
+  businessContext?: string
 ): Promise<RAGResult> {
   const analysis = analyzeQuery(message);
   let timeRange = analysis.timeRange;
@@ -470,7 +538,7 @@ async function runInternalRAGSearch(
   // plan directly from regex extraction. This avoids LLM latency AND prevents
   // the planner from choosing RAG for counting/ranking questions.
   if (effectiveAnalysis.isAggregation) {
-    const aggPlan = buildAggregationPlan(message, searchTerms, timeRange);
+    const aggPlan = await buildAggregationPlan(message, searchTerms, timeRange, businessContext);
     console.log(`[chat] aggregation short-circuit: ${aggPlan.reasoning}`);
     const activityLabels = getStrategyActivityLabels(aggPlan.strategies, timeRange);
     const results = await executeStrategies({
@@ -491,6 +559,7 @@ async function runInternalRAGSearch(
       knowledgeProfile,
       conversationHistory: history,
       queryAnalysis: effectiveAnalysis,
+      businessContext,
     }),
     createEmbedding(message),
   ]);
@@ -814,8 +883,12 @@ export async function POST(request: NextRequest) {
     }),
   ]);
 
+  const ws = workspaceRow as WorkspaceRow | null;
+  const businessContext =
+    (ws?.settings?.business_context as string | undefined)?.trim() || undefined;
+
   const systemPrompt = buildSystemPrompt(
-    workspaceRow as WorkspaceRow | null,
+    ws,
     onboardingRow as OnboardingRow | null,
     profileRow as KnowledgeProfileRow | null
   );
@@ -929,7 +1002,7 @@ export async function POST(request: NextRequest) {
           // ── Internal data: multi-strategy RAG (or profile alone if sufficient)
           if (!effectiveProfileSufficient) {
             const rag = await runInternalRAGSearch(
-              message, history, workspaceId, db, knowledgeProfile
+              message, history, workspaceId, db, knowledgeProfile, businessContext
             );
             for (const label of rag.activityLabels) {
               send({ type: "activity", action: label });
@@ -943,7 +1016,7 @@ export async function POST(request: NextRequest) {
           // Fix 2: enrich short queries with topic context from history
           const hybridWebQuery = enrichWebQuery(routing.web_query ?? message, history);
           const [ragResult, webRes] = await Promise.all([
-            runInternalRAGSearch(message, history, workspaceId, db, knowledgeProfile),
+            runInternalRAGSearch(message, history, workspaceId, db, knowledgeProfile, businessContext),
             searchWeb(hybridWebQuery),
           ]);
           for (const label of ragResult.activityLabels) {
@@ -963,7 +1036,7 @@ export async function POST(request: NextRequest) {
           // ── Creative: generate content, optionally enriched with internal data
           if (routing.search_needed) {
             const rag = await runInternalRAGSearch(
-              message, history, workspaceId, db, knowledgeProfile
+              message, history, workspaceId, db, knowledgeProfile, businessContext
             );
             for (const label of rag.activityLabels) {
               send({ type: "activity", action: label });

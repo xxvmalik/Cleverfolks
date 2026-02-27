@@ -148,13 +148,16 @@ async function runStrategy(
     type PersonRow   = { user_name: string; message_count: number };
     type ChannelRow  = { channel_name: string; message_count: number };
 
+    const keywords = strategy.params.keywords ?? [];
+    const keywordsForRpc = keywords.length ? keywords : null;
+
     const rpcParams =
       aggregateBy === "channel"
         ? {
             p_workspace_id: workspaceId,
             p_after:        strategy.params.after   ?? null,
             p_before:       strategy.params.before  ?? null,
-            p_keyword:      strategy.params.keyword ?? null,
+            p_keywords:     keywordsForRpc,
             p_limit:        25,
           }
         : {
@@ -162,7 +165,7 @@ async function runStrategy(
             p_channel_name: strategy.params.channel_name ?? null,
             p_after:        strategy.params.after   ?? null,
             p_before:       strategy.params.before  ?? null,
-            p_keyword:      strategy.params.keyword ?? null,
+            p_keywords:     keywordsForRpc,
             p_limit:        25,
           };
 
@@ -180,14 +183,13 @@ async function runStrategy(
         title:       "Aggregation result",
         chunk_text:  "No messages found matching the aggregation criteria.",
         source_type: "aggregation_result",
-        metadata:    { aggregate_by: aggregateBy, keyword: strategy.params.keyword },
+        metadata:    { aggregate_by: aggregateBy, keywords: strategy.params.keywords ?? [] },
         similarity:  1,
         msg_ts:      null,
       }];
     }
 
     // Build a human-readable ranked table
-    const keyword   = strategy.params.keyword;
     const afterStr  = strategy.params.after  ? new Date(strategy.params.after).toLocaleDateString("en-US", { month: "short", day: "numeric" })  : null;
     const beforeStr = strategy.params.before ? new Date(strategy.params.before).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : null;
     const timeLabel =
@@ -196,9 +198,13 @@ async function runStrategy(
       : beforeStr ? ` (before ${beforeStr})`
       : "";
 
+    const keywordLabel = keywords.length
+      ? ` mentioning "${keywords.join('", "')}"`
+      : "";
+
     const header = aggregateBy === "channel"
-      ? `Messages per channel${keyword ? ` mentioning "${keyword}"` : ""}${timeLabel}:`
-      : `Messages per person${keyword ? ` mentioning "${keyword}"` : ""}${timeLabel}:`;
+      ? `Messages per channel${keywordLabel}${timeLabel}:`
+      : `Messages per person${keywordLabel}${timeLabel}:`;
 
     const lines = rows.map((r, i) => {
       const name =
@@ -222,10 +228,10 @@ async function runStrategy(
     return [{
       chunk_id:    syntheticId,
       document_id: syntheticId,
-      title:       `Aggregation by ${aggregateBy}${keyword ? ` — ${keyword}` : ""}`,
+      title:       `Aggregation by ${aggregateBy}${keywords.length ? ` — ${keywords.join(", ")}` : ""}`,
       chunk_text,
       source_type: "aggregation_result",
-      metadata:    { aggregate_by: aggregateBy, keyword, row_count: rows.length, total },
+      metadata:    { aggregate_by: aggregateBy, keywords, row_count: rows.length, total },
       similarity:  1,
       msg_ts:      null,
     }];
