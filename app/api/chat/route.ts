@@ -397,58 +397,72 @@ const AGGREGATION_VERBS = new Set([
 
 /**
  * Use Claude Haiku to expand a single aggregation keyword into a list of
- * domain-relevant synonyms using the workspace's business context.
- * Falls back to `[initialKeyword]` on any error.
+ * domain-relevant synonyms. Uses business context when available for
+ * domain-specific expansion; falls back to generic expansion without it.
+ * Always returns at least [initialKeyword] on any failure.
  */
 async function expandAggregationKeywords(
   initialKeyword: string,
-  businessContext: string
+  businessContext: string | undefined
 ): Promise<string[]> {
+  console.log(
+    `[expand] called — keyword="${initialKeyword}" ` +
+    `businessContext=${businessContext ? `"${businessContext.slice(0, 120).replace(/\n/g, " ")}..."` : "undefined (will use generic prompt)"}`
+  );
+
+  const prompt = businessContext
+    ? `You are a keyword expansion assistant for a business search tool.\n\nBusiness context: "${businessContext}"\nInitial keyword: "${initialKeyword}"\n\nExpand "${initialKeyword}" into 3–8 related lowercase terms that would appear in Slack messages about this topic in this specific business. Include the original term plus synonyms, abbreviations, and domain-specific variants relevant to this business.\n\nReturn ONLY a JSON array of strings, nothing else. Example: ["complaint","issue","problem","error","failed"]`
+    : `Expand the business keyword "${initialKeyword}" into 3–8 related lowercase terms that might appear in workplace Slack messages about this topic. Include the original term plus common synonyms and variants.\n\nReturn ONLY a JSON array of strings, nothing else. Example: ["complaint","issue","problem","error","failed"]`;
+
   try {
+    console.log(`[expand] calling Haiku (model=claude-haiku-4-5-20251001, hasContext=${!!businessContext})`);
     const haiku = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const response = await haiku.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 200,
-      messages: [
-        {
-          role: "user",
-          content: `You are a keyword expansion assistant for a business search tool.
-
-Business context: "${businessContext}"
-Initial keyword: "${initialKeyword}"
-
-Expand "${initialKeyword}" into 3–8 related lowercase terms that would appear in business messages about this topic, considering the business context above. Include the original term plus synonyms, abbreviations, and domain-specific variants.
-
-Return ONLY a JSON array of strings. Example: ["complaint","issue","problem","error","failed"]`,
-        },
-      ],
+      messages: [{ role: "user", content: prompt }],
     });
 
     const text =
-      response.content[0]?.type === "text" ? response.content[0].text : "";
-    const match = text.match(/\[[\s\S]*?\]/);
-    if (match) {
-      const parsed = JSON.parse(match[0]) as unknown;
-      if (
-        Array.isArray(parsed) &&
-        parsed.length > 0 &&
-        parsed.every((s) => typeof s === "string")
-      ) {
-        const keywords = parsed as string[];
-        // Ensure the original keyword is always present
-        if (!keywords.map((k) => k.toLowerCase()).includes(initialKeyword.toLowerCase())) {
-          keywords.unshift(initialKeyword.toLowerCase());
-        }
-        console.log(
-          `[chat] keyword expansion: "${initialKeyword}" → [${keywords.join(", ")}]`
-        );
-        return keywords;
-      }
+      response.content[0]?.type === "text" ? response.content[0].text.trim() : "";
+    console.log(`[expand] Haiku raw response: "${text.slice(0, 400)}"`);
+
+    // Use greedy match to capture the full array (handles multiline responses)
+    const match = text.match(/\[[\s\S]*\]/);
+    if (!match) {
+      console.warn(`[expand] no JSON array found in Haiku response — falling back to ["${initialKeyword}"]`);
+      return [initialKeyword.toLowerCase()];
     }
+
+    console.log(`[expand] matched JSON fragment: "${match[0].slice(0, 300)}"`);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(match[0]);
+    } catch (parseErr) {
+      console.warn(`[expand] JSON.parse failed on "${match[0].slice(0, 200)}" — error:`, parseErr);
+      return [initialKeyword.toLowerCase()];
+    }
+
+    if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((s) => typeof s === "string")) {
+      console.warn(`[expand] parsed value is not a non-empty string array:`, parsed);
+      return [initialKeyword.toLowerCase()];
+    }
+
+    const keywords = (parsed as string[]).map((k) => k.toLowerCase());
+    // Ensure the original keyword is always present
+    if (!keywords.includes(initialKeyword.toLowerCase())) {
+      keywords.unshift(initialKeyword.toLowerCase());
+    }
+
+    console.log(`[expand] success — "${initialKeyword}" → [${keywords.join(", ")}]`);
+    return keywords;
+
   } catch (err) {
-    console.error("[chat] expandAggregationKeywords failed:", err);
+    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(`[expand] Haiku call threw — ${errMsg}`);
+    return [initialKeyword.toLowerCase()];
   }
-  return [initialKeyword.toLowerCase()];
 }
 
 async function buildAggregationPlan(
@@ -468,14 +482,23 @@ async function buildAggregationPlan(
   // Extract the first meaningful domain keyword (not a generic aggregation verb)
   const initialKeyword = searchTerms.find((w) => !AGGREGATION_VERBS.has(w));
 
+  console.log(
+    `[chat] buildAggregationPlan — searchTerms=[${searchTerms.join(", ")}] ` +
+    `initialKeyword="${initialKeyword ?? "none"}" ` +
+    `aggregateBy=${aggregateBy} ` +
+    `businessContext=${businessContext ? "present" : "missing"}`
+  );
+
   let keywords: string[] | undefined;
   if (initialKeyword) {
-    if (businessContext) {
-      keywords = await expandAggregationKeywords(initialKeyword, businessContext);
-    } else {
-      keywords = [initialKeyword];
-    }
+    // Always call expansion — uses business context when present for domain-specific
+    // synonyms; falls back to generic Haiku expansion without it.
+    keywords = await expandAggregationKeywords(initialKeyword, businessContext);
+  } else {
+    console.log("[chat] buildAggregationPlan — no initialKeyword found, no keyword filter will be applied");
   }
+
+  console.log(`[chat] buildAggregationPlan — final keywords: ${keywords ? `[${keywords.join(", ")}]` : "none"}`);
 
   return {
     strategies: [
