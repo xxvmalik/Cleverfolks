@@ -187,6 +187,8 @@ export async function processSyncedData(
 export type SlackLookups = {
   users: Record<string, string>;    // user_id → display name
   channels: Record<string, string>; // channel_id → channel name
+  /** ts → resolved message text; built during SlackMessage pass for reply context */
+  messages?: Record<string, string>;
 };
 
 export function resolveSlackUser(userId: string, lookups?: SlackLookups): string {
@@ -278,11 +280,21 @@ export function normalizeSlackReply(raw: any, lookups?: SlackLookups): SyncRecor
   const rawText: string = raw.text ?? "";
   const resolvedText = lookups?.users ? resolveSlackMentions(rawText, lookups.users) : rawText;
 
+  // Prepend parent message so the chunk is self-contained for semantic search.
+  // e.g. "[Replying to: 8115 failed @Operation Manager @ALLI]\nall completed now"
+  const parentTs: string = raw.thread_ts ?? "";
+  const parentText: string | undefined = parentTs ? lookups?.messages?.[parentTs] : undefined;
+  const content = parentText
+    ? `[Replying to: ${parentText.slice(0, 200).trim()}]\n${resolvedText}`
+    : resolvedText;
+
   return {
     external_id: messageId,
     source_type: "slack_reply",
-    title: `Reply in #${channelName}`,
-    content: resolvedText,
+    title: parentText
+      ? `Reply to "${parentText.slice(0, 60).trim()}…" in #${channelName}`
+      : `Reply in #${channelName}`,
+    content,
     metadata: {
       channel_id: channelId,
       channel_name: channelName,
@@ -291,6 +303,7 @@ export function normalizeSlackReply(raw: any, lookups?: SlackLookups): SyncRecor
       ts: raw.ts,
       thread_ts: raw.thread_ts ?? null,
       parent_message_ts: raw.thread_ts ?? null,
+      has_parent_context: !!parentText,
       subtype: raw.subtype ?? null,
       _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },

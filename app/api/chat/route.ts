@@ -481,6 +481,9 @@ function buildInternalContext(results: UnifiedResult[]): string {
       if (usr) parts.push(usr);
       const dt = formatSourceDate(meta);
       if (dt) parts.push(dt);
+      // For person_search results: tell CleverBrain whether this is a message
+      // FROM the person or a message that merely mentions them.
+      if (r.match_type === "mentioned") parts.push("person_mentioned_not_author");
       return `[Source: ${parts.join(" | ")}]\n${r.chunk_text}`;
     })
     .join("\n\n---\n\n");

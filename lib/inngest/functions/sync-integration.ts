@@ -127,6 +127,11 @@ export const syncIntegrationFunction = inngest.createFunction(
           const models = PROVIDER_MODELS_MAP[provider] ?? [];
           const normalised: SerialisableSyncRecord[] = [];
 
+          // ts → resolved message text. Populated while processing SlackMessage
+          // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
+          // so every reply can prepend its parent's text for context-aware search.
+          const parentTextMap: Record<string, string> = {};
+
           for (const model of models) {
             let cursor: string | undefined = undefined;
             let pageNum = 0;
@@ -152,11 +157,27 @@ export const syncIntegrationFunction = inngest.createFunction(
               }
 
               for (const raw of page.records) {
-                const rec = normalizeRecord(provider, model, raw, slackLookups ?? undefined);
+                // For Slack replies, augment lookups with the parent text map so
+                // normalizeSlackReply can prepend "[Replying to: ...]" context.
+                const lookupsForRecord =
+                  provider === "slack" && slackLookups
+                    ? { ...slackLookups, messages: parentTextMap }
+                    : (slackLookups ?? undefined);
+
+                const rec = normalizeRecord(provider, model, raw, lookupsForRecord);
                 if (rec) {
                   // Drop non-serialisable `file` field
                   const { file: _file, ...serialisable } = rec;
                   normalised.push(serialisable);
+                }
+
+                // Collect parent message text AFTER normalizing so we use the
+                // resolved text (real names instead of user IDs).
+                if (provider === "slack" && model === "SlackMessage" && rec) {
+                  const ts = (raw.ts ?? raw.id) as string | undefined;
+                  if (ts && rec.content) {
+                    parentTextMap[ts] = rec.content.slice(0, 300);
+                  }
                 }
               }
 
@@ -169,6 +190,7 @@ export const syncIntegrationFunction = inngest.createFunction(
             console.log(`[inngest] model=${model}: fetched ${modelCount} raw → ${normalised.length} total normalised so far`);
           }
 
+          console.log(`[inngest] parentTextMap has ${Object.keys(parentTextMap).length} entries for reply context`);
           return normalised;
         }
       );

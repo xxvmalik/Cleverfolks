@@ -16,6 +16,8 @@ export type UnifiedResult = {
   /** 0 for non-semantic results */
   similarity: number;
   msg_ts: string | null;
+  /** 'authored' | 'mentioned' — only set for person_search results */
+  match_type?: string;
 };
 
 type ExecutorParams = {
@@ -112,6 +114,7 @@ async function runStrategy(
     return ((data ?? []) as Omit<UnifiedResult, "similarity">[]).map((r) => ({
       ...r,
       similarity: 0,
+      match_type: (r as Record<string, unknown>).match_type as string | undefined,
     }));
   }
 
