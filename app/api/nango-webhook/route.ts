@@ -16,19 +16,10 @@ export async function POST(request: NextRequest) {
     };
 
     // Verify this is a genuine Nango webhook: body must include from="nango"
+    // Nango sends server-to-server with no auth cookies and no Authorization header.
     if (body.from !== "nango") {
       console.warn("[webhook] Rejected: missing from=nango in body");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // Optionally enforce shared secret if NANGO_WEBHOOK_SECRET is configured
-    const secret = process.env.NANGO_WEBHOOK_SECRET;
-    if (secret) {
-      const authHeader = request.headers.get("authorization");
-      if (authHeader !== `Bearer ${secret}`) {
-        console.warn("[webhook] Rejected: invalid NANGO_WEBHOOK_SECRET");
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
     }
 
     const { connectionId, providerConfigKey } = body;
