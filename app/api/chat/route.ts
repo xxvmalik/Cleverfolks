@@ -258,6 +258,10 @@ function getChannelName(
       "";
     return name ? `#${name}` : "";
   }
+  if (sourceType === "gmail_message") {
+    const subject = (meta.subject as string | undefined) ?? "";
+    return subject ? `📧 ${subject.slice(0, 60)}` : "📧 Gmail";
+  }
   return "";
 }
 
@@ -269,6 +273,14 @@ function getUserName(
     return (
       (meta.user_name as string | undefined) ??
       (meta.user as string | undefined) ??
+      ""
+    );
+  }
+  if (sourceType === "gmail_message") {
+    return (
+      (meta.user_name as string | undefined) ??
+      (meta.sender_name as string | undefined) ??
+      (meta.from as string | undefined) ??
       ""
     );
   }

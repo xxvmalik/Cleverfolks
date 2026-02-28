@@ -5,6 +5,8 @@ import { buildUserMap } from "@/lib/slack-user-resolver";
 import {
   processSyncedData,
   normalizeGmail,
+  normalizeGmailContact,
+  buildGmailContactMap,
   normalizeSlack,
   normalizeSlackReply,
   normalizeSlackReaction,
@@ -19,7 +21,8 @@ import {
 
 // All Nango models to fetch per provider
 const PROVIDER_MODELS_MAP: Record<string, string[]> = {
-  gmail:             ["GmailEmail"],
+  // GmailContact fetched first so the contact map is ready when normalising GmailEmail
+  gmail:             ["GmailEmail", "GmailContact"],
   // SlackUser + SlackChannel are fetched first (in buildSlackLookups step) to
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
@@ -29,7 +32,13 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function normalizeRecord(provider: string, model: string, raw: any, lookups?: SlackLookups): SyncRecord | null {
+function normalizeRecord(
+  provider: string,
+  model: string,
+  raw: any,
+  lookups?: SlackLookups,
+  gmailContacts?: Record<string, string>
+): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
       case "SlackMessage":         return normalizeSlack(raw, lookups);
@@ -37,16 +46,57 @@ function normalizeRecord(provider: string, model: string, raw: any, lookups?: Sl
       case "SlackMessageReaction": return normalizeSlackReaction(raw, lookups);
       case "SlackChannel":         return normalizeSlackChannel(raw);
       case "SlackUser":            return normalizeSlackUser(raw);
+      default:                     return null;
+    }
+  }
+  if (provider === "gmail") {
+    switch (model) {
+      case "GmailEmail":   return normalizeGmail(raw, gmailContacts);
+      case "GmailContact": return normalizeGmailContact(raw);
       default:             return null;
     }
   }
   switch (provider) {
-    case "gmail":            return normalizeGmail(raw);
     case "google-calendar":  return normalizeCalendar(raw);
     case "hubspot":          return normalizeHubspot(raw);
     case "google-drive":     return normalizeDrive(raw);
     default:                 return null;
   }
+}
+
+/** Fetch GmailContact records from Nango and build an email → display name map.
+ *  Degrades gracefully if the GmailContact model is not configured in Nango. */
+async function fetchGmailContacts(
+  nango: Nango,
+  connectionId: string
+): Promise<Record<string, string>> {
+  const contacts: Record<string, unknown>[] = [];
+  let cursor: string | undefined;
+
+  try {
+    for (;;) {
+      const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
+        await nango.listRecords({
+          providerConfigKey: "gmail",
+          connectionId,
+          model: "GmailContact",
+          cursor,
+        });
+      contacts.push(...page.records);
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+  } catch (err) {
+    console.warn(
+      "[inngest] GmailContact fetch failed (model may not be configured in Nango):",
+      err instanceof Error ? err.message : String(err)
+    );
+    return {};
+  }
+
+  const map = buildGmailContactMap(contacts);
+  console.log(`[inngest] Gmail contact map built — ${Object.keys(map).length} contacts`);
+  return map;
 }
 
 /** Fetch SlackUser + SlackChannel records from Nango and build lookup maps.
@@ -119,7 +169,16 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1b: Fetch + normalise all records from Nango ───────────────
+      // ── Step 1b (Gmail only): pre-fetch contacts for sender name resolution ──
+      const gmailContactMap: Record<string, string> | null =
+        provider === "gmail"
+          ? await step.run("build-gmail-contacts", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              return fetchGmailContacts(nango, connectionId);
+            })
+          : null;
+
+      // ── Step 1c: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {
@@ -164,7 +223,13 @@ export const syncIntegrationFunction = inngest.createFunction(
                     ? { ...slackLookups, messages: parentTextMap }
                     : (slackLookups ?? undefined);
 
-                const rec = normalizeRecord(provider, model, raw, lookupsForRecord);
+                const rec = normalizeRecord(
+                  provider,
+                  model,
+                  raw,
+                  lookupsForRecord,
+                  gmailContactMap ?? undefined
+                );
                 if (rec) {
                   // Drop non-serialisable `file` field
                   const { file: _file, ...serialisable } = rec;

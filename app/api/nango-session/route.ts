@@ -52,8 +52,7 @@ export async function POST(request: NextRequest) {
         email: profile?.email ?? user.email ?? undefined,
         display_name: profile?.full_name ?? undefined,
       },
-      // Only show Slack for now
-      allowed_integrations: ["slack"],
+      allowed_integrations: ["slack", "gmail"],
     });
 
     return NextResponse.json({ token: session.data.token });

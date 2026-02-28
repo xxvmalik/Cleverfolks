@@ -9,6 +9,8 @@ export type SyncRecord = {
   external_id: string;
   source_type:
     | "email"
+    | "gmail_message"
+    | "gmail_contact"
     | "slack_message"
     | "slack_reply"
     | "slack_reaction"
@@ -203,38 +205,263 @@ export function resolveSlackChannel(channelId: string, lookups?: SlackLookups): 
 // Integration normalizers
 // ============================================================
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeGmail(raw: any): SyncRecord {
-  const headers: Record<string, string> = {};
-  for (const h of raw.payload?.headers ?? []) {
-    headers[h.name?.toLowerCase()] = h.value;
+// ============================================================
+// Gmail helpers
+// ============================================================
+
+/** Strip HTML tags and decode common entities */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/li>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "• ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+const PROMO_PATTERNS = [
+  /unsubscribe/i,
+  /view (this email |it )?in (your |a )?browser/i,
+  /sent from my (iphone|ipad|android|samsung|galaxy)/i,
+  /get (outlook|the app) (for|on) (ios|android)/i,
+  /copyright \d{4}/i,
+  /all rights reserved/i,
+  /privacy policy/i,
+  /you (are receiving|received) this (email|message) because/i,
+  /to (manage|update|change) your (subscription|preferences|email)/i,
+  /click here to (unsubscribe|opt.?out)/i,
+];
+
+/** Remove promotional footer lines (scan last 30 lines from bottom) */
+function removePromotionalFooter(text: string): string {
+  const lines = text.split("\n");
+  let cutAt = lines.length;
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 30); i--) {
+    const line = lines[i].trim();
+    if (PROMO_PATTERNS.some((re) => re.test(line))) cutAt = i;
+  }
+  return lines.slice(0, cutAt).join("\n").trim();
+}
+
+/** Strip > quoted reply lines; return clean body + short reference snippet */
+function extractQuotedReply(text: string): { body: string; quotedRef: string | null } {
+  const lines = text.split("\n");
+  const bodyLines: string[] = [];
+  const quotedLines: string[] = [];
+  let inQuote = false;
+
+  for (const line of lines) {
+    if (/^On .+wrote:$/.test(line.trim()) || /^From:.*Sent:/.test(line)) {
+      inQuote = true;
+      continue;
+    }
+    if (line.startsWith(">")) {
+      inQuote = true;
+      quotedLines.push(line.replace(/^>+\s?/, ""));
+      continue;
+    }
+    if (!inQuote) bodyLines.push(line);
   }
 
-  const getBody = (payload: Record<string, unknown>): string => {
-    const parts = (payload.parts as Array<Record<string, unknown>> | undefined) ?? [];
-    if (parts.length > 0) {
-      for (const part of parts) {
-        if (part.mimeType === "text/plain") {
-          const data = (part.body as Record<string, string>)?.data ?? "";
-          return Buffer.from(data, "base64url").toString("utf-8");
-        }
-      }
-      return getBody(parts[0] as Record<string, unknown>);
-    }
-    const data = (payload.body as Record<string, string>)?.data ?? "";
-    return Buffer.from(data, "base64url").toString("utf-8");
+  return {
+    body: bodyLines.join("\n").trim(),
+    quotedRef:
+      quotedLines.length > 0
+        ? quotedLines.slice(0, 5).join(" ").slice(0, 200).trim()
+        : null,
   };
+}
+
+/** Extract text body from Gmail API payload (handles multipart recursively) */
+function extractGmailBody(payload: Record<string, unknown>): { text: string; isHtml: boolean } {
+  const mimeType = (payload.mimeType as string | undefined) ?? "";
+
+  if (mimeType.startsWith("multipart/")) {
+    const parts = (payload.parts as Array<Record<string, unknown>> | undefined) ?? [];
+    for (const part of parts) {
+      if (part.mimeType === "text/plain") {
+        const data = (part.body as Record<string, string>)?.data ?? "";
+        if (data) return { text: Buffer.from(data, "base64url").toString("utf-8"), isHtml: false };
+      }
+    }
+    for (const part of parts) {
+      if (part.mimeType === "text/html") {
+        const data = (part.body as Record<string, string>)?.data ?? "";
+        if (data) return { text: Buffer.from(data, "base64url").toString("utf-8"), isHtml: true };
+      }
+    }
+    for (const part of parts) {
+      if ((part.mimeType as string | undefined)?.startsWith("multipart/")) {
+        return extractGmailBody(part);
+      }
+    }
+  }
+
+  const data = (payload.body as Record<string, string>)?.data ?? "";
+  if (!data) return { text: "", isHtml: false };
+  return { text: Buffer.from(data, "base64url").toString("utf-8"), isHtml: mimeType === "text/html" };
+}
+
+/** Parse "Display Name <email@domain.com>" → { name, email } */
+function parseFromHeader(from: string): { name: string; email: string } {
+  const match = from.match(/^(.+?)\s*<([^>]+)>$/);
+  if (match) {
+    return { name: match[1].trim().replace(/^["']|["']$/g, ""), email: match[2].trim().toLowerCase() };
+  }
+  return { name: from.trim(), email: from.trim().toLowerCase() };
+}
+
+/** Check if payload has non-inline file attachments */
+function hasGmailAttachments(payload: Record<string, unknown>): boolean {
+  const parts = (payload.parts as Array<Record<string, unknown>> | undefined) ?? [];
+  return parts.some((p) => {
+    const disp =
+      (p.headers as Array<{ name: string; value: string }> | undefined)
+        ?.find((h) => h.name.toLowerCase() === "content-disposition")?.value ?? "";
+    return disp.startsWith("attachment") && !!(p.body as Record<string, string>)?.attachmentId;
+  });
+}
+
+/** Build email → display name map from raw GmailContact records */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function buildGmailContactMap(contacts: any[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const contact of contacts) {
+    const emailAddresses: Array<{ value?: string }> = contact.emailAddresses ?? [];
+    const names: Array<{ displayName?: string; givenName?: string; familyName?: string }> =
+      contact.names ?? [];
+    const displayName =
+      names[0]?.displayName ??
+      [names[0]?.givenName, names[0]?.familyName].filter(Boolean).join(" ") ??
+      "";
+    for (const ea of emailAddresses) {
+      if (ea.value && displayName) map[ea.value.toLowerCase()] = displayName;
+    }
+  }
+  return map;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeGmail(raw: any, contactMap?: Record<string, string>): SyncRecord {
+  const headers: Record<string, string> = {};
+  for (const h of (raw.payload?.headers ?? []) as Array<{ name: string; value: string }>) {
+    headers[h.name.toLowerCase()] = h.value;
+  }
+
+  const subject = headers["subject"] ?? "(No Subject)";
+  const fromHeader = headers["from"] ?? "";
+  const toHeader = headers["to"] ?? "";
+  const dateHeader = headers["date"] ?? "";
+
+  const { name: senderNameRaw, email: senderEmail } = parseFromHeader(fromHeader);
+  const senderName = (contactMap && contactMap[senderEmail]) ?? senderNameRaw;
+
+  const recipients = toHeader
+    ? toHeader
+        .split(",")
+        .map((r) => parseFromHeader(r.trim()).email)
+        .filter(Boolean)
+    : [];
+
+  const { text: rawBodyText, isHtml } = extractGmailBody(raw.payload ?? {});
+  const bodyText = isHtml ? stripHtml(rawBodyText) : rawBodyText;
+  const cleanBody = removePromotionalFooter(bodyText);
+  const { body, quotedRef } = extractQuotedReply(cleanBody);
+
+  const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
+
+  // Convert Date header to Unix timestamp float string (for time-range SQL)
+  let ts: string | undefined;
+  try {
+    if (dateHeader) {
+      const parsed = new Date(dateHeader);
+      if (!isNaN(parsed.getTime())) ts = String(parsed.getTime() / 1000);
+    }
+  } catch { /* ignore */ }
+  if (!ts && raw.internalDate) ts = String(Number(raw.internalDate) / 1000);
 
   return {
     external_id: raw.id ?? "",
-    source_type: "email",
-    title: headers["subject"] ?? "(No Subject)",
-    content: getBody(raw.payload ?? {}),
+    source_type: "gmail_message",
+    title: subject,
+    content: content || body || rawBodyText,
     metadata: {
-      from: headers["from"],
-      to: headers["to"],
-      date: headers["date"],
-      thread_id: raw.threadId,
+      sender_name: senderName || undefined,
+      sender_email: senderEmail || undefined,
+      user_name: senderName || senderEmail || undefined,
+      from: fromHeader,
+      to: toHeader,
+      recipients,
+      subject,
+      date: dateHeader,
+      thread_id: raw.threadId ?? undefined,
+      labels: (raw.labelIds ?? []) as string[],
+      has_attachments: hasGmailAttachments(raw.payload ?? {}),
+      ts,
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeGmailContact(raw: any): SyncRecord {
+  const names: Array<{ displayName?: string; givenName?: string; familyName?: string }> =
+    raw.names ?? [];
+  const emailAddresses: Array<{ value?: string }> = raw.emailAddresses ?? [];
+  const phoneNumbers: Array<{ value?: string }> = raw.phoneNumbers ?? [];
+  const organizations: Array<{ name?: string; title?: string }> = raw.organizations ?? [];
+
+  const displayName =
+    names[0]?.displayName ??
+    [names[0]?.givenName, names[0]?.familyName].filter(Boolean).join(" ") ??
+    "Unknown Contact";
+
+  const primaryEmail = emailAddresses[0]?.value ?? "";
+
+  const parts: string[] = [];
+  if (displayName) parts.push(`Name: ${displayName}`);
+  if (primaryEmail) parts.push(`Email: ${primaryEmail}`);
+  if (emailAddresses.length > 1) {
+    parts.push(
+      `Other emails: ${emailAddresses
+        .slice(1)
+        .map((e) => e.value)
+        .filter(Boolean)
+        .join(", ")}`
+    );
+  }
+  if (phoneNumbers.length > 0) {
+    parts.push(`Phone: ${phoneNumbers.map((p) => p.value).filter(Boolean).join(", ")}`);
+  }
+  if (organizations[0]?.name) parts.push(`Company: ${organizations[0].name}`);
+  if (organizations[0]?.title) parts.push(`Title: ${organizations[0].title}`);
+
+  const resourceName: string = raw.resourceName ?? raw.id ?? "";
+  const contactId = resourceName.replace("people/", "") || (raw.id ?? "");
+
+  return {
+    external_id: `contact_${contactId}`,
+    source_type: "gmail_contact",
+    title: displayName,
+    content: parts.join("\n"),
+    metadata: {
+      resource_name: resourceName,
+      email: primaryEmail,
+      display_name: displayName,
+      organization: organizations[0]?.name ?? undefined,
+      title: organizations[0]?.title ?? undefined,
+      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
 }
