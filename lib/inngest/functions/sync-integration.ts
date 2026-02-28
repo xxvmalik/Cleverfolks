@@ -19,6 +19,75 @@ import {
   type SlackLookups,
 } from "@/lib/sync-processor";
 
+// ── Gmail transactional email filter ─────────────────────────────────────────
+// Add entries here to suppress additional noise sources without touching logic.
+
+/** Email address prefixes that indicate automated/no-reply senders. */
+const GMAIL_BLOCKED_SENDER_PREFIXES = [
+  "noreply@",
+  "no-reply@",
+  "notifications@",
+  "receipts@",
+  "alerts@",
+  "mailer-daemon@",
+  "donotreply@",
+  "do-not-reply@",
+  "bounce@",
+  "support@korapay.com",
+];
+
+/** Sender domains whose every email is transactional noise. */
+const GMAIL_BLOCKED_SENDER_DOMAINS = [
+  "korapay.com",
+  "paystack.com",
+  "flutterwave.com",
+  "stripe.com",
+  "pay.google.com",
+  "payments-noreply.google.com",
+];
+
+/** Subject line substrings (case-insensitive) that flag transactional email. */
+const GMAIL_BLOCKED_SUBJECT_PATTERNS = [
+  "payment receipt",
+  "payment confirmation",
+  "payment successful",
+  "payment failed",
+  "transaction receipt",
+  "transaction confirmation",
+  "order confirmation",
+  "order receipt",
+  "invoice",
+  "your receipt",
+  "purchase confirmation",
+  "subscription renewal",
+  "auto-debit",
+];
+
+/**
+ * Returns true when a gmail_message should be skipped as automated /
+ * transactional noise.  All checks are O(1) string operations.
+ */
+function isTransactionalEmail(metadata: Record<string, unknown>): boolean {
+  const from = ((metadata.from as string | undefined) ?? "").toLowerCase();
+  const subject = ((metadata.subject as string | undefined) ?? "").toLowerCase();
+
+  // Blocked sender address prefixes
+  if (GMAIL_BLOCKED_SENDER_PREFIXES.some((p) => from.includes(p))) return true;
+
+  // Blocked sender domains
+  const atIdx = from.lastIndexOf("@");
+  if (atIdx !== -1) {
+    const domain = from.slice(atIdx + 1).replace(/>.*$/, "").trim();
+    if (GMAIL_BLOCKED_SENDER_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`)))
+      return true;
+  }
+
+  // Blocked subject patterns
+  if (GMAIL_BLOCKED_SUBJECT_PATTERNS.some((p) => subject.includes(p))) return true;
+
+  return false;
+}
+
 // All Nango models to fetch per provider
 const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // GmailContact fetched first so the contact map is ready when normalising GmailEmail
@@ -190,6 +259,7 @@ export const syncIntegrationFunction = inngest.createFunction(
           const gmailCutoff = new Date();
           gmailCutoff.setMonth(gmailCutoff.getMonth() - 6);
           let gmailDateSkipped = 0;
+          let gmailTransactionalSkipped = 0;
 
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
@@ -236,14 +306,20 @@ export const syncIntegrationFunction = inngest.createFunction(
                   gmailContactMap ?? undefined
                 );
                 if (rec) {
-                  // Gmail date filter: skip emails older than 6 months to
-                  // control embedding costs. Contacts (gmail_contact) are
-                  // always kept regardless of date.
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {
-                    const tsRaw = rec.metadata?.ts as string | undefined;
+                    const meta = rec.metadata ?? {};
+
+                    // Date filter: skip emails older than 6 months
+                    const tsRaw = meta.ts as string | undefined;
                     const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
                     if (!emailDate || emailDate < gmailCutoff) {
                       gmailDateSkipped++;
+                      continue;
+                    }
+
+                    // Transactional filter: skip automated / payment noise
+                    if (isTransactionalEmail(meta)) {
+                      gmailTransactionalSkipped++;
                       continue;
                     }
                   }
@@ -276,6 +352,11 @@ export const syncIntegrationFunction = inngest.createFunction(
           if (gmailDateSkipped > 0) {
             console.log(
               `[inngest] google-mail: skipped ${gmailDateSkipped} emails older than 6 months (cutoff=${gmailCutoff.toISOString()})`
+            );
+          }
+          if (gmailTransactionalSkipped > 0) {
+            console.log(
+              `[inngest] google-mail: skipped ${gmailTransactionalSkipped} automated/transactional emails`
             );
           }
           return normalised;
