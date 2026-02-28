@@ -64,6 +64,11 @@ async function runStrategy(
       ? strategy.params.source_types
       : null;
 
+    console.log(
+      `[strategy-executor] hybrid_aggregation p_source_types=${JSON.stringify(sourceTypes)} ` +
+      `dedicated_channels=[${dedicatedChannels.join(",")}] keywords=[${keywords.length}]`
+    );
+
     const [dedicatedResult, othersResult, sampleResult] = await Promise.all([
       dedicatedChannels.length > 0
         ? adminSupabase.rpc("aggregate_by_person_in_channels", {

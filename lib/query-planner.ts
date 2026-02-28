@@ -200,7 +200,7 @@ function buildPlannerPrompt(
     : "none detected";
 
   const aggregationFlag = queryAnalysis.isAggregation
-    ? `\n⚠️  AGGREGATION DETECTED: This query requires counting or ranking people/channels. You MUST use hybrid_aggregation — do NOT use channel_search, broad_fetch, or semantic for this query.\n`
+    ? `\n⚠️  AGGREGATION DETECTED: This query requires counting or ranking people/channels. You MUST use hybrid_aggregation. If the query targets a specific integration (e.g. "emailed", "in Gmail", "Slack messages"), you MUST also include source_types in the hybrid_aggregation params scoped to that integration's source_types (e.g. source_types: ["gmail_message"] for email queries, source_types: ["slack_message","slack_reply"] for Slack). Omit source_types only when the query spans all integrations. Do NOT use channel_search, broad_fetch, or semantic for this query.\n`
     : "";
 
   const comparisonFlag = queryAnalysis.isComparison
@@ -251,6 +251,9 @@ EXAMPLES:
 - "Show me recent deals" → broad_fetch with source_types=["deal"] and recent time range
 - "What's happening across all my tools?" → broad_fetch without source_types (searches all integrations)
 - "Search my emails and Slack for contract issues" → semantic without source_types (searches all source types at once)
+- "Who emailed me the most?" → hybrid_aggregation with source_types=["gmail_message"], dedicated_channels=[], keywords=["email","re:","fwd:","sent","from","reply"]
+- "Who sent the most Slack messages this week?" → hybrid_aggregation with source_types=["slack_message","slack_reply"], dedicated_channels=[], keywords=[], time range
+- "Who has messaged me the most?" → hybrid_aggregation WITHOUT source_types (spans all integrations)
 
 Available strategies:
 - semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match. Do NOT use for counting/ranking questions.

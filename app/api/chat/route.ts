@@ -527,8 +527,14 @@ async function runInternalRAGSearch(
 
   // ── Log 3: raw planner output ─────────────────────────────────────────────────
   console.log(
-    `[chat:planner-out] strategies=[${plan.strategies.map((s) => s.type).join(",")}] ` +
-    `isFallback=${plan.isFallback} reasoning="${plan.reasoning}"`
+    `[chat:planner-out] strategies=${JSON.stringify(
+      plan.strategies.map((s) => ({
+        type: s.type,
+        source_types: s.params.source_types ?? null,
+        dedicated_channels: s.params.dedicated_channels ?? [],
+        keywords: s.params.keywords ?? [],
+      }))
+    )} isFallback=${plan.isFallback} reasoning="${plan.reasoning}"`
   );
 
   // Override 1: planner fallback + broad summary → broad_fetch
@@ -558,7 +564,7 @@ async function runInternalRAGSearch(
     const isAgg = effectiveAnalysis.isAggregation;
     const stratType = isAgg ? "hybrid_aggregation" : "broad_fetch";
 
-    // Harvest channel/keyword intelligence from the raw planner output
+    // Harvest channel/keyword/source_type intelligence from the raw planner output
     const plannerHybrid = plan.strategies.find((s) => s.type === "hybrid_aggregation");
     const plannerChannels =
       plannerHybrid?.params.dedicated_channels ??
@@ -567,9 +573,17 @@ async function runInternalRAGSearch(
         .map((s) => s.params.channel_name!);
     const plannerKeywords =
       plannerHybrid?.params.keywords ?? effectiveAnalysis.searchTerms.slice(0, 8);
+    // Carry source_types: check hybrid first, then any other strategy that has them
+    const plannerSourceTypesComp =
+      plannerHybrid?.params.source_types ??
+      plan.strategies.find((s) => s.params.source_types?.length)?.params.source_types;
 
     const baseParams = isAgg
-      ? { dedicated_channels: plannerChannels, keywords: plannerKeywords }
+      ? {
+          dedicated_channels: plannerChannels,
+          keywords: plannerKeywords,
+          ...(plannerSourceTypesComp?.length ? { source_types: plannerSourceTypesComp } : {}),
+        }
       : {};
 
     effectivePlan = {
@@ -616,6 +630,11 @@ async function runInternalRAGSearch(
       .filter((s) => s.type === "channel_search" && s.params.channel_name)
       .map((s) => s.params.channel_name!);
 
+    // Carry forward source_types the planner specified on any of its strategies
+    const plannerSourceTypesAgg = [
+      ...new Set(effectivePlan.strategies.flatMap((s) => s.params.source_types ?? [])),
+    ];
+
     // Use search terms as keyword fallback for non-dedicated channels
     const keywordFallback = effectiveAnalysis.searchTerms.slice(0, 10);
 
@@ -629,6 +648,7 @@ async function runInternalRAGSearch(
             keywords: keywordFallback,
             after: timeRange?.after?.toISOString(),
             before: timeRange?.before?.toISOString(),
+            ...(plannerSourceTypesAgg.length ? { source_types: plannerSourceTypesAgg } : {}),
           },
         },
       ],
@@ -636,18 +656,27 @@ async function runInternalRAGSearch(
     };
     console.log(
       `[chat:agg-safeguard] isAggregation=true, plan was [${overriddenFrom}] → hybrid_aggregation ` +
+      `source_types=[${plannerSourceTypesAgg.join(",")}] ` +
       `dedicated_channels=[${plannerChannels.join(",")}] keywords=[${keywordFallback.join(",")}]`
     );
   } else if (effectiveAnalysis.isAggregation) {
+    // Planner already chose hybrid_aggregation — log its source_types for diagnostics
+    const existingHybrid = effectivePlan.strategies.find((s) => s.type === "hybrid_aggregation");
     console.log(
-      `[chat:agg-safeguard] isAggregation=true, planner already output hybrid_aggregation — no override needed`
+      `[chat:agg-safeguard] isAggregation=true, planner already output hybrid_aggregation ` +
+      `source_types=[${(existingHybrid?.params.source_types ?? []).join(",")}] — no override needed`
     );
   }
 
   // ── Log 4: final effective plan before executor ───────────────────────────────
   console.log(
-    `[chat:executor-in] final strategies=[${effectivePlan.strategies.map((s) => s.type).join(",")}] ` +
-    `reasoning="${effectivePlan.reasoning}"`
+    `[chat:executor-in] final strategies=${JSON.stringify(
+      effectivePlan.strategies.map((s) => ({
+        type: s.type,
+        source_types: s.params.source_types ?? null,
+        dedicated_channels: s.params.dedicated_channels ?? [],
+      }))
+    )} reasoning="${effectivePlan.reasoning}"`
   );
 
   const activityLabels = getStrategyActivityLabels(
