@@ -29,7 +29,7 @@ type IntegrationConfig = {
 };
 
 const CORE_INTEGRATIONS: IntegrationConfig[] = [
-  { provider: "gmail",           name: "Gmail",           category: "Email",         color: "#EA4335" },
+  { provider: "google-mail",     name: "Gmail",           category: "Email",         color: "#EA4335" },
   { provider: "slack",           name: "Slack",           category: "Communication", color: "#4A154B" },
   { provider: "google-calendar", name: "Google Calendar", category: "Calendar",      color: "#1A73E8" },
   { provider: "hubspot",         name: "HubSpot",         category: "CRM",           color: "#FF7A59" },

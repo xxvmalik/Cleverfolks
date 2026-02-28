@@ -9,7 +9,7 @@ import { CheckCircle2 } from "lucide-react";
 const INTEGRATIONS = [
   { id: "hubspot",         name: "HubSpot",          category: "CRM" },
   { id: "salesforce",      name: "Salesforce",        category: "CRM" },
-  { id: "gmail",           name: "Gmail",             category: "Email" },
+  { id: "google-mail",     name: "Gmail",             category: "Email" },
   { id: "outlook",         name: "Outlook",           category: "Email" },
   { id: "google-calendar", name: "Google Calendar",   category: "Calendar" },
   { id: "slack",           name: "Slack",             category: "Communication" },

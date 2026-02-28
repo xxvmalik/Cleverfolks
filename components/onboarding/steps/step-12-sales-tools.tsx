@@ -11,7 +11,7 @@ const SALES_INTEGRATIONS = [
   { id: "calendly",   name: "Calendly",    desc: "Meeting scheduling" },
   { id: "hubspot",    name: "HubSpot",     desc: "CRM & pipeline" },
   { id: "salesforce", name: "Salesforce",  desc: "CRM & pipeline" },
-  { id: "gmail",      name: "Gmail",       desc: "Email sending" },
+  { id: "google-mail", name: "Gmail",      desc: "Email sending" },
   { id: "outlook",    name: "Outlook",     desc: "Email sending" },
 ];
 

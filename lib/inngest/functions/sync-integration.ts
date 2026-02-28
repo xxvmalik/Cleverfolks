@@ -22,7 +22,7 @@ import {
 // All Nango models to fetch per provider
 const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // GmailContact fetched first so the contact map is ready when normalising GmailEmail
-  gmail:             ["GmailEmail", "GmailContact"],
+  "google-mail":     ["GmailEmail", "GmailContact"],
   // SlackUser + SlackChannel are fetched first (in buildSlackLookups step) to
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
@@ -49,7 +49,7 @@ function normalizeRecord(
       default:                     return null;
     }
   }
-  if (provider === "gmail") {
+  if (provider === "google-mail") {
     switch (model) {
       case "GmailEmail":   return normalizeGmail(raw, gmailContacts);
       case "GmailContact": return normalizeGmailContact(raw);
@@ -77,7 +77,7 @@ async function fetchGmailContacts(
     for (;;) {
       const page: { records: Record<string, unknown>[]; next_cursor: string | null } =
         await nango.listRecords({
-          providerConfigKey: "gmail",
+          providerConfigKey: "google-mail",
           connectionId,
           model: "GmailContact",
           cursor,
@@ -171,7 +171,7 @@ export const syncIntegrationFunction = inngest.createFunction(
 
       // ── Step 1b (Gmail only): pre-fetch contacts for sender name resolution ──
       const gmailContactMap: Record<string, string> | null =
-        provider === "gmail"
+        provider === "google-mail"
           ? await step.run("build-gmail-contacts", async () => {
               const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
               return fetchGmailContacts(nango, connectionId);
