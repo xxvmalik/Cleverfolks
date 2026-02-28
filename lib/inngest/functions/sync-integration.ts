@@ -186,6 +186,11 @@ export const syncIntegrationFunction = inngest.createFunction(
           const models = PROVIDER_MODELS_MAP[provider] ?? [];
           const normalised: SerialisableSyncRecord[] = [];
 
+          // Gmail date cutoff: only process emails from the last 6 months
+          const gmailCutoff = new Date();
+          gmailCutoff.setMonth(gmailCutoff.getMonth() - 6);
+          let gmailDateSkipped = 0;
+
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
           // so every reply can prepend its parent's text for context-aware search.
@@ -231,6 +236,18 @@ export const syncIntegrationFunction = inngest.createFunction(
                   gmailContactMap ?? undefined
                 );
                 if (rec) {
+                  // Gmail date filter: skip emails older than 6 months to
+                  // control embedding costs. Contacts (gmail_contact) are
+                  // always kept regardless of date.
+                  if (provider === "google-mail" && rec.source_type === "gmail_message") {
+                    const tsRaw = rec.metadata?.ts as string | undefined;
+                    const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
+                    if (!emailDate || emailDate < gmailCutoff) {
+                      gmailDateSkipped++;
+                      continue;
+                    }
+                  }
+
                   // Drop non-serialisable `file` field
                   const { file: _file, ...serialisable } = rec;
                   normalised.push(serialisable);
@@ -256,6 +273,11 @@ export const syncIntegrationFunction = inngest.createFunction(
           }
 
           console.log(`[inngest] parentTextMap has ${Object.keys(parentTextMap).length} entries for reply context`);
+          if (gmailDateSkipped > 0) {
+            console.log(
+              `[inngest] google-mail: skipped ${gmailDateSkipped} emails older than 6 months (cutoff=${gmailCutoff.toISOString()})`
+            );
+          }
           return normalised;
         }
       );
