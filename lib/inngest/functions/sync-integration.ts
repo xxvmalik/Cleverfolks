@@ -33,17 +33,6 @@ const GMAIL_BLOCKED_SENDER_PREFIXES = [
   "donotreply@",
   "do-not-reply@",
   "bounce@",
-  "support@korapay.com",
-];
-
-/** Sender domains whose every email is transactional noise. */
-const GMAIL_BLOCKED_SENDER_DOMAINS = [
-  "korapay.com",
-  "paystack.com",
-  "flutterwave.com",
-  "stripe.com",
-  "pay.google.com",
-  "payments-noreply.google.com",
 ];
 
 /** Subject line substrings (case-insensitive) that flag transactional email. */
@@ -65,27 +54,21 @@ const GMAIL_BLOCKED_SUBJECT_PATTERNS = [
 
 /**
  * Returns true when a gmail_message should be skipped as automated /
- * transactional noise.  All checks are O(1) string operations.
+ * transactional noise.
+ *
+ * Both conditions must match: an automated sender prefix AND a
+ * transactional subject pattern.  Either alone is not enough —
+ * e.g. support@korapay.com with "Action needed" passes through, but
+ * noreply@korapay.com with "Payment Receipt" is skipped.
  */
 function isTransactionalEmail(metadata: Record<string, unknown>): boolean {
   const from = ((metadata.from as string | undefined) ?? "").toLowerCase();
   const subject = ((metadata.subject as string | undefined) ?? "").toLowerCase();
 
-  // Blocked sender address prefixes
-  if (GMAIL_BLOCKED_SENDER_PREFIXES.some((p) => from.includes(p))) return true;
+  const hasBlockedPrefix = GMAIL_BLOCKED_SENDER_PREFIXES.some((p) => from.includes(p));
+  const hasBlockedSubject = GMAIL_BLOCKED_SUBJECT_PATTERNS.some((p) => subject.includes(p));
 
-  // Blocked sender domains
-  const atIdx = from.lastIndexOf("@");
-  if (atIdx !== -1) {
-    const domain = from.slice(atIdx + 1).replace(/>.*$/, "").trim();
-    if (GMAIL_BLOCKED_SENDER_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`)))
-      return true;
-  }
-
-  // Blocked subject patterns
-  if (GMAIL_BLOCKED_SUBJECT_PATTERNS.some((p) => subject.includes(p))) return true;
-
-  return false;
+  return hasBlockedPrefix && hasBlockedSubject;
 }
 
 // All Nango models to fetch per provider
