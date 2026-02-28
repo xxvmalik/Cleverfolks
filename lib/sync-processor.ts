@@ -67,7 +67,9 @@ export async function processSyncedData(
       }
 
       // ── Step B: Upsert document ──────────────────────────────────────────
-      console.log(`${label} upserting document (${content.length} chars)`);
+      console.log(
+        `${label} upserting — source_type=${record.source_type} title="${record.title?.slice(0, 60)}" content=${content.length}chars`
+      );
       const { data: documentId, error: docError } = await supabase.rpc(
         "upsert_synced_document",
         {
@@ -95,15 +97,19 @@ export async function processSyncedData(
           continue;
         }
 
-        // Any other DB/schema error should still surface so we know if the
-        // SQL migration hasn't been applied yet.
-        console.error(`${label} upsert_synced_document RPC error:`, docError);
+        // Log the Postgres error code so we can identify constraint violations:
+        //   23514 = check_violation  (source_type not in allowed list)
+        //   42883 = undefined_function (RPC doesn't exist / migration not applied)
+        console.error(
+          `${label} upsert_synced_document failed — code=${docError.code} source_type=${record.source_type} msg="${docError.message}"`
+        );
         throw new Error(`upsert_synced_document failed: ${docError.message}`);
       }
       if (!documentId) {
         console.error(`${label} upsert_synced_document returned null — check RPC function exists`);
         throw new Error("upsert_synced_document returned null — is the SQL migration applied?");
       }
+      console.log(`${label} upserted → document_id=${documentId}`);
 
       // ── Step C: Delete old chunks ─────────────────────────────────────────
       const { error: deleteErr } = await supabase.rpc("delete_chunks_for_document", {

@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS synced_documents (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   workspace_id   uuid NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   integration_id uuid NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
-  source_type    text NOT NULL CHECK (source_type IN ('email', 'slack_message', 'calendar_event', 'deal', 'document', 'attachment')),
+  source_type    text NOT NULL CHECK (source_type IN ('email', 'gmail_message', 'gmail_contact', 'slack_message', 'slack_reply', 'slack_reaction', 'calendar_event', 'deal', 'document', 'attachment')),
   external_id    text NOT NULL,
   title          text,
   content        text,

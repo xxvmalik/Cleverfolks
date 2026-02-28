@@ -290,42 +290,36 @@ export const syncIntegrationFunction = inngest.createFunction(
                   gmailContactMap ?? undefined
                 );
                 if (rec) {
+                  // Debug: log first 3 records from any google-mail model so we
+                  // can verify source_type, external_id, title, and content length
+                  // before the date / transactional filters run.
+                  if (provider === "google-mail" && gmailSampleLogged < 3) {
+                    gmailSampleLogged++;
+                    console.log("[inngest] gmail normalised record:", {
+                      sample: gmailSampleLogged,
+                      model,
+                      source_type: rec.source_type,
+                      external_id: rec.external_id,
+                      title: rec.title?.slice(0, 80),
+                      content_length: rec.content?.length ?? 0,
+                      ts: rec.metadata?.ts,
+                      tsSource: rec.metadata?._ts_source,
+                    });
+                  }
+
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {
                     const meta = rec.metadata ?? {};
 
                     // Debug sample: log first 3 gmail_message records so we can
                     // verify the date fields Nango exposes and the parsed ts value.
-                    if (gmailSampleLogged < 3) {
-                      gmailSampleLogged++;
-                      console.log("[inngest] gmail sample:", {
-                        sample: gmailSampleLogged,
-                        rawInternalDate: raw.internalDate,
-                        rawDate: raw.date,
-                        rawReceivedAt: raw.receivedAt,
-                        rawPayloadHeaderDate: (
-                          (raw.payload as Record<string, unknown> | undefined)
-                            ?.headers as Array<{ name: string; value: string }> | undefined
-                        )?.find((h) => h.name?.toLowerCase() === "date")?.value,
-                        rawKeys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
-                        parsedTs: meta.ts,
-                        tsSource: meta._ts_source,
-                      });
-                    }
-
                     // Date filter: skip emails older than 6 months
                     const tsRaw = meta.ts as string | undefined;
                     const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
                     if (!emailDate || emailDate < gmailCutoff) {
                       if (!emailDate) {
-                        // ts could not be parsed — log once so we can diagnose
-                        if (gmailSampleLogged <= 3) {
-                          console.warn("[inngest] gmail: ts=undefined for email — skipping.", {
-                            rawInternalDate: raw.internalDate,
-                            rawDate: raw.date,
-                            rawReceivedAt: raw.receivedAt,
-                            rawKeys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
-                          });
-                        }
+                        console.warn(
+                          `[inngest] gmail: ts=undefined for ${rec.external_id} — check _ts_source in sample log above`
+                        );
                       }
                       gmailDateSkipped++;
                       continue;
