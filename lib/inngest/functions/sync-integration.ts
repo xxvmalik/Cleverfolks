@@ -243,6 +243,7 @@ export const syncIntegrationFunction = inngest.createFunction(
           gmailCutoff.setMonth(gmailCutoff.getMonth() - 6);
           let gmailDateSkipped = 0;
           let gmailTransactionalSkipped = 0;
+          let gmailSampleLogged = 0;
 
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
@@ -292,10 +293,40 @@ export const syncIntegrationFunction = inngest.createFunction(
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {
                     const meta = rec.metadata ?? {};
 
+                    // Debug sample: log first 3 gmail_message records so we can
+                    // verify the date fields Nango exposes and the parsed ts value.
+                    if (gmailSampleLogged < 3) {
+                      gmailSampleLogged++;
+                      console.log("[inngest] gmail sample:", {
+                        sample: gmailSampleLogged,
+                        rawInternalDate: raw.internalDate,
+                        rawDate: raw.date,
+                        rawReceivedAt: raw.receivedAt,
+                        rawPayloadHeaderDate: (
+                          (raw.payload as Record<string, unknown> | undefined)
+                            ?.headers as Array<{ name: string; value: string }> | undefined
+                        )?.find((h) => h.name?.toLowerCase() === "date")?.value,
+                        rawKeys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+                        parsedTs: meta.ts,
+                        tsSource: meta._ts_source,
+                      });
+                    }
+
                     // Date filter: skip emails older than 6 months
                     const tsRaw = meta.ts as string | undefined;
                     const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
                     if (!emailDate || emailDate < gmailCutoff) {
+                      if (!emailDate) {
+                        // ts could not be parsed — log once so we can diagnose
+                        if (gmailSampleLogged <= 3) {
+                          console.warn("[inngest] gmail: ts=undefined for email — skipping.", {
+                            rawInternalDate: raw.internalDate,
+                            rawDate: raw.date,
+                            rawReceivedAt: raw.receivedAt,
+                            rawKeys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
+                          });
+                        }
+                      }
                       gmailDateSkipped++;
                       continue;
                     }

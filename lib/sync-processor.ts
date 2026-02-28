@@ -381,15 +381,56 @@ export function normalizeGmail(raw: any, contactMap?: Record<string, string>): S
 
   const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
 
-  // Convert Date header to Unix timestamp float string (for time-range SQL)
+  // Convert email date to Unix timestamp float string (seconds) for time-range SQL.
+  // Try multiple sources in priority order because Nango may or may not include
+  // the full Gmail API payload structure depending on the sync model version.
   let ts: string | undefined;
+  let tsSource: string | undefined;
+
+  // Path 1: Date header from Gmail API payload (raw Gmail API format)
   try {
     if (dateHeader) {
       const parsed = new Date(dateHeader);
-      if (!isNaN(parsed.getTime())) ts = String(parsed.getTime() / 1000);
+      if (!isNaN(parsed.getTime())) {
+        ts = String(parsed.getTime() / 1000);
+        tsSource = "payload_header_date";
+      }
     }
   } catch { /* ignore */ }
-  if (!ts && raw.internalDate) ts = String(Number(raw.internalDate) / 1000);
+
+  // Path 2: internalDate — Gmail API ms timestamp (string or number)
+  if (!ts && raw.internalDate != null) {
+    const ms = Number(raw.internalDate);
+    if (!isNaN(ms) && ms > 1_000_000_000_000) {
+      // value is in milliseconds (13-digit epoch) → convert to seconds
+      ts = String(ms / 1000);
+      tsSource = "internalDate_ms";
+    } else if (!isNaN(ms) && ms > 1_000_000_000) {
+      // value already in seconds (10-digit epoch) — use directly
+      ts = String(ms);
+      tsSource = "internalDate_s";
+    }
+  }
+
+  // Path 3: Nango-flattened date fields (varies by Nango model version)
+  if (!ts) {
+    const rawDate =
+      raw.date ?? raw.receivedAt ?? raw.received_at ?? raw.sentAt ?? raw.sent_at;
+    if (rawDate != null) {
+      try {
+        const parsed = new Date(String(rawDate));
+        if (!isNaN(parsed.getTime())) {
+          ts = String(parsed.getTime() / 1000);
+          tsSource =
+            raw.date != null ? "raw.date"
+            : raw.receivedAt != null ? "raw.receivedAt"
+            : raw.received_at != null ? "raw.received_at"
+            : raw.sentAt != null ? "raw.sentAt"
+            : "raw.sent_at";
+        }
+      } catch { /* ignore */ }
+    }
+  }
 
   return {
     external_id: raw.id ?? "",
@@ -409,6 +450,7 @@ export function normalizeGmail(raw: any, contactMap?: Record<string, string>): S
       labels: (raw.labelIds ?? []) as string[],
       has_attachments: hasGmailAttachments(raw.payload ?? {}),
       ts,
+      _ts_source: tsSource,
       _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
