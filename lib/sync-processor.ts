@@ -360,104 +360,58 @@ export function buildGmailContactMap(contacts: any[]): Record<string, string> {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeGmail(raw: any, contactMap?: Record<string, string>): SyncRecord {
-  const headers: Record<string, string> = {};
-  for (const h of (raw.payload?.headers ?? []) as Array<{ name: string; value: string }>) {
-    headers[h.name.toLowerCase()] = h.value;
-  }
+  // Nango GmailEmail model provides flattened fields, not the raw Gmail API payload structure.
+  const senderRaw = (raw.sender as string | undefined) ?? "";
+  const subjectRaw = (raw.subject as string | undefined) ?? "(No Subject)";
+  const dateRaw = (raw.date as string | undefined) ?? "";
+  const bodyRaw = (raw.body as string | undefined) ?? "";
+  const recipientsRaw = (raw.recipients as string | undefined) ?? "";
 
-  const subject = headers["subject"] ?? "(No Subject)";
-  const fromHeader = headers["from"] ?? "";
-  const toHeader = headers["to"] ?? "";
-  const dateHeader = headers["date"] ?? "";
-
-  const { name: senderNameRaw, email: senderEmail } = parseFromHeader(fromHeader);
+  const { name: senderNameRaw, email: senderEmail } = parseFromHeader(senderRaw);
   const senderName = (contactMap && contactMap[senderEmail]) ?? senderNameRaw;
 
-  const recipients = toHeader
-    ? toHeader
+  // Parse recipients — comma-separated "Name <email>" or plain email strings
+  const recipients = recipientsRaw
+    ? recipientsRaw
         .split(",")
         .map((r) => parseFromHeader(r.trim()).email)
         .filter(Boolean)
     : [];
 
-  const { text: rawBodyText, isHtml } = extractGmailBody(raw.payload ?? {});
-  const bodyText = isHtml ? stripHtml(rawBodyText) : rawBodyText;
+  // Body: strip HTML, clean promotional footers, extract quoted-reply reference
+  const bodyText = stripHtml(bodyRaw);
   const cleanBody = removePromotionalFooter(bodyText);
   const { body, quotedRef } = extractQuotedReply(cleanBody);
-
   const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
 
-  // Convert email date to Unix timestamp float string (seconds) for time-range SQL.
-  // Try multiple sources in priority order because Nango may or may not include
-  // the full Gmail API payload structure depending on the sync model version.
+  // Convert ISO date string to Unix seconds float string for time-range SQL
   let ts: string | undefined;
-  let tsSource: string | undefined;
-
-  // Path 1: Date header from Gmail API payload (raw Gmail API format)
-  try {
-    if (dateHeader) {
-      const parsed = new Date(dateHeader);
+  if (dateRaw) {
+    try {
+      const parsed = new Date(dateRaw);
       if (!isNaN(parsed.getTime())) {
         ts = String(parsed.getTime() / 1000);
-        tsSource = "payload_header_date";
       }
-    }
-  } catch { /* ignore */ }
-
-  // Path 2: internalDate — Gmail API ms timestamp (string or number)
-  if (!ts && raw.internalDate != null) {
-    const ms = Number(raw.internalDate);
-    if (!isNaN(ms) && ms > 1_000_000_000_000) {
-      // value is in milliseconds (13-digit epoch) → convert to seconds
-      ts = String(ms / 1000);
-      tsSource = "internalDate_ms";
-    } else if (!isNaN(ms) && ms > 1_000_000_000) {
-      // value already in seconds (10-digit epoch) — use directly
-      ts = String(ms);
-      tsSource = "internalDate_s";
-    }
-  }
-
-  // Path 3: Nango-flattened date fields (varies by Nango model version)
-  if (!ts) {
-    const rawDate =
-      raw.date ?? raw.receivedAt ?? raw.received_at ?? raw.sentAt ?? raw.sent_at;
-    if (rawDate != null) {
-      try {
-        const parsed = new Date(String(rawDate));
-        if (!isNaN(parsed.getTime())) {
-          ts = String(parsed.getTime() / 1000);
-          tsSource =
-            raw.date != null ? "raw.date"
-            : raw.receivedAt != null ? "raw.receivedAt"
-            : raw.received_at != null ? "raw.received_at"
-            : raw.sentAt != null ? "raw.sentAt"
-            : "raw.sent_at";
-        }
-      } catch { /* ignore */ }
-    }
+    } catch { /* ignore */ }
   }
 
   return {
     external_id: raw.id ?? "",
     source_type: "gmail_message",
-    title: subject,
-    content: content || body || rawBodyText,
+    title: subjectRaw,
+    content: content || body || bodyText,
     metadata: {
       sender_name: senderName || undefined,
       sender_email: senderEmail || undefined,
       user_name: senderName || senderEmail || undefined,
-      from: fromHeader,
-      to: toHeader,
+      from: senderRaw,      // kept as 'from' so isTransactionalEmail filter still works
+      to: recipientsRaw,
       recipients,
-      subject,
-      date: dateHeader,
+      subject: subjectRaw,
+      date: dateRaw,
       thread_id: raw.threadId ?? undefined,
-      labels: (raw.labelIds ?? []) as string[],
-      has_attachments: hasGmailAttachments(raw.payload ?? {}),
+      labels: (raw.labelIds ?? raw.labels ?? []) as string[],
       ts,
-      _ts_source: tsSource,
-      _raw_keys: Object.keys(raw).filter((k) => !k.startsWith("_nango")),
     },
   };
 }
