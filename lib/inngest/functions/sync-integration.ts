@@ -244,6 +244,7 @@ export const syncIntegrationFunction = inngest.createFunction(
           let gmailDateSkipped = 0;
           let gmailTransactionalSkipped = 0;
           let gmailSampleLogged = 0;
+          let gmailRawLogged = 0;
 
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
@@ -275,6 +276,17 @@ export const syncIntegrationFunction = inngest.createFunction(
               }
 
               for (const raw of page.records) {
+                // Raw structure debug: log first 2 GmailEmail records before normalisation
+                // so we can see exactly where body/subject/sender/date live in Nango's model.
+                if (provider === "google-mail" && model === "GmailEmail" && gmailRawLogged < 2) {
+                  gmailRawLogged++;
+                  console.log(
+                    `[inngest] raw gmail record #${gmailRawLogged} keys:`,
+                    Object.keys(raw),
+                    JSON.stringify(raw).substring(0, 2000)
+                  );
+                }
+
                 // For Slack replies, augment lookups with the parent text map so
                 // normalizeSlackReply can prepend "[Replying to: ...]" context.
                 const lookupsForRecord =
