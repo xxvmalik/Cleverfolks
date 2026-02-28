@@ -35,8 +35,6 @@ export type QueryAnalysis = {
   /** The two periods to compare, when extractable from the query text.
    *  Null when comparison is detected but periods cannot be inferred. */
   comparisonPeriods: [ComparisonPeriod, ComparisonPeriod] | null;
-  /** True when the query is primarily about emails / inbox / Gmail. */
-  isEmailQuery: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -450,20 +448,6 @@ export function extractComparisonPeriods(
 }
 
 // ---------------------------------------------------------------------------
-// Email intent detection
-// ---------------------------------------------------------------------------
-
-/**
- * Returns true when the query is primarily about email / inbox / Gmail.
- * Triggers email-focused search strategies in the planner.
- */
-const EMAIL_INTENT_RE = /\b(e-?mails?|inbox|gmail)\b/i;
-
-export function detectEmailQuery(query: string): boolean {
-  return EMAIL_INTENT_RE.test(query);
-}
-
-// ---------------------------------------------------------------------------
 // Main exported function
 // ---------------------------------------------------------------------------
 
@@ -481,6 +465,5 @@ export function analyzeQuery(query: string, now = new Date()): QueryAnalysis {
     isAggregation: detectAggregation(query),
     isComparison,
     comparisonPeriods,
-    isEmailQuery: detectEmailQuery(query),
   };
 }

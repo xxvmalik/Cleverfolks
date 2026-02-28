@@ -7,6 +7,11 @@ import { createEmbedding } from "@/lib/embeddings";
 import { classifyIntent } from "@/lib/intent-router";
 import { planQuery } from "@/lib/query-planner";
 import { executeStrategies, type UnifiedResult } from "@/lib/strategy-executor";
+import {
+  buildIntegrationManifest,
+  detectAmbiguousQuery,
+  type IntegrationInfo,
+} from "@/lib/integrations-manifest";
 import { evaluateContext } from "@/lib/context-evaluator";
 import { searchWeb, type WebResult } from "@/lib/web-search";
 
@@ -113,6 +118,10 @@ type WorkspaceRow = {
   name: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   settings: Record<string, any> | null;
+};
+
+type IntegrationRow = {
+  provider: string;
 };
 
 type OnboardingRow = {
@@ -367,8 +376,13 @@ function getStrategyActivityLabels(
     } else if (strategy.type === "channel_search" && strategy.params.channel_name) {
       labels.push(`Searching #${strategy.params.channel_name}...`);
     } else if (strategy.type === "broad_fetch") {
+      const sts = strategy.params.source_types ?? [];
+      const noun =
+        sts.length === 1 && sts[0] === "gmail_message" ? "emails"
+        : sts.some((s) => s.startsWith("slack_")) && !sts.includes("gmail_message") ? "Slack messages"
+        : "messages";
       if (strategy.params.label) {
-        labels.push(`Fetching ${strategy.params.label} messages...`);
+        labels.push(`Fetching ${strategy.params.label} ${noun}...`);
       } else {
         const after = strategy.params.after
           ? new Date(strategy.params.after)
@@ -377,7 +391,7 @@ function getStrategyActivityLabels(
           ? new Date(strategy.params.before)
           : inheritedTimeRange?.before;
         const label = formatTimeRangeLabel({ after, before });
-        labels.push(`Fetching messages from ${label}...`);
+        labels.push(`Fetching ${noun} from ${label}...`);
       }
     } else if (strategy.type === "hybrid_aggregation") {
       if (strategy.params.label) {
@@ -412,6 +426,8 @@ type RAGResult = {
   activityLabels: string[];
   /** True when the query was a counting/ranking question — used to pick activity label */
   isAggregation: boolean;
+  /** When set, the query was ambiguous across integrations — stream this question instead of searching. */
+  clarifyingQuestion?: string;
 };
 
 /**
@@ -430,8 +446,16 @@ async function runInternalRAGSearch(
   db: ReturnType<typeof createAdminSupabaseClient>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   knowledgeProfile: Record<string, any> | null,
+  integrationManifest: IntegrationInfo[],
   businessContext?: string
 ): Promise<RAGResult> {
+  // ── Ambiguity check: ask before searching when source is unclear ────────────
+  const clarifyingQuestion = detectAmbiguousQuery(message, integrationManifest);
+  if (clarifyingQuestion) {
+    console.log(`[chat] ambiguous query detected — returning clarifying question`);
+    return { results: [], activityLabels: [], isAggregation: false, clarifyingQuestion };
+  }
+
   const analysis = analyzeQuery(message);
   let timeRange = analysis.timeRange;
   const { searchTerms } = analysis;
@@ -495,6 +519,7 @@ async function runInternalRAGSearch(
       knowledgeProfile,
       conversationHistory: history,
       queryAnalysis: effectiveAnalysis,
+      integrationManifest,
       businessContext,
     }),
     createEmbedding(message),
@@ -949,11 +974,12 @@ export async function POST(request: NextRequest) {
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const encoder = new TextEncoder();
 
-  // ── Fetch workspace/onboarding/profile + run intent router in parallel ────
+  // ── Fetch workspace/onboarding/profile/integrations + run intent router ──
   const [
     { data: workspaceRow },
     { data: onboardingRow },
     { data: profileRow },
+    { data: integrationsRows },
     routing,
   ] = await Promise.all([
     db.from("workspaces").select("name, settings").eq("id", workspaceId).single(),
@@ -967,12 +993,27 @@ export async function POST(request: NextRequest) {
       .select("profile, status")
       .eq("workspace_id", workspaceId)
       .maybeSingle(),
+    db
+      .from("integrations")
+      .select("provider")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "connected"),
     classifyIntent({
       message,
       knowledgeProfile: null,
       conversationHistory: [],
     }),
   ]);
+
+  // Build the integration manifest from connected providers
+  const connectedProviders = ((integrationsRows ?? []) as IntegrationRow[]).map(
+    (r) => r.provider
+  );
+  const integrationManifest: IntegrationInfo[] =
+    buildIntegrationManifest(connectedProviders);
+  console.log(
+    `[chat] connected integrations: [${connectedProviders.join(", ")}]`
+  );
 
   const ws = workspaceRow as WorkspaceRow | null;
   const businessContext =
@@ -1073,6 +1114,8 @@ export async function POST(request: NextRequest) {
         let didInternalSearch = false;
         // Tracks whether the query was a counting/ranking question
         let ragIsAggregation = false;
+        // When set, the query was ambiguous — stream this question instead of calling Claude
+        let clarifyingQuestion: string | null = null;
 
         console.log(`[chat] intent=${intent} routing for: "${message}"`);
 
@@ -1095,14 +1138,18 @@ export async function POST(request: NextRequest) {
           // ── Internal data: multi-strategy RAG (or profile alone if sufficient)
           if (!effectiveProfileSufficient) {
             const rag = await runInternalRAGSearch(
-              message, history, workspaceId, db, knowledgeProfile, businessContext
+              message, history, workspaceId, db, knowledgeProfile, integrationManifest, businessContext
             );
-            for (const label of rag.activityLabels) {
-              send({ type: "activity", action: label });
+            if (rag.clarifyingQuestion) {
+              clarifyingQuestion = rag.clarifyingQuestion;
+            } else {
+              for (const label of rag.activityLabels) {
+                send({ type: "activity", action: label });
+              }
+              searchResults = rag.results;
+              ragIsAggregation = rag.isAggregation;
+              didInternalSearch = true;
             }
-            searchResults = rag.results;
-            ragIsAggregation = rag.isAggregation;
-            didInternalSearch = true;
           }
 
         } else if (intent === "hybrid") {
@@ -1110,35 +1157,43 @@ export async function POST(request: NextRequest) {
           // Fix 2: enrich short queries with topic context from history
           const hybridWebQuery = enrichWebQuery(routing.web_query ?? message, history);
           const [ragResult, webRes] = await Promise.all([
-            runInternalRAGSearch(message, history, workspaceId, db, knowledgeProfile, businessContext),
+            runInternalRAGSearch(message, history, workspaceId, db, knowledgeProfile, integrationManifest, businessContext),
             searchWeb(hybridWebQuery),
           ]);
-          for (const label of ragResult.activityLabels) {
-            send({ type: "activity", action: label });
+          if (ragResult.clarifyingQuestion) {
+            clarifyingQuestion = ragResult.clarifyingQuestion;
+          } else {
+            for (const label of ragResult.activityLabels) {
+              send({ type: "activity", action: label });
+            }
+            if (webRes.length > 0) {
+              send({ type: "activity", action: "Searching the web..." });
+            }
+            searchResults = ragResult.results;
+            ragIsAggregation = ragResult.isAggregation;
+            webResults = webRes;
+            didInternalSearch = true;
+            console.log(
+              `[chat] hybrid — internal: ${searchResults.length}, web: ${webResults.length}`
+            );
           }
-          if (webRes.length > 0) {
-            send({ type: "activity", action: "Searching the web..." });
-          }
-          searchResults = ragResult.results;
-          ragIsAggregation = ragResult.isAggregation;
-          webResults = webRes;
-          didInternalSearch = true;
-          console.log(
-            `[chat] hybrid — internal: ${searchResults.length}, web: ${webResults.length}`
-          );
 
         } else if (intent === "creative") {
           // ── Creative: generate content, optionally enriched with internal data
           if (routing.search_needed) {
             const rag = await runInternalRAGSearch(
-              message, history, workspaceId, db, knowledgeProfile, businessContext
+              message, history, workspaceId, db, knowledgeProfile, integrationManifest, businessContext
             );
-            for (const label of rag.activityLabels) {
-              send({ type: "activity", action: label });
+            if (rag.clarifyingQuestion) {
+              clarifyingQuestion = rag.clarifyingQuestion;
+            } else {
+              for (const label of rag.activityLabels) {
+                send({ type: "activity", action: label });
+              }
+              searchResults = rag.results;
+              ragIsAggregation = rag.isAggregation;
+              didInternalSearch = true;
             }
-            searchResults = rag.results;
-            ragIsAggregation = rag.isAggregation;
-            didInternalSearch = true;
           }
         }
 
@@ -1257,85 +1312,92 @@ export async function POST(request: NextRequest) {
         const context = buildContextString(searchResults, webResults);
 
         // ── Step 5: Generating activity ──────────────────────────────────────
-        if (intent !== "conversational") {
+        if (intent !== "conversational" && !clarifyingQuestion) {
           send({ type: "activity", action: "Generating response..." });
         }
 
-        // ── Step 6: Call Claude with streaming ───────────────────────────────
-        // Fix 1: general_knowledge never gets a context block — no search ran,
-        // so injecting "No relevant data found" would prime the wrong response.
-        const userMessageWithContext =
-          intent === "conversational" || intent === "general_knowledge"
-            ? message
-            : `<context>\n${context}\n</context>\n\n${message}`;
-
-        const claudeMessages: Anthropic.MessageParam[] = [
-          ...history,
-          { role: "user", content: userMessageWithContext },
-        ];
-
-        const claudeStream = await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 2048,
-          system: effectiveSystemPrompt,
-          messages: claudeMessages,
-          stream: true,
-        });
-
-        // ── Step 7: Stream text tokens ───────────────────────────────────────
-        // We buffer the last 80 characters to catch the [ROLE_UPDATE: ...] tag
-        // that may arrive split across multiple delta tokens.  Once we detect
-        // the opening "[ROLE_UPDATE" in the buffer we hold back further tokens
-        // until the closing "]" arrives or the stream ends, then discard the tag.
+        // ── Step 6: Generate response (Claude or clarifying question) ────────
         let fullResponse = "";
-        let tagBuffer = "";          // accumulates potential tag characters
-        let suppressingTag = false;  // true once "[ROLE_UPDATE" detected
 
-        for await (const event of claudeStream) {
-          if (
-            event.type === "content_block_delta" &&
-            event.delta.type === "text_delta"
-          ) {
-            const chunk = event.delta.text;
-            fullResponse += chunk;
+        if (clarifyingQuestion) {
+          // Short-circuit: stream the clarifying question directly, skip Claude.
+          fullResponse = clarifyingQuestion;
+          send({ type: "text", text: clarifyingQuestion });
+        } else {
+          // Fix 1: general_knowledge never gets a context block — no search ran,
+          // so injecting "No relevant data found" would prime the wrong response.
+          const userMessageWithContext =
+            intent === "conversational" || intent === "general_knowledge"
+              ? message
+              : `<context>\n${context}\n</context>\n\n${message}`;
 
-            if (suppressingTag) {
-              // We are inside the tag — buffer until "]" found
-              tagBuffer += chunk;
-              if (tagBuffer.includes("]")) {
-                suppressingTag = false;
-                tagBuffer = "";
-              }
-              // Don't send anything while suppressing
-            } else {
-              // Check if this chunk or its tail opens a tag
-              const combined = tagBuffer + chunk;
-              const tagStart = combined.indexOf("[ROLE_UPDATE");
-              if (tagStart !== -1) {
-                // Send everything before the tag start
-                const safe = combined.slice(0, tagStart);
-                if (safe) send({ type: "text", text: safe });
-                suppressingTag = true;
-                tagBuffer = combined.slice(tagStart);
-                // If the entire tag is already in buffer, close it immediately
+          const claudeMessages: Anthropic.MessageParam[] = [
+            ...history,
+            { role: "user", content: userMessageWithContext },
+          ];
+
+          const claudeStream = await anthropic.messages.create({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2048,
+            system: effectiveSystemPrompt,
+            messages: claudeMessages,
+            stream: true,
+          });
+
+          // ── Step 7: Stream text tokens ─────────────────────────────────────
+          // We buffer the last 80 characters to catch the [ROLE_UPDATE: ...] tag
+          // that may arrive split across multiple delta tokens.  Once we detect
+          // the opening "[ROLE_UPDATE" in the buffer we hold back further tokens
+          // until the closing "]" arrives or the stream ends, then discard the tag.
+          let tagBuffer = "";          // accumulates potential tag characters
+          let suppressingTag = false;  // true once "[ROLE_UPDATE" detected
+
+          for await (const event of claudeStream) {
+            if (
+              event.type === "content_block_delta" &&
+              event.delta.type === "text_delta"
+            ) {
+              const chunk = event.delta.text;
+              fullResponse += chunk;
+
+              if (suppressingTag) {
+                // We are inside the tag — buffer until "]" found
+                tagBuffer += chunk;
                 if (tagBuffer.includes("]")) {
                   suppressingTag = false;
                   tagBuffer = "";
                 }
+                // Don't send anything while suppressing
               } else {
-                // No tag — flush safe prefix, keep last 12 chars as lookahead
-                const LOOKAHEAD = 12;
-                const safe = combined.slice(0, Math.max(0, combined.length - LOOKAHEAD));
-                if (safe) send({ type: "text", text: safe });
-                tagBuffer = combined.slice(Math.max(0, combined.length - LOOKAHEAD));
+                // Check if this chunk or its tail opens a tag
+                const combined = tagBuffer + chunk;
+                const tagStart = combined.indexOf("[ROLE_UPDATE");
+                if (tagStart !== -1) {
+                  // Send everything before the tag start
+                  const safe = combined.slice(0, tagStart);
+                  if (safe) send({ type: "text", text: safe });
+                  suppressingTag = true;
+                  tagBuffer = combined.slice(tagStart);
+                  // If the entire tag is already in buffer, close it immediately
+                  if (tagBuffer.includes("]")) {
+                    suppressingTag = false;
+                    tagBuffer = "";
+                  }
+                } else {
+                  // No tag — flush safe prefix, keep last 12 chars as lookahead
+                  const LOOKAHEAD = 12;
+                  const safe = combined.slice(0, Math.max(0, combined.length - LOOKAHEAD));
+                  if (safe) send({ type: "text", text: safe });
+                  tagBuffer = combined.slice(Math.max(0, combined.length - LOOKAHEAD));
+                }
               }
             }
           }
-        }
 
-        // Flush any remaining buffered text that wasn't a tag
-        if (tagBuffer && !suppressingTag) {
-          send({ type: "text", text: tagBuffer });
+          // Flush any remaining buffered text that wasn't a tag
+          if (tagBuffer && !suppressingTag) {
+            send({ type: "text", text: tagBuffer });
+          }
         }
 
         // ── Sources (deduplicated by document_id) ────────────────────────────

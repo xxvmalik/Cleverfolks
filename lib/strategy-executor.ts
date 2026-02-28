@@ -60,6 +60,10 @@ async function runStrategy(
     // dedicated channels: count ALL messages (no keyword filter)
     // other channels: count keyword-matched messages only
     // sample: chronological broad fetch for qualitative context
+    const sourceTypes = strategy.params.source_types?.length
+      ? strategy.params.source_types
+      : null;
+
     const [dedicatedResult, othersResult, sampleResult] = await Promise.all([
       dedicatedChannels.length > 0
         ? adminSupabase.rpc("aggregate_by_person_in_channels", {
@@ -68,6 +72,7 @@ async function runStrategy(
             p_after: strategy.params.after ?? null,
             p_before: strategy.params.before ?? null,
             p_limit: 100,
+            p_source_types: sourceTypes,
           })
         : Promise.resolve({ data: [], error: null }),
       keywords.length > 0
@@ -78,6 +83,7 @@ async function runStrategy(
             p_after: strategy.params.after ?? null,
             p_before: strategy.params.before ?? null,
             p_limit: 100,
+            p_source_types: sourceTypes,
           })
         : Promise.resolve({ data: [], error: null }),
       adminSupabase.rpc("fetch_chunks_by_timerange", {

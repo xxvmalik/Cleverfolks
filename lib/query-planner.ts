@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { QueryAnalysis } from "./query-analyzer";
+import type { IntegrationInfo } from "./integrations-manifest";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -126,6 +127,32 @@ function buildKnownChannelsSection(profile: Record<string, any>): string {
   return `KNOWN CHANNELS:\n${lines.join("\n")}`;
 }
 
+function buildConnectedIntegrationsSection(
+  integrations: IntegrationInfo[],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  profile: Record<string, any> | null
+): string {
+  if (!integrations.length) return "";
+
+  const slackChannels: Array<{ name?: string }> = profile?.channels ?? [];
+  const channelNames = slackChannels
+    .filter((c) => c.name)
+    .slice(0, 10)
+    .map((c) => `#${c.name!}`);
+
+  const lines = integrations.map((i) => {
+    let line = `- ${i.name}: ${i.description}`;
+    if (i.provider === "slack" && channelNames.length) {
+      line += ` (channels: ${channelNames.join(", ")})`;
+    }
+    // Annotate exact source_type values so the planner can use them in source_types param
+    line += `  [source_types: ${i.sourceTypes.join(", ")}]`;
+    return line;
+  });
+
+  return `CONNECTED INTEGRATIONS (data available for this workspace):\n${lines.join("\n")}`;
+}
+
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
 function buildPlannerPrompt(
@@ -134,6 +161,7 @@ function buildPlannerPrompt(
   knowledgeProfile: Record<string, any> | null,
   conversationHistory: Array<{ role: string; content: string }>,
   queryAnalysis: QueryAnalysis,
+  integrationManifest: IntegrationInfo[],
   businessContext?: string
 ): string {
   const recentHistory =
@@ -158,6 +186,11 @@ function buildPlannerPrompt(
       ? [teamSection, channelSection].filter(Boolean).join("\n\n")
       : "(no profile available)";
 
+  const integrationsBlock = buildConnectedIntegrationsSection(
+    integrationManifest,
+    knowledgeProfile
+  );
+
   const businessContextBlock = businessContext
     ? `BUSINESS CONTEXT:\n${businessContext}`
     : "";
@@ -174,14 +207,10 @@ function buildPlannerPrompt(
     ? `\n⚠️  COMPARISON DETECTED: This query compares two time periods. You MUST output TWO separate strategies (one per period) — e.g. two broad_fetch strategies with different after/before ranges, or two hybrid_aggregation strategies for counting comparisons. Use "label" param on each strategy with the period name (e.g. "Last week", "This week").\n`
     : "";
 
-  const emailFlag = queryAnalysis.isEmailQuery
-    ? `\n⚠️  EMAIL QUERY DETECTED: The user is asking about emails/inbox/Gmail. Use broad_fetch with source_types=["gmail_message"] for summary or recent email queries. For a specific email topic, use semantic (it searches all source types including email). For queries that combine email AND Slack (e.g. "search my emails and Slack for X"), use semantic alone — it already searches everything.\n`
-    : "";
-
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
 
 ${profileBlock}
-${businessContextBlock ? `\n${businessContextBlock}\n` : ""}
+${integrationsBlock ? `\n${integrationsBlock}\n` : ""}${businessContextBlock ? `\n${businessContextBlock}\n` : ""}
 CRITICAL INSTRUCTIONS:
 1. When the user mentions a ROLE (designer, manager, support lead, etc.), first check if any team member above has that role. If yes, use person_search with their exact name.
 2. If NO team member matches the role, think about which CHANNEL relates to that role and use channel_search. Examples: 'designer' → #graphics-contents, 'support' → #order-complaints, 'payments' → #payment-complaints.
@@ -191,7 +220,7 @@ CRITICAL INSTRUCTIONS:
 6. You can and should combine strategies when helpful (e.g., channel_search + person_search).
 7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
 8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), ALWAYS use hybrid_aggregation. Identify DEDICATED channels (channels whose entire purpose is about the query topic — count ALL their messages), plus extract 6-10 keywords for catching topic mentions in other channels.
-9. For EMAIL/INBOX/GMAIL queries: use broad_fetch with source_types=["gmail_message"] for broad/summary/recent requests. Use semantic for specific email topics. For queries that ask to search BOTH email and Slack, use semantic alone (it already covers all source types).
+9. Use CONNECTED INTEGRATIONS above to understand what data is available. When the user targets a specific integration (e.g. "my emails", "Slack messages", "deals"), use source_types on broad_fetch or hybrid_aggregation to scope the search to that integration's source_types. When the query spans all integrations or is ambiguous, omit source_types and search everything.
 
 HYBRID_AGGREGATION GUIDE:
 - dedicated_channels: list channel names (without #) that are entirely about the query topic
@@ -219,8 +248,9 @@ EXAMPLES:
 - "Rank everyone by complaints reported" → hybrid_aggregation with dedicated_channels=["order-complaints","payment-complaints"], keywords=["complaint","issue","problem","failed","refund"]
 - "What are my recent emails?" → broad_fetch with source_types=["gmail_message"] and time range (last 7 days)
 - "Summarise my emails this week" → broad_fetch with source_types=["gmail_message"] and this week's time range
-- "Any emails about the contract?" → semantic with query "contract emails"
-- "Search my emails and Slack for X" → semantic (searches all source types at once)
+- "Show me recent deals" → broad_fetch with source_types=["deal"] and recent time range
+- "What's happening across all my tools?" → broad_fetch without source_types (searches all integrations)
+- "Search my emails and Slack for contract issues" → semantic without source_types (searches all source types at once)
 
 Available strategies:
 - semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match. Do NOT use for counting/ranking questions.
@@ -233,12 +263,11 @@ Available strategies:
 
 RECENT CONVERSATION:
 ${recentHistory}
-${aggregationFlag}${comparisonFlag}${emailFlag}
+${aggregationFlag}${comparisonFlag}
 USER MESSAGE: "${message}"
 EXTRACTED TIME RANGE: ${timeRangeInfo}
 IS AGGREGATION QUERY: ${queryAnalysis.isAggregation ? "YES — must use hybrid_aggregation" : "no"}
 IS COMPARISON QUERY: ${queryAnalysis.isComparison ? "YES — must output two strategies with different time ranges" : "no"}
-IS EMAIL QUERY: ${queryAnalysis.isEmailQuery ? "YES — prioritise gmail_message source_types in broad_fetch" : "no"}
 
 Return ONLY a valid JSON object (no markdown, no explanation):
 {
@@ -254,7 +283,7 @@ Return ONLY a valid JSON object (no markdown, no explanation):
         "apply_to": "all or strategy index number for surrounding_context",
         "dedicated_channels": ["channel-name-1", "channel-name-2"],
         "keywords": ["keyword1", "keyword2", "keyword3"],
-        "source_types": ["gmail_message"]
+        "source_types": ["source_type_value"]
       }
     }
   ],
@@ -269,6 +298,7 @@ export async function planQuery({
   knowledgeProfile,
   conversationHistory,
   queryAnalysis,
+  integrationManifest,
   businessContext,
 }: {
   message: string;
@@ -276,6 +306,7 @@ export async function planQuery({
   knowledgeProfile: Record<string, any> | null;
   conversationHistory: Array<{ role: string; content: string }>;
   queryAnalysis: QueryAnalysis;
+  integrationManifest?: IntegrationInfo[];
   businessContext?: string;
 }): Promise<QueryPlan> {
   try {
@@ -285,6 +316,7 @@ export async function planQuery({
       knowledgeProfile,
       conversationHistory,
       queryAnalysis,
+      integrationManifest ?? [],
       businessContext
     );
 
