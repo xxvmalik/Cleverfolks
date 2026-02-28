@@ -33,6 +33,9 @@ export type SearchStrategy = {
     /** Human-readable period label for comparison queries, e.g. "Feb 14–20".
      *  When set, results from this strategy are tagged with this label. */
     label?: string;
+    /** broad_fetch: restrict to specific source types, e.g. ["gmail_message"].
+     *  When omitted, all source types are included. */
+    source_types?: string[];
   };
 };
 
@@ -171,6 +174,10 @@ function buildPlannerPrompt(
     ? `\n⚠️  COMPARISON DETECTED: This query compares two time periods. You MUST output TWO separate strategies (one per period) — e.g. two broad_fetch strategies with different after/before ranges, or two hybrid_aggregation strategies for counting comparisons. Use "label" param on each strategy with the period name (e.g. "Last week", "This week").\n`
     : "";
 
+  const emailFlag = queryAnalysis.isEmailQuery
+    ? `\n⚠️  EMAIL QUERY DETECTED: The user is asking about emails/inbox/Gmail. Use broad_fetch with source_types=["gmail_message"] for summary or recent email queries. For a specific email topic, use semantic (it searches all source types including email). For queries that combine email AND Slack (e.g. "search my emails and Slack for X"), use semantic alone — it already searches everything.\n`
+    : "";
+
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
 
 ${profileBlock}
@@ -184,6 +191,7 @@ CRITICAL INSTRUCTIONS:
 6. You can and should combine strategies when helpful (e.g., channel_search + person_search).
 7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
 8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), ALWAYS use hybrid_aggregation. Identify DEDICATED channels (channels whose entire purpose is about the query topic — count ALL their messages), plus extract 6-10 keywords for catching topic mentions in other channels.
+9. For EMAIL/INBOX/GMAIL queries: use broad_fetch with source_types=["gmail_message"] for broad/summary/recent requests. Use semantic for specific email topics. For queries that ask to search BOTH email and Slack, use semantic alone (it already covers all source types).
 
 HYBRID_AGGREGATION GUIDE:
 - dedicated_channels: list channel names (without #) that are entirely about the query topic
@@ -209,6 +217,10 @@ EXAMPLES:
 - "How many messages did each person send last week?" → hybrid_aggregation with dedicated_channels=[], keywords=[], time range (counts everything)
 - "Top 5 most active people this month?" → hybrid_aggregation with dedicated_channels=[], keywords=[], time range
 - "Rank everyone by complaints reported" → hybrid_aggregation with dedicated_channels=["order-complaints","payment-complaints"], keywords=["complaint","issue","problem","failed","refund"]
+- "What are my recent emails?" → broad_fetch with source_types=["gmail_message"] and time range (last 7 days)
+- "Summarise my emails this week" → broad_fetch with source_types=["gmail_message"] and this week's time range
+- "Any emails about the contract?" → semantic with query "contract emails"
+- "Search my emails and Slack for X" → semantic (searches all source types at once)
 
 Available strategies:
 - semantic: Vector + keyword hybrid search. Use as a fallback when no person/channel match. Do NOT use for counting/ranking questions.
@@ -221,11 +233,12 @@ Available strategies:
 
 RECENT CONVERSATION:
 ${recentHistory}
-${aggregationFlag}${comparisonFlag}
+${aggregationFlag}${comparisonFlag}${emailFlag}
 USER MESSAGE: "${message}"
 EXTRACTED TIME RANGE: ${timeRangeInfo}
 IS AGGREGATION QUERY: ${queryAnalysis.isAggregation ? "YES — must use hybrid_aggregation" : "no"}
 IS COMPARISON QUERY: ${queryAnalysis.isComparison ? "YES — must output two strategies with different time ranges" : "no"}
+IS EMAIL QUERY: ${queryAnalysis.isEmailQuery ? "YES — prioritise gmail_message source_types in broad_fetch" : "no"}
 
 Return ONLY a valid JSON object (no markdown, no explanation):
 {
@@ -240,7 +253,8 @@ Return ONLY a valid JSON object (no markdown, no explanation):
         "before": "ISO date string if time-filtered",
         "apply_to": "all or strategy index number for surrounding_context",
         "dedicated_channels": ["channel-name-1", "channel-name-2"],
-        "keywords": ["keyword1", "keyword2", "keyword3"]
+        "keywords": ["keyword1", "keyword2", "keyword3"],
+        "source_types": ["gmail_message"]
       }
     }
   ],

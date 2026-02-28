@@ -181,6 +181,9 @@ async function runStrategy(
   }
 
   if (strategy.type === "broad_fetch") {
+    const sourceTypes = strategy.params.source_types?.length
+      ? strategy.params.source_types
+      : null;
     const { data, error } = await adminSupabase.rpc(
       "fetch_chunks_by_timerange",
       {
@@ -188,6 +191,7 @@ async function runStrategy(
         p_after: strategy.params.after ?? null,
         p_before: strategy.params.before ?? null,
         p_limit: 150,
+        p_source_types: sourceTypes,
       }
     );
     if (error) {
