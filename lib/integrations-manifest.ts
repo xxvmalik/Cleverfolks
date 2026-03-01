@@ -87,6 +87,25 @@ export function queryMatchesConnectedIntegration(
   return integrations.some((i) => i.signalPattern.test(query));
 }
 
+/**
+ * Matches queries that explicitly ask about ALL connected integrations rather
+ * than a single one — e.g. "across all my tools", "everything connected",
+ * "all my data sources".  These should bypass the profile-sufficient gate and
+ * search every source type with no filter.
+ *
+ * Only fires when the workspace has ≥ 2 integrations connected (otherwise
+ * "all tools" is a single tool and the per-provider signal handles it).
+ */
+const CROSS_INTEGRATION_RE =
+  /\b(?:(?:all|every|each\s+of)\s+(?:my\s+)?(?:connected\s+)?(?:tools?|integrations?|sources?|platforms?|apps?|channels?|data(?:\s+sources?)?|systems?)|across\s+(?:all\s+)?(?:my\s+)?(?:tools?|integrations?|sources?|platforms?|apps?|data|systems?|everything)|everything\s+(?:connected|integrated|i(?:'ve|'m)\s+connected\s+to|hooked\s+up)|all\s+(?:of\s+)?(?:my\s+)?(?:connected|integrated)\s+(?:tools?|apps?|services?|data|systems?|platforms?))\b/i;
+
+export function queryMatchesCrossIntegrationSignal(
+  query: string,
+  integrations: IntegrationInfo[]
+): boolean {
+  return integrations.length >= 2 && CROSS_INTEGRATION_RE.test(query);
+}
+
 // ── Ambiguity detection ───────────────────────────────────────────────────────
 
 /** Providers that represent person-to-person communication. */

@@ -11,6 +11,7 @@ import {
   buildIntegrationManifest,
   detectAmbiguousQuery,
   queryMatchesConnectedIntegration,
+  queryMatchesCrossIntegrationSignal,
   type IntegrationInfo,
 } from "@/lib/integrations-manifest";
 import { evaluateContext } from "@/lib/context-evaluator";
@@ -1083,14 +1084,21 @@ export async function POST(request: NextRequest) {
     message,
     integrationManifest
   );
+  const matchesCrossIntegration = queryMatchesCrossIntegrationSignal(
+    message,
+    integrationManifest
+  );
   const PERSONAL_DATA_RE =
     /\b(me|my|mine|i've|i'm|our|ours|we|us|team|workspace)\b/i;
   const isPersonalQuery =
     PERSONAL_DATA_RE.test(message) || quickAnalysis.timeRange !== null;
   // Force internal search when: (a) aggregation query detected, OR
-  // (b) query mentions a connected integration AND is about personal/team data
+  // (b) query mentions a connected integration AND is about personal/team data, OR
+  // (c) query explicitly asks about ALL connected integrations ("across all my tools")
   const forceInternalSearch =
-    quickAnalysis.isAggregation || (matchesIntegration && isPersonalQuery);
+    quickAnalysis.isAggregation ||
+    (matchesIntegration && isPersonalQuery) ||
+    matchesCrossIntegration;
 
   // Fix 1: Override system prompt for general knowledge to prevent the model
   // from mentioning data searches that never happened.
