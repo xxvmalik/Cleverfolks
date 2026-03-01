@@ -136,7 +136,8 @@ type OnboardingRow = {
 function buildSystemPrompt(
   workspace: WorkspaceRow | null,
   onboarding: OnboardingRow | null,
-  knowledgeProfile: KnowledgeProfileRow | null
+  knowledgeProfile: KnowledgeProfileRow | null,
+  connectedIntegrations: IntegrationInfo[] = []
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
@@ -244,7 +245,28 @@ ROLE DISCOVERY:
   - This tag is invisible to the user and is used to update the company profile automatically.
 - When a user CORRECTS a role with a different name (e.g., "no, it's actually Hassan"):
   - Acknowledge the correction naturally
-  - Append: [ROLE_UPDATE: name=<correct person name>, role=<role title>]`;
+  - Append: [ROLE_UPDATE: name=<correct person name>, role=<role title>]
+${connectedIntegrations.length > 1 ? `
+SOURCE TRANSPARENCY — CRITICAL:
+This workspace has ${connectedIntegrations.length} connected integrations: ${connectedIntegrations.map((i) => i.name).join(", ")}.
+When you search across multiple sources, ALWAYS tell the user which sources you checked and what you found (or didn't find) from each. For example:
+- "I checked your ${connectedIntegrations.map((i) => i.name).join(" and ")}. Here's what I found: ..."
+- If one source had results but another didn't, say so explicitly: "Your Slack had several mentions of X. Your Gmail had no relevant results for this query."
+- If all sources had results, organize by source or by theme — whichever is clearer.
+- NEVER silently omit a source. Users need to trust that you actually searched everything they asked about.
+This applies to ALL cross-source queries, not just specific topics.
+` : ""}
+CAPABILITIES:
+- Search and analyse data across all connected integrations${connectedIntegrations.length > 0 ? ` (${connectedIntegrations.map((i) => i.name).join(", ")})` : ""}
+- Answer questions about team activity, communications, trends, and patterns
+- Summarise and compare data across time periods
+- Identify urgent issues, bottlenecks, and patterns
+
+LIMITATIONS (for now):
+- Cannot SEND emails, messages, or take actions in connected tools — read-only access
+- Cannot access real-time data — syncs hourly, so the most recent messages may not appear yet
+- Cannot access private Slack channels unless @Cleverfolks AI is invited
+When a user asks you to perform an action you can't do (like sending emails), acknowledge what you CAN do (e.g. "I can find your team's email addresses and help you draft the email") and clearly state the limitation (e.g. "Sending emails isn't available yet — it's coming soon with SKYLER").`;
 }
 
 // ── Vague time reference detection ────────────────────────────────────────────
@@ -1053,7 +1075,8 @@ export async function POST(request: NextRequest) {
   const systemPrompt = buildSystemPrompt(
     ws,
     onboardingRow as OnboardingRow | null,
-    profileRow as KnowledgeProfileRow | null
+    profileRow as KnowledgeProfileRow | null,
+    integrationManifest
   );
 
   const knowledgeProfile =
