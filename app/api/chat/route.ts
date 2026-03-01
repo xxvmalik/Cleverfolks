@@ -10,6 +10,7 @@ import { executeStrategies, type UnifiedResult } from "@/lib/strategy-executor";
 import {
   buildIntegrationManifest,
   detectAmbiguousQuery,
+  queryMatchesConnectedIntegration,
   type IntegrationInfo,
 } from "@/lib/integrations-manifest";
 import { evaluateContext } from "@/lib/context-evaluator";
@@ -1054,14 +1055,6 @@ export async function POST(request: NextRequest) {
     profileRow as KnowledgeProfileRow | null
   );
 
-  // Fix 1: Override system prompt for general knowledge to prevent the model
-  // from mentioning data searches that never happened.
-  const effectiveSystemPrompt =
-    routing.intent === "general_knowledge"
-      ? systemPrompt +
-        "\n\nThis is a general knowledge question. Answer directly from your training knowledge. Do NOT mention searching the user's data, connected systems, or available context. Do NOT say 'I couldn't find that in the available data.' Just answer the question naturally. If relevant, relate it back to their business context."
-      : systemPrompt;
-
   const knowledgeProfile =
     (profileRow as KnowledgeProfileRow | null)?.profile ?? null;
 
@@ -1077,6 +1070,36 @@ export async function POST(request: NextRequest) {
     ).length > 0;
   const effectiveProfileSufficient =
     routing.profile_sufficient && profileReady;
+
+  // ── Deterministic intent safeguard ──────────────────────────────────────
+  // The LLM intent classifier can misroute queries that clearly need internal
+  // data (e.g. aggregation, integration-specific signals).  Run a quick
+  // deterministic check so we can override the routing when necessary.
+  // This is fast (pure regex, no API calls) and protects against two failure
+  // modes: (1) classifier returns wrong intent, (2) classifier marks
+  // profile_sufficient=true for queries that need actual SQL/RAG data.
+  const quickAnalysis = analyzeQuery(message);
+  const matchesIntegration = queryMatchesConnectedIntegration(
+    message,
+    integrationManifest
+  );
+  const PERSONAL_DATA_RE =
+    /\b(me|my|mine|i've|i'm|our|ours|we|us|team|workspace)\b/i;
+  const isPersonalQuery =
+    PERSONAL_DATA_RE.test(message) || quickAnalysis.timeRange !== null;
+  // Force internal search when: (a) aggregation query detected, OR
+  // (b) query mentions a connected integration AND is about personal/team data
+  const forceInternalSearch =
+    quickAnalysis.isAggregation || (matchesIntegration && isPersonalQuery);
+
+  // Fix 1: Override system prompt for general knowledge to prevent the model
+  // from mentioning data searches that never happened.
+  // Skip the override when forceInternalSearch will reroute this to internal_data.
+  const effectiveSystemPrompt =
+    routing.intent === "general_knowledge" && !forceInternalSearch
+      ? systemPrompt +
+        "\n\nThis is a general knowledge question. Answer directly from your training knowledge. Do NOT mention searching the user's data, connected systems, or available context. Do NOT say 'I couldn't find that in the available data.' Just answer the question naturally. If relevant, relate it back to their business context."
+      : systemPrompt;
 
   let conversationId: string | null = inputConversationId ?? null;
   let isNewConversation = false;
@@ -1137,7 +1160,7 @@ export async function POST(request: NextRequest) {
         // ── Step 3: Route based on intent ────────────────────────────────────
         let searchResults: UnifiedResult[] = [];
         let webResults: WebResult[] = [];
-        const intent = routing.intent;
+        let intent = routing.intent;
         // Tracks whether an internal RAG search was performed so we know
         // whether to run the agentic evaluation loop afterward.
         let didInternalSearch = false;
@@ -1145,6 +1168,22 @@ export async function POST(request: NextRequest) {
         let ragIsAggregation = false;
         // When set, the query was ambiguous — stream this question instead of calling Claude
         let clarifyingQuestion: string | null = null;
+
+        // ── Deterministic intent override ────────────────────────────────────
+        // When the deterministic safeguard detects a query that clearly needs
+        // internal data but the LLM classifier routed elsewhere, override.
+        if (
+          forceInternalSearch &&
+          intent !== "internal_data" &&
+          intent !== "hybrid"
+        ) {
+          console.log(
+            `[chat] intent safeguard: ${intent} → internal_data ` +
+            `(isAggregation=${quickAnalysis.isAggregation} ` +
+            `matchesIntegration=${matchesIntegration})`
+          );
+          intent = "internal_data";
+        }
 
         console.log(`[chat] intent=${intent} routing for: "${message}"`);
 
@@ -1165,7 +1204,9 @@ export async function POST(request: NextRequest) {
 
         } else if (intent === "internal_data") {
           // ── Internal data: multi-strategy RAG (or profile alone if sufficient)
-          if (!effectiveProfileSufficient) {
+          // forceInternalSearch bypasses the profile-sufficient gate — aggregation
+          // and integration-specific queries always need SQL/RAG, not just profile.
+          if (!effectiveProfileSufficient || forceInternalSearch) {
             const rag = await runInternalRAGSearch(
               message, history, workspaceId, db, knowledgeProfile, integrationManifest, businessContext
             );

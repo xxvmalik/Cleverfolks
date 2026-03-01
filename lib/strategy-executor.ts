@@ -96,6 +96,7 @@ async function runStrategy(
         p_after: strategy.params.after ?? null,
         p_before: strategy.params.before ?? null,
         p_limit: 300,
+        p_source_types: sourceTypes,
       }),
     ]);
 

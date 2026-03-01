@@ -14,6 +14,10 @@ export type IntegrationInfo = {
   description: string;
   /** source_type values written to synced_documents for this integration. */
   sourceTypes: string[];
+  /** Regex that detects this integration being mentioned in a user query.
+   *  Used by the deterministic intent safeguard to ensure the RAG pipeline
+   *  runs for queries that target a specific data source. */
+  signalPattern: RegExp;
 };
 
 // ── Static provider registry ──────────────────────────────────────────────────
@@ -25,26 +29,31 @@ const PROVIDER_CONFIG: Record<string, Omit<IntegrationInfo, "provider">> = {
     name: "Slack",
     description: "team messages across channels",
     sourceTypes: ["slack_message", "slack_reply"],
+    signalPattern: /\b(slack|channel|#\w+)\b/i,
   },
   "google-mail": {
     name: "Gmail",
     description: "email communications (senders, recipients, threads)",
     sourceTypes: ["gmail_message"],
+    signalPattern: /\b(e-?mails?|emailed|gmail|inbox)\b/i,
   },
   "hubspot": {
     name: "HubSpot",
     description: "CRM data (deals, contacts, pipeline)",
     sourceTypes: ["deal"],
+    signalPattern: /\b(hubspot|deals?|pipeline|crm)\b/i,
   },
   "google-calendar": {
     name: "Google Calendar",
     description: "calendar events and meetings",
     sourceTypes: ["calendar_event"],
+    signalPattern: /\b(calendar|meetings?|events?|schedule[ds]?)\b/i,
   },
   "google-drive": {
     name: "Google Drive",
     description: "documents and files",
     sourceTypes: ["document", "attachment"],
+    signalPattern: /\b(google\s+drive|gdrive|drive\s+files?|shared\s+docs?)\b/i,
   },
 };
 
@@ -63,6 +72,21 @@ export function buildIntegrationManifest(
   });
 }
 
+// ── Integration signal matching ───────────────────────────────────────────────
+
+/**
+ * Returns true when the query text mentions ANY connected integration.
+ * Used as a deterministic safeguard so the RAG pipeline always runs for
+ * queries that target a specific data source.  Adding a new integration
+ * requires ONLY adding an entry to PROVIDER_CONFIG — this function is generic.
+ */
+export function queryMatchesConnectedIntegration(
+  query: string,
+  integrations: IntegrationInfo[]
+): boolean {
+  return integrations.some((i) => i.signalPattern.test(query));
+}
+
 // ── Ambiguity detection ───────────────────────────────────────────────────────
 
 /** Providers that represent person-to-person communication. */
@@ -75,9 +99,6 @@ const COMM_PROVIDERS = new Set(["slack", "google-mail"]);
  */
 const AMBIGUOUS_COMM_RE =
   /\b(messages?\s+(?:i|me)\s+(?:received|got|sent)|sent\s+me|recent\s+(?:communications?|updates?|activity))\b/i;
-
-const EMAIL_SIGNAL_RE = /\b(email|gmail|e-mail|inbox)\b/i;
-const SLACK_SIGNAL_RE = /\b(slack|channel|#\w+)\b/i;
 
 /**
  * When the query is ambiguous across multiple connected communication integrations
@@ -94,7 +115,8 @@ export function detectAmbiguousQuery(
   );
   if (commIntegrations.length < 2) return null;
   if (!AMBIGUOUS_COMM_RE.test(query)) return null;
-  if (EMAIL_SIGNAL_RE.test(query) || SLACK_SIGNAL_RE.test(query)) return null;
+  // If the query specifically mentions one integration, it's not ambiguous
+  if (commIntegrations.some((i) => i.signalPattern.test(query))) return null;
 
   const names = commIntegrations.map((i) => i.name);
   const listStr =
