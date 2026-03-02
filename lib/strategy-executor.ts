@@ -33,6 +33,9 @@ type ExecutorParams = {
    * results with conversation context without re-running the primary query.
    */
   seedResults?: UnifiedResult[];
+  /** Number of distinct source types across all connected integrations.
+   *  Used to scale broad_fetch limits for cross-source queries. */
+  connectedSourceTypeCount?: number;
 };
 
 // ── Individual strategy runners ───────────────────────────────────────────────
@@ -42,7 +45,8 @@ async function runStrategy(
   workspaceId: string,
   queryEmbedding: number[],
   queryText: string,
-  adminSupabase: AdminDb
+  adminSupabase: AdminDb,
+  connectedSourceTypeCount?: number
 ): Promise<UnifiedResult[]> {
   // These are handled at the orchestration level, not here
   if (
@@ -196,13 +200,26 @@ async function runStrategy(
     const sourceTypes = strategy.params.source_types?.length
       ? strategy.params.source_types
       : null;
+
+    // Scale limit based on number of source types being queried.
+    // Cross-source queries need more messages to cross-reference issues
+    // with resolutions across integrations.
+    const querySourceCount = sourceTypes
+      ? sourceTypes.length
+      : (connectedSourceTypeCount ?? 1);
+    // 1 source type → 150 (unchanged), 2 → 100, 3 → 150, 4+ → 200
+    // Formula: 50 per source type, minimum 150 for single-source
+    const broadFetchLimit = querySourceCount <= 1
+      ? 150
+      : Math.min(querySourceCount * 50, 200);
+
     const { data, error } = await adminSupabase.rpc(
       "fetch_chunks_by_timerange",
       {
         p_workspace_id: workspaceId,
         p_after: strategy.params.after ?? null,
         p_before: strategy.params.before ?? null,
-        p_limit: 150,
+        p_limit: broadFetchLimit,
         p_source_types: sourceTypes,
       }
     );
@@ -317,6 +334,7 @@ export async function executeStrategies({
   queryText,
   adminSupabase,
   seedResults,
+  connectedSourceTypeCount,
 }: ExecutorParams): Promise<UnifiedResult[]> {
   const mainStrategies = strategies.filter(
     (s) => s.type !== "surrounding_context"
@@ -328,7 +346,7 @@ export async function executeStrategies({
   // Run all non-surrounding strategies in parallel
   const strategyResultArrays: UnifiedResult[][] = await Promise.all(
     mainStrategies.map((s) =>
-      runStrategy(s, workspaceId, queryEmbedding, queryText, adminSupabase)
+      runStrategy(s, workspaceId, queryEmbedding, queryText, adminSupabase, connectedSourceTypeCount)
     )
   );
 

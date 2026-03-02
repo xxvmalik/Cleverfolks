@@ -757,12 +757,16 @@ async function runInternalRAGSearch(
 
   // ── Log 5: executor output ────────────────────────────────────────────────────
   // (logged inside executeStrategies per-strategy, then here after all finish)
+  const connectedSourceTypeCount = integrationManifest.reduce(
+    (sum, i) => sum + i.sourceTypes.length, 0
+  );
   const results = await executeStrategies({
     strategies: effectivePlan.strategies,
     workspaceId,
     queryEmbedding,
     queryText,
     adminSupabase: db,
+    connectedSourceTypeCount,
   });
 
   const hasCountResult = results.some((r) => r.source_type === "aggregation_counts");
@@ -1418,6 +1422,9 @@ export async function POST(request: NextRequest) {
               adminSupabase: db,
               // Lets surrounding_context-only plans enrich the current results
               seedResults: searchResults,
+              connectedSourceTypeCount: integrationManifest.reduce(
+                (sum, i) => sum + i.sourceTypes.length, 0
+              ),
             });
 
             if (!newResults.length) {
