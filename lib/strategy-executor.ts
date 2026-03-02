@@ -1,5 +1,32 @@
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import type { SearchStrategy } from "./query-planner";
+
+// SearchStrategy was previously imported from query-planner.ts (now deleted).
+// Inlined here since executeStrategies is no longer called externally but the
+// file is kept for the UnifiedResult type export.
+type StrategyType =
+  | "semantic"
+  | "broad_fetch"
+  | "person_search"
+  | "channel_search"
+  | "surrounding_context"
+  | "profile_only"
+  | "hybrid_aggregation";
+
+type SearchStrategy = {
+  type: StrategyType;
+  params: {
+    query?: string;
+    person_name?: string;
+    channel_name?: string;
+    after?: string;
+    before?: string;
+    apply_to?: "all" | number | string;
+    dedicated_channels?: string[];
+    keywords?: string[];
+    label?: string;
+    source_types?: string[];
+  };
+};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

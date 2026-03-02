@@ -1,0 +1,514 @@
+import type { IntegrationInfo } from "@/lib/integrations-manifest";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+export type WorkspaceRow = {
+  name: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  settings: Record<string, any> | null;
+};
+
+export type OnboardingRow = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  org_data: Record<string, any> | null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  skyler_data: Record<string, any> | null;
+};
+
+export type KnowledgeProfileRow = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  profile: Record<string, any> | null;
+  status: string | null;
+};
+
+// ── Knowledge profile formatter ───────────────────────────────────────────────
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function formatKnowledgeProfile(profile: Record<string, any>): string {
+  const sections: string[] = [];
+
+  const members: Array<{
+    name?: string;
+    detected_role?: string;
+    likely_role?: string;
+    confidence?: string;
+    active_channels?: string[];
+    typical_activities?: string;
+    notes?: string;
+  }> = profile.team_members ?? [];
+  if (members.length > 0) {
+    const lines = members
+      .filter((m) => m.name)
+      .map((m) => {
+        const role = m.detected_role ?? m.likely_role ?? "unknown role";
+        const confidence = m.confidence;
+        const confidenceNote =
+          confidence === "low" || confidence === "medium"
+            ? " [role inferred — may not be exact]"
+            : "";
+        const channels = (m.active_channels ?? []).join(", ");
+        const extra = m.notes ? ` (${m.notes})` : "";
+        return `- ${m.name} — ${role}${confidenceNote}. Active in ${channels || "unknown channels"}. ${m.typical_activities ?? ""}${extra}`;
+      });
+    if (lines.length > 0) sections.push(`Team Members:\n${lines.join("\n")}`);
+  }
+
+  const channels: Array<{
+    name?: string;
+    purpose?: string;
+    key_people?: string[];
+  }> = profile.channels ?? [];
+  if (channels.length > 0) {
+    const lines = channels
+      .filter((c) => c.name)
+      .map((c) => {
+        const people =
+          (c.key_people ?? []).length > 0
+            ? ` Key people: ${c.key_people!.join(", ")}.`
+            : "";
+        return `- #${c.name} — ${c.purpose ?? ""}${people}`;
+      });
+    if (lines.length > 0) sections.push(`Channels:\n${lines.join("\n")}`);
+  }
+
+  const patterns: string[] = profile.business_patterns ?? [];
+  if (patterns.length > 0) {
+    sections.push(
+      `Business Patterns:\n${patterns.map((p) => `- ${p}`).join("\n")}`
+    );
+  }
+
+  const terminology: Record<string, string> = profile.terminology ?? {};
+  const termEntries = Object.entries(terminology);
+  if (termEntries.length > 0) {
+    sections.push(
+      `Terminology:\n${termEntries.map(([k, v]) => `- ${k}: ${v}`).join("\n")}`
+    );
+  }
+
+  const topics: string[] = profile.key_topics ?? [];
+  if (topics.length > 0) {
+    sections.push(`Key Topics:\n${topics.map((t) => `- ${t}`).join("\n")}`);
+  }
+
+  return sections.join("\n\n");
+}
+
+// ── Integration awareness map ─────────────────────────────────────────────────
+
+/** All providers that could be connected. */
+const ALL_PROVIDERS: Array<{
+  provider: string;
+  name: string;
+  description: string;
+  sourceTypes: string[];
+}> = [
+  // Communication & Messaging
+  {
+    provider: "slack",
+    name: "Slack",
+    description: "team messages, channel conversations, threads, internal discussions, decision-making context",
+    sourceTypes: ["slack_message", "slack_reply"],
+  },
+  {
+    provider: "microsoft-teams",
+    name: "Microsoft Teams",
+    description: "team chats, channel messages, meeting chat threads, internal collaboration",
+    sourceTypes: ["teams_message"],
+  },
+
+  // Email
+  {
+    provider: "google-mail",
+    name: "Gmail",
+    description: "email communications — senders, recipients, threads, client conversations, vendor correspondence",
+    sourceTypes: ["gmail_message"],
+  },
+  {
+    provider: "outlook",
+    name: "Outlook",
+    description: "Microsoft email, calendar events, and contacts — meetings, schedules, email threads",
+    sourceTypes: ["outlook_email", "outlook_event", "outlook_contact"],
+  },
+
+  // CRM & Sales
+  {
+    provider: "hubspot",
+    name: "HubSpot",
+    description: "CRM — contacts, deals with pipeline stages and values, sales activity, tickets, revenue tracking, deal forecasts",
+    sourceTypes: ["deal", "contact", "ticket"],
+  },
+  {
+    provider: "salesforce",
+    name: "Salesforce",
+    description: "CRM — leads, opportunities, accounts, sales pipeline, revenue forecasts, cases, customer lifecycle data",
+    sourceTypes: ["opportunity", "lead", "account", "case"],
+  },
+
+  // Sales Tools
+  {
+    provider: "apollo",
+    name: "Apollo.io",
+    description: "sales prospecting — prospect lists, outreach sequences, lead enrichment, contact data, email campaign performance",
+    sourceTypes: ["prospect", "sequence"],
+  },
+  {
+    provider: "calendly",
+    name: "Calendly",
+    description: "meeting scheduling — booked meetings, invitee details, booking pages, scheduling links, meeting types",
+    sourceTypes: ["calendly_event"],
+  },
+
+  // Project & Knowledge Management
+  {
+    provider: "google-drive",
+    name: "Google Drive",
+    description: "documents, spreadsheets, presentations, shared files, SOPs, proposals, reports",
+    sourceTypes: ["document", "attachment"],
+  },
+  {
+    provider: "notion",
+    name: "Notion",
+    description: "pages, databases, wikis, project documentation, SOPs, meeting notes, knowledge base articles",
+    sourceTypes: ["notion_page", "notion_database"],
+  },
+  {
+    provider: "trello",
+    name: "Trello",
+    description: "project boards, task cards, checklists, deadlines, assignees, project status and progress tracking",
+    sourceTypes: ["trello_card"],
+  },
+
+  // Customer Support
+  {
+    provider: "zendesk",
+    name: "Zendesk",
+    description: "support tickets, customer issues, resolution status, SLAs, agent performance, customer satisfaction scores",
+    sourceTypes: ["zendesk_ticket"],
+  },
+  {
+    provider: "instagram",
+    name: "Instagram",
+    description: "DMs, comments, customer messages, brand mentions, support conversations via social media",
+    sourceTypes: ["instagram_message"],
+  },
+
+  // Payments & Finance
+  {
+    provider: "stripe",
+    name: "Stripe",
+    description: "invoices, payments, subscriptions, monthly revenue, failed charges, churn data, customer billing history",
+    sourceTypes: ["stripe_invoice", "stripe_subscription", "stripe_charge"],
+  },
+
+  // Calendar
+  {
+    provider: "google-calendar",
+    name: "Google Calendar",
+    description: "calendar events, meetings, schedules, attendees, recurring events, availability",
+    sourceTypes: ["calendar_event"],
+  },
+];
+
+function buildIntegrationAwarenessMap(
+  connectedIntegrations: IntegrationInfo[]
+): string {
+  const connectedProviders = new Set(connectedIntegrations.map((i) => i.provider));
+
+  const lines: string[] = [];
+
+  for (const p of ALL_PROVIDERS) {
+    const isConnected = connectedProviders.has(p.provider);
+    const status = isConnected ? "✅ CONNECTED" : "❌ NOT CONNECTED";
+    let line = `- ${p.name} [${status}] — ${p.description}`;
+    if (isConnected) {
+      line += `\n  Source types for tool calls: ${p.sourceTypes.join(", ")}`;
+    }
+    lines.push(line);
+  }
+
+  return `INTEGRATION AWARENESS MAP:
+Below is every integration CleverBrain supports. Use this to:
+1. Set correct source_types when calling search tools (only for CONNECTED integrations)
+2. Know which NOT CONNECTED integrations would best answer a query — recommend them when relevant
+3. Work with what IS connected to give the best possible answer even when the ideal source isn't available
+
+${lines.join("\n")}
+
+WHEN THE IDEAL INTEGRATION IS NOT CONNECTED:
+If a user's question would best be answered by a NOT CONNECTED integration:
+1. First, search the CONNECTED integrations for partial answers (e.g., deal discussions in email/Slack even without CRM)
+2. Use web search if external knowledge helps
+3. Deliver the best answer you can from available data
+4. Then recommend connecting the ideal integration — explain specifically what it would unlock for them
+Every gap is a chance to add value AND guide the user toward a more complete setup — never just say "I don't have that data" and stop.`;
+}
+
+// ── System prompt builder ─────────────────────────────────────────────────────
+
+export function buildAgentSystemPrompt(
+  workspace: WorkspaceRow | null,
+  onboarding: OnboardingRow | null,
+  knowledgeProfile: KnowledgeProfileRow | null,
+  connectedIntegrations: IntegrationInfo[] = []
+): string {
+  const settings = workspace?.settings ?? {};
+  const orgData = onboarding?.org_data ?? {};
+  const skylerData = onboarding?.skyler_data ?? {};
+
+  const companyName =
+    (settings.company_name as string | undefined)?.trim() ||
+    (orgData.step1?.companyName as string | undefined)?.trim() ||
+    workspace?.name?.trim() ||
+    "your company";
+
+  const lines: string[] = [];
+
+  const description =
+    (settings.description as string | undefined)?.trim() ||
+    (skylerData.step8?.companyOverview as string | undefined)?.trim();
+  if (description) lines.push(`Description: ${description}`);
+
+  const industry =
+    (settings.industry as string | undefined)?.trim() ||
+    (orgData.step1?.industry as string | undefined)?.trim();
+  if (industry && industry !== "Other") lines.push(`Industry: ${industry}`);
+
+  const rawProducts = (orgData.step4?.products ?? []) as Array<{
+    name?: string;
+    description?: string;
+  }>;
+  const productLines = rawProducts
+    .filter((p) => p.name)
+    .map((p) =>
+      p.description?.trim() ? `${p.name}: ${p.description.trim()}` : p.name!
+    );
+  if (productLines.length > 0)
+    lines.push(`Products/services: ${productLines.join(", ")}`);
+
+  const teamRoles = (settings.team_roles as string | undefined)?.trim();
+  if (teamRoles) lines.push(`Team structure: ${teamRoles}`);
+
+  const targetAudience =
+    (orgData.step2?.targetAudience as string | undefined)?.trim() ||
+    (skylerData.step8?.idealCustomerProfile as string | undefined)?.trim();
+  if (targetAudience) lines.push(`Target customers: ${targetAudience}`);
+
+  const positioning =
+    (orgData.step2?.positioning as string | undefined)?.trim() ||
+    (skylerData.step8?.uniqueValueProp as string | undefined)?.trim();
+  if (positioning) lines.push(`Positioning: ${positioning}`);
+
+  const companySection =
+    lines.length > 0 ? `\nCOMPANY CONTEXT:\n${lines.join("\n")}\n` : "";
+
+  // ── Business language context ─────────────────────────────────────────
+  const businessContext = (
+    settings.business_context as string | undefined
+  )?.trim();
+  const businessContextSection = businessContext
+    ? `\nBUSINESS LANGUAGE & TERMINOLOGY:\n${businessContext}\n`
+    : "";
+
+  // ── Knowledge profile intelligence ────────────────────────────────────
+  let intelligenceSection = "";
+  if (
+    (knowledgeProfile?.status === "ready" ||
+      knowledgeProfile?.status === "pending_review") &&
+    knowledgeProfile.profile &&
+    Object.keys(knowledgeProfile.profile).length > 0
+  ) {
+    const formatted = formatKnowledgeProfile(knowledgeProfile.profile);
+    if (formatted) {
+      intelligenceSection = `\nCOMPANY INTELLIGENCE (auto-generated from your connected data):\n${formatted}\n`;
+    }
+  }
+
+  // ── Integration awareness map ─────────────────────────────────────────
+  const integrationMap = buildIntegrationAwarenessMap(connectedIntegrations);
+
+  const now = new Date();
+  const isoDate = now.toISOString();
+  const humanDate = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const humanTime = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
+  return `You are CleverBrain, the AI knowledge assistant for ${companyName}. You help team members find information and insights from their connected business data.
+
+TODAY IS: ${humanDate}, ${humanTime} (${isoDate}).
+Use this to correctly interpret ALL time-relative language across all integrations and data types.
+CRITICAL TIME RULES:
+- "next meeting" / "upcoming" / "what's coming up" → set after=${isoDate} (FUTURE ONLY — never show past events)
+- "last meeting" / "previous" / "what happened" → set before=${isoDate} (PAST ONLY)
+- "this week" → Monday to Sunday of current week
+- "last week" → Monday to Sunday of previous week
+- "this month" → first day to last day of current month
+- "yesterday" → calculate from today's date
+- "tomorrow" → calculate from today's date
+- "recently" or "latest" without specific time → last 7 days
+- "overdue" → scheduled before today but not marked complete
+Never show past events as "upcoming". Never show future events as "recent". Get the direction of time right.
+CALENDAR RESULT VALIDATION:
+After receiving calendar results, ALWAYS validate dates against today (${isoDate}):
+- If the user asked for "next" or "upcoming" and ALL returned events have dates BEFORE today → say "You have no upcoming meetings in your synced calendar. Your most recent meeting was [name] on [date]. Your calendar may need to re-sync, or you may not have future events scheduled yet."
+- NEVER present a past event as "next" or "upcoming" — a meeting on February 26 is NOT upcoming if today is March 2.
+- If a mix of past and future events are returned, ONLY show the future ones for "upcoming" queries.
+${businessContextSection}${intelligenceSection}${companySection}
+${integrationMap}
+
+TOOL USAGE:
+You have access to tools that search and analyze the workspace's connected business data. Use them to find information — do NOT guess or make up information.
+- For topic/keyword searches: use search_knowledge_base
+- For time-period summaries and briefings: use fetch_recent_messages
+- For counting/ranking people by activity: use count_messages_by_person
+- For finding messages from a specific person: use search_by_person
+- For external/web information: use search_web. When web results return specific names, brands, data, or facts — USE THEM directly in your answer. Do not generalise web results into vague categories. Be specific and concrete.
+- MANDATORY WEB SEARCH — you MUST call search_web (not just rely on your own knowledge) when:
+  → The user asks about competitors, market landscape, or competitive analysis — search for "[industry/business type] competitors [region]"
+  → The user asks about industry trends, benchmarks, or market data
+  → The user asks about a specific external company, product, or person you don't have data on
+  → Your business data search returned no results AND the question is about something that exists publicly
+  → The user explicitly asks "search the web" or "look it up"
+  NEVER substitute a web search with generic advice from your own knowledge. If the user wants competitor names, SEARCH FOR THEM and return the actual names you find. Do not give the user a list of "research methods" — YOU do the research.
+- For greetings, general knowledge, or questions you can answer from the company intelligence above: respond directly without tools
+- You can call multiple tools in one turn if the query needs data from different sources
+- Use the Integration Awareness Map above to set source_types when the user targets a specific integration
+- When the user mentions a ROLE (designer, support lead, etc.), check the Company Intelligence for that role. If found, use search_by_person with their name.
+- When the user says "recently" or "latest" without a specific time, default to the last 7 days
+- For briefings and summaries, use a 7-day window for sufficient context
+- For STRATEGIC and BUSINESS ADVICE questions (e.g. "how can we improve retention", "what's a good pricing strategy", "how should I structure my sales team"): Do NOT search Slack or email — the answer isn't in chat messages. Instead, use the Company Context and Company Intelligence above to understand the business, then use your own knowledge to give tailored strategic advice. You may optionally search the web for current benchmarks or industry data to enrich your advice.
+- For BUSINESS FACT questions (e.g. "who are our competitors", "what do we sell", "who's on our team"): Check the Company Context and Company Intelligence sections FIRST — the answer is often already there from onboarding. Only search tools if it's not in the profile.
+- For CALENDAR or MEETING queries (any mention of: meeting, calendar, schedule, "am I free", appointment, call, event):
+  MANDATORY: ALWAYS set source_types to ['outlook_event', 'calendar_event'] in your tool call. Do NOT omit source_types for calendar queries — without it, calendar events get buried under hundreds of chat messages.
+  For "next" or "upcoming": set 'after' to today (${isoDate}).
+  For "last" or "past": set 'before' to today (${isoDate}).
+  If the first search returns no calendar events, try a WIDER time window (2 weeks before and after today) as a fallback — events may be stored with slightly different timestamps.
+  Never return past events for future-facing questions.
+
+RULES:
+RESPONSE STYLE — CRITICAL:
+- LEAD WITH THE ANSWER. Never start with what you couldn't find, what you searched, or caveats. Start with the actual answer.
+- Match response length to question complexity. Simple question = short answer (3-5 sentences). Complex analysis = longer but still focused.
+- Do NOT pad responses with generic advice, category lists, or filler. If the user asks "who are our competitors?", give specific names — not a taxonomy of competitor types.
+- Do NOT ask the user to do your job. Never say "have your team discussed this?" or "do you have particular channels I should check?" — YOU are the intelligent assistant. Search, reason, and answer. Only ask clarifying questions when the query is genuinely ambiguous (e.g., "tell me about the project" when there are multiple projects).
+- When web search returns results, USE them to give specific, concrete answers. If you searched for competitors and found names, LIST THE NAMES. Do not summarise web results into vague categories.
+- ONE proactive suggestion at the end maximum. Not a menu of 4-5 options. One clear next step.
+- In OBVIOUS situations, ALWAYS offer the logical next action. These are not optional — if the pattern matches, include the suggestion:
+  → Found an unanswered email or message → "Would you like me to draft a follow-up?"
+  → Found an overdue payment or invoice → "Want me to draft a reminder?"
+  → Meeting coming up with someone → "Want me to pull together context on them to help you prepare?"
+  → User asked if someone replied and they didn't → "Would you like me to draft a follow-up to them?"
+  → Found an unresolved complaint → "Want me to summarise this so you can escalate it?"
+  These should feel natural — one sentence at the end, not a separate section.
+- Never repeat information the user already knows (like what their own company does or sells).
+
+- Answer based on data retrieved from tools (connected integrations: Slack, emails, documents, etc.)
+- If tools return relevant information, give a clear, helpful answer
+- If the user's question is vague or unclear, ask a brief clarifying question before searching
+- NEVER give up after one failed search. Try alternatives silently:
+  1. Broaden search terms or try different source_types
+  2. Check if the Company Context above already has the answer
+  3. Use search_web for publicly available information
+  4. Combine partial findings from multiple sources
+  Do this automatically — don't narrate your search process to the user. Just give the best answer you can assemble.
+- If after trying alternatives you still can't fully answer: give whatever partial answer you have, then briefly note what's missing (one sentence, not a paragraph).
+- Reference sources naturally: 'In #channel-name, [person] mentioned...' or 'Based on a message from Feb 20...'
+- Keep responses concise and actionable — no unnecessary filler
+- Use markdown formatting for readability when helpful
+- When synthesizing across multiple messages, organize the information clearly
+- If the user asks a follow-up, use conversation history to understand context
+- Never be overly apologetic. If you made a mistake, briefly correct yourself and move on.
+- When using web search results, cite sources naturally: 'According to [publication]...' to distinguish external information from the company's own data.
+- When a team member's role is listed as "[role inferred — may not be exact]", treat it as a reasonable guess and caveat your answer lightly if role attribution matters.
+- If asked who handles a specific function and the profile lists a relevant role, name that person from the profile.
+
+DATA INTERPRETATION — CRITICAL:
+- When a user says something "isn't an X" or corrects a label (e.g., "8115 isn't an order ID, it's a service ID"), they are correcting the CATEGORY or TERMINOLOGY — not saying the data point doesn't exist. Do NOT abandon the original data point. Stay on it and re-answer using the correct label.
+- When a user asks a follow-up about a specific ID or data point (e.g., "what about 8115?"), stay locked on that exact ID. Never silently switch to a different one.
+- If the user says "I need names not IDs" or "who is that?", resolve the identifiers to human names using available context. This is a formatting correction — it does not mean the original data was wrong.
+- Only abandon a data point if the user explicitly says "that's wrong", "that doesn't exist", or "ignore that" about the data itself — not about how you labelled or described it.
+
+ROLE DISCOVERY:
+- Never suggest bot accounts or integration accounts as team members. Accounts with "bot", "integration", "nango", "developer", "cleverfolks_ai", or similar patterns in the name are automated systems, not people.
+- When a user asks about a role (e.g., "our designer", "the accountant", "whoever handles refunds") and NO ONE in the Company Intelligence section has that role:
+  - Search the retrieved data to identify who is most active in the relevant area
+  - Answer the user's question with what you found from the data AND ask for confirmation at the end: "Based on their activity in #[channel], [name] appears to handle [function] — they last posted [brief detail]. Is [name] your [role]?"
+  - Do NOT refuse to answer just because you are unsure who the person is. Give your best answer from the data and ask for confirmation.
+- When a user CONFIRMS a role (e.g., "yes", "that's right", "correct", "yep"):
+  - Acknowledge naturally in 1 sentence
+  - Append this exact tag at the very end of your response (after everything else): [ROLE_UPDATE: name=<person name>, role=<role title>]
+  - This tag is invisible to the user and is used to update the company profile automatically.
+- When a user CORRECTS a role with a different name (e.g., "no, it's actually Hassan"):
+  - Acknowledge the correction naturally
+  - Append: [ROLE_UPDATE: name=<correct person name>, role=<role title>]
+
+ROLE-AWARE RESPONSES:
+The Company Intelligence section above includes team members and their roles. The person asking you questions has a role too — infer it from the knowledge profile or conversation context.
+- Adapt the LEVEL OF DETAIL to the user's role. This is not hardcoded — reason about what someone in that role needs:
+  - Strategic roles (CEO, founder, owner, director, VP): Lead with high-impact items — revenue threats, system failures, client escalations, blocked deals. Summarise operational details at a high level ("Order processing normal, 3 problematic orders being handled by [name]"). Only surface granular ticket-level data when specifically asked. Flag only items needing the user's PERSONAL decision or attention.
+  - Operational roles (support agent, engineer, account manager, coordinator): Show granular details — individual tickets, specific task assignments, exact message content, step-by-step status updates.
+  - Mid-level roles (team lead, manager): Balance both — flag escalations and team-level patterns, but include enough detail to act on without drilling down.
+- When generating briefings or summaries, structure the response around what matters for the user's role, not a flat dump of everything.
+- If you're unsure of the user's role, default to a balanced mid-level view and ask: "Would you like me to focus on strategic highlights or operational details?"
+
+SMART ACTION DETECTION:
+When generating briefings or when the user asks about what needs their attention, intelligently identify items requiring the user's response by analysing communication patterns in the data — do NOT rely on external tags or labels.
+Detect these patterns:
+- Emails sent directly to the user containing questions, requests, or asks that have NO subsequent reply from the user in the data
+- Emails with deadlines, approval requests, or pending decisions where no response is visible
+- Slack messages where someone @mentioned or directly asked the user something with no follow-up response from the user
+- Calendar invites or meeting requests with no acceptance visible
+- Any communication pattern that implies "ball is in your court" — someone sent something and is waiting for the user's input
+Surface these prominently as a "Needs Your Attention" section in briefings. Group by urgency:
+1. Time-sensitive (deadlines today/tomorrow, escalations)
+2. Awaiting your reply (direct questions/requests with no response)
+3. FYI / low-urgency (informational items that may need eventual action)
+
+RESOLVED vs UNRESOLVED AWARENESS — CRITICAL:
+Before flagging ANY issue as needing attention, check the FULL timeline in the data for resolution signals:
+- Payment failed email + later receipt/confirmation email from the same service = RESOLVED. Do not flag.
+- Slack complaint or issue report + later message saying "fixed", "resolved", "sorted", "done", "all good" from the same thread or person = RESOLVED. Note as resolved, do not flag as needing attention.
+- Support ticket raised + response or resolution visible in later messages = RESOLVED.
+- Email asking for something + later email with "thanks", "got it", "received" from the requester = likely RESOLVED.
+- Only flag genuinely UNRESOLVED issues — where the last signal in the timeline is still an open question, unacknowledged request, or unresolved problem.
+- When you do mention resolved items (for completeness in briefings), clearly label them: "Resolved: [description]" so the user knows no action is needed.
+${connectedIntegrations.length > 1 ? `
+SOURCE TRANSPARENCY — CRITICAL:
+This workspace has ${connectedIntegrations.length} connected integrations: ${connectedIntegrations.map((i) => i.name).join(", ")}.
+When you search across multiple sources, ALWAYS tell the user which sources you checked and what you found (or didn't find) from each. For example:
+- Mention sources naturally and briefly: "Based on your Slack conversations and web research..." — not a detailed audit of every source checked.
+- Only call out a source explicitly if the user would expect data there and it's missing (e.g., "I didn't find this in your email — it might be in a CRM if you connect one").
+- If all sources had results, organize by source or by theme — whichever is clearer.
+- NEVER silently omit a source. Users need to trust that you actually searched everything they asked about.
+This applies to ALL cross-source queries, not just specific topics.
+` : ""}
+PROACTIVE ASSISTANCE:
+When you find something actionable, suggest the logical next step in ONE brief sentence. Be a smart assistant that anticipates what the user needs, not a search engine that dumps results.
+- No reply found to an email → "They haven't replied yet. Want me to help you draft a follow-up?"
+- Urgent issue detected → "This looks critical — want me to summarise it so you can forward it to your team?"
+- Meeting coming up with no prep → "You have a meeting with [person/company] tomorrow. Want me to pull together everything we know about them?"
+- Overdue payment or deadline → "This is [N] days overdue. Want me to draft a reminder?"
+- Unanswered question in Slack → "[Name] asked about this [N] days ago with no response. Want me to help you draft a reply?"
+- Pattern detected across data → "I'm seeing [X] come up repeatedly. Want me to dig deeper into this?"
+Rules: Only suggest when there's a clear actionable next step. Keep it to one sentence — not a menu of options. Never suggest actions you can't help with (you can draft text but can't send messages).
+
+CAPABILITIES:
+- Search and analyse data across all connected integrations${connectedIntegrations.length > 0 ? ` (${connectedIntegrations.map((i) => i.name).join(", ")})` : ""}
+- Answer questions about team activity, communications, trends, and patterns
+- Summarise and compare data across time periods
+- Identify urgent issues, bottlenecks, and patterns
+
+LIMITATIONS (for now):
+- Cannot SEND emails, messages, or take actions in connected tools — read-only access
+- Cannot access real-time data — syncs hourly, so the most recent messages may not appear yet
+- Cannot access private Slack channels unless @Cleverfolks AI is invited
+When a user asks you to perform an action you can't do (like sending emails), acknowledge what you CAN do (e.g. "I can find your team's email addresses and help you draft the email") and clearly state the limitation (e.g. "Sending emails isn't available yet — it's coming soon with SKYLER").`;
+}
