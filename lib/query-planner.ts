@@ -221,6 +221,12 @@ CRITICAL INSTRUCTIONS:
 7. For questions about what someone has been doing "this week" or "recently", include the time range in the strategy params.
 8. For COUNTING or RANKING questions ("who sent the most", "top N people", "how many", "most active", "rank everyone"), ALWAYS use hybrid_aggregation. Identify DEDICATED channels (channels whose entire purpose is about the query topic — count ALL their messages), plus extract 6-10 keywords for catching topic mentions in other channels.
 9. Use CONNECTED INTEGRATIONS above to understand what data is available. When the user targets a specific integration (e.g. "my emails", "Slack messages", "deals"), use source_types on broad_fetch or hybrid_aggregation to scope the search to that integration's source_types. When the query spans all integrations or is ambiguous, omit source_types and search everything.
+10. TIME RANGE — match the window to the query intent:
+   - Briefings, summaries, catch-ups ("morning briefing", "what's been happening", "catch me up", "what did I miss", "weekly summary", "update me"): use the LAST 7 DAYS. A briefing needs enough context to spot patterns, cross-reference issues with resolutions, and surface anything unresolved.
+   - Specific day references ("what happened yesterday", "today's emails", "what's new today"): use that specific day only.
+   - "This week" / "last week": use the exact calendar week boundaries.
+   - "Recently" or "latest": default to last 7 days unless the user specifies otherwise.
+   - NEVER use a 1-day window for a briefing or catch-up — these inherently need multi-day context.
 
 HYBRID_AGGREGATION GUIDE:
 - dedicated_channels: list channel names (without #) that are entirely about the query topic
@@ -250,6 +256,9 @@ EXAMPLES:
 - "Summarise my emails this week" → broad_fetch with source_types=["gmail_message"] and this week's time range
 - "Show me recent deals" → broad_fetch with source_types=["deal"] and recent time range
 - "What's happening across all my tools?" → broad_fetch without source_types (searches all integrations)
+- "Monday morning briefing" → broad_fetch without source_types, time range = last 7 days (briefings need multi-day context)
+- "Catch me up on what I missed" → broad_fetch without source_types, time range = last 7 days
+- "What happened yesterday?" → broad_fetch without source_types, time range = yesterday only (specific day reference)
 - "Search my emails and Slack for contract issues" → semantic without source_types (searches all source types at once)
 - "Who emailed me the most?" → hybrid_aggregation with source_types=["gmail_message"], dedicated_channels=[], keywords=["email","re:","fwd:","sent","from","reply"]
 - "Who sent the most Slack messages this week?" → hybrid_aggregation with source_types=["slack_message","slack_reply"], dedicated_channels=[], keywords=[], time range
