@@ -180,6 +180,9 @@ async function runStrategy(
       console.warn("[strategy-executor] No embedding — skipping semantic");
       return [];
     }
+    const semanticSourceTypes = strategy.params.source_types?.length
+      ? strategy.params.source_types
+      : null;
     const { data, error } = await adminSupabase.rpc("hybrid_search_documents", {
       p_workspace_id: workspaceId,
       p_query_embedding: `[${queryEmbedding.join(",")}]`,
@@ -188,6 +191,7 @@ async function runStrategy(
       p_match_threshold: 0.2,
       p_after: strategy.params.after ?? null,
       p_before: strategy.params.before ?? null,
+      p_source_types: semanticSourceTypes,
     });
     if (error) {
       console.error("[strategy-executor] semantic error:", error);

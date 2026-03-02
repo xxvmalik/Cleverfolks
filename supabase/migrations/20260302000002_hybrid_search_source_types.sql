@@ -1,0 +1,111 @@
+-- ============================================================
+-- Add p_source_types filter to hybrid_search_documents
+-- ============================================================
+--
+-- Problem: the semantic search function has no source_type filter.
+-- When the planner decides to search only emails (source_types =
+-- ["gmail_message"]), the executor can't pass that filter through.
+-- Result: "did they reply to my email?" returns Slack messages.
+--
+-- Fix: add p_source_types text[] DEFAULT NULL. When non-null, only
+-- chunks belonging to documents with matching source_type are searched.
+-- When NULL, all source types are included (unchanged behaviour).
+
+CREATE OR REPLACE FUNCTION hybrid_search_documents(
+  p_workspace_id    uuid,
+  p_query_embedding vector(1024),
+  p_query_text      text,
+  p_match_count     int         DEFAULT 10,
+  p_match_threshold float       DEFAULT 0.5,
+  p_after           timestamptz DEFAULT NULL,
+  p_before          timestamptz DEFAULT NULL,
+  p_source_types    text[]      DEFAULT NULL
+)
+RETURNS TABLE (
+  chunk_id    uuid,
+  document_id uuid,
+  title       text,
+  chunk_text  text,
+  source_type text,
+  metadata    jsonb,
+  similarity  float
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY
+  WITH vector_search AS (
+    SELECT
+      dc.id                                    AS chunk_id,
+      1 - (dc.embedding <=> p_query_embedding) AS score
+    FROM document_chunks dc
+    JOIN synced_documents sd ON sd.id = dc.document_id
+    WHERE dc.workspace_id = p_workspace_id
+      AND (p_source_types IS NULL OR sd.source_type = ANY(p_source_types))
+      AND (p_after  IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) >= p_after)
+      AND (p_before IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) <= p_before)
+  ),
+  keyword_search AS (
+    SELECT
+      dc.id                                                              AS chunk_id,
+      ts_rank(to_tsvector('english', dc.chunk_text),
+              plainto_tsquery('english', p_query_text))                  AS score
+    FROM document_chunks dc
+    JOIN synced_documents sd ON sd.id = dc.document_id
+    WHERE dc.workspace_id = p_workspace_id
+      AND to_tsvector('english', dc.chunk_text)
+            @@ plainto_tsquery('english', p_query_text)
+      AND (p_source_types IS NULL OR sd.source_type = ANY(p_source_types))
+      AND (p_after  IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) >= p_after)
+      AND (p_before IS NULL OR
+           COALESCE(
+             CASE WHEN dc.metadata->>'ts' ~ '^[0-9]+\.?[0-9]*$'
+                  THEN to_timestamp((dc.metadata->>'ts')::float)
+             END,
+             sd.synced_at
+           ) <= p_before)
+  ),
+  combined AS (
+    SELECT
+      COALESCE(v.chunk_id, k.chunk_id)          AS chunk_id,
+      COALESCE(v.score, 0.0) * 0.7
+        + COALESCE(k.score, 0.0) * 0.3          AS combined_score
+    FROM vector_search v
+    FULL OUTER JOIN keyword_search k ON k.chunk_id = v.chunk_id
+  )
+  SELECT
+    c.chunk_id,
+    sd.id                                       AS document_id,
+    sd.title,
+    dc.chunk_text,
+    sd.source_type,
+    dc.metadata,
+    c.combined_score                            AS similarity
+  FROM combined c
+  JOIN document_chunks dc ON dc.id = c.chunk_id
+  JOIN synced_documents sd ON sd.id = dc.document_id
+  WHERE c.combined_score >= p_match_threshold
+  ORDER BY c.combined_score DESC
+  LIMIT p_match_count;
+END;
+$$;
