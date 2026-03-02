@@ -14,6 +14,9 @@ import {
   normalizeSlackUser,
   normalizeCalendar,
   normalizeHubspot,
+  normalizeOutlookEmail,
+  normalizeOutlookEvent,
+  normalizeOutlookContact,
   normalizeDrive,
   type SyncRecord,
   type SlackLookups,
@@ -81,6 +84,7 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   "google-calendar": ["GoogleCalendarEvent"],
   hubspot:           ["HubSpotDeal"],
   "google-drive":    ["GoogleDriveFile"],
+  outlook:           ["OutlookEmail", "OutlookCalendarEvent", "OutlookContact"],
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -106,6 +110,14 @@ function normalizeRecord(
       case "GmailEmail":   return normalizeGmail(raw, gmailContacts);
       case "GmailContact": return normalizeGmailContact(raw);
       default:             return null;
+    }
+  }
+  if (provider === "outlook") {
+    switch (model) {
+      case "OutlookEmail":          return normalizeOutlookEmail(raw);
+      case "OutlookCalendarEvent":  return normalizeOutlookEvent(raw);
+      case "OutlookContact":        return normalizeOutlookContact(raw);
+      default:                      return null;
     }
   }
   switch (provider) {

@@ -16,6 +16,9 @@ export type SyncRecord = {
     | "slack_reaction"
     | "calendar_event"
     | "deal"
+    | "outlook_email"
+    | "outlook_event"
+    | "outlook_contact"
     | "document"
     | "attachment";
   title?: string;
@@ -678,6 +681,110 @@ export function normalizeHubspot(raw: any): SyncRecord {
       amount: props.amount,
       close_date: props.closedate,
       owner_id: props.hubspot_owner_id,
+    },
+  };
+}
+
+// ============================================================
+// Outlook normalizers (stubs — Nango model shapes TBD)
+// ============================================================
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeOutlookEmail(raw: any): SyncRecord {
+  const subject = (raw.subject as string | undefined) ?? "(No Subject)";
+  const bodyContent = (raw.body?.content as string | undefined) ?? (raw.bodyPreview as string | undefined) ?? "";
+  const from = raw.from?.emailAddress?.name ?? raw.from?.emailAddress?.address ?? "";
+  const fromEmail = raw.from?.emailAddress?.address ?? "";
+  const toRecipients = (raw.toRecipients ?? []) as Array<{ emailAddress?: { address?: string; name?: string } }>;
+  const recipients = toRecipients.map((r) => r.emailAddress?.address).filter(Boolean) as string[];
+  const receivedAt = (raw.receivedDateTime as string | undefined) ?? "";
+
+  const body = bodyContent.includes("<") ? stripHtml(bodyContent) : bodyContent;
+
+  let ts: string | undefined;
+  if (receivedAt) {
+    try {
+      const parsed = new Date(receivedAt);
+      if (!isNaN(parsed.getTime())) ts = String(parsed.getTime() / 1000);
+    } catch { /* ignore */ }
+  }
+
+  return {
+    external_id: raw.id ?? "",
+    source_type: "outlook_email",
+    title: subject,
+    content: body,
+    metadata: {
+      sender_name: from || undefined,
+      sender_email: fromEmail || undefined,
+      user_name: from || fromEmail || undefined,
+      from: `${from} <${fromEmail}>`,
+      to: recipients.join(", "),
+      recipients,
+      subject,
+      date: receivedAt,
+      conversation_id: raw.conversationId ?? undefined,
+      ts,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeOutlookEvent(raw: any): SyncRecord {
+  const parts: string[] = [];
+  if (raw.subject) parts.push(raw.subject);
+  if (raw.bodyPreview) parts.push(raw.bodyPreview);
+  if (raw.location?.displayName) parts.push(`Location: ${raw.location.displayName}`);
+
+  const attendees = (raw.attendees ?? []) as Array<{ emailAddress?: { address?: string } }>;
+  if (attendees.length > 0) {
+    parts.push(`Attendees: ${attendees.map((a) => a.emailAddress?.address).filter(Boolean).join(", ")}`);
+  }
+
+  return {
+    external_id: raw.id ?? "",
+    source_type: "outlook_event",
+    title: raw.subject ?? "(No Title)",
+    content: parts.join("\n\n"),
+    metadata: {
+      start: raw.start?.dateTime,
+      end: raw.end?.dateTime,
+      organizer: raw.organizer?.emailAddress?.address,
+      status: raw.showAs ?? raw.responseStatus?.response,
+      web_link: raw.webLink,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeOutlookContact(raw: any): SyncRecord {
+  const displayName = raw.displayName ?? [raw.givenName, raw.surname].filter(Boolean).join(" ") ?? "Unknown Contact";
+  const emailAddresses = (raw.emailAddresses ?? []) as Array<{ address?: string }>;
+  const phones = (raw.phones ?? raw.businessPhones ?? []) as Array<string | { number?: string }>;
+
+  const parts: string[] = [];
+  if (displayName) parts.push(`Name: ${displayName}`);
+  if (emailAddresses[0]?.address) parts.push(`Email: ${emailAddresses[0].address}`);
+  if (emailAddresses.length > 1) {
+    parts.push(`Other emails: ${emailAddresses.slice(1).map((e) => e.address).filter(Boolean).join(", ")}`);
+  }
+  if (phones.length > 0) {
+    const phoneStrs = phones.map((p) => (typeof p === "string" ? p : p.number)).filter(Boolean);
+    if (phoneStrs.length > 0) parts.push(`Phone: ${phoneStrs.join(", ")}`);
+  }
+  if (raw.companyName) parts.push(`Company: ${raw.companyName}`);
+  if (raw.jobTitle) parts.push(`Title: ${raw.jobTitle}`);
+
+  return {
+    external_id: raw.id ?? "",
+    source_type: "outlook_contact",
+    title: displayName,
+    content: parts.join("\n"),
+    metadata: {
+      email: emailAddresses[0]?.address ?? undefined,
+      display_name: displayName,
+      company: raw.companyName ?? undefined,
+      job_title: raw.jobTitle ?? undefined,
     },
   };
 }

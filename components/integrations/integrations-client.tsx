@@ -34,11 +34,11 @@ const CORE_INTEGRATIONS: IntegrationConfig[] = [
   { provider: "google-calendar", name: "Google Calendar", category: "Calendar",      color: "#1A73E8" },
   { provider: "hubspot",         name: "HubSpot",         category: "CRM",           color: "#FF7A59" },
   { provider: "google-drive",    name: "Google Drive",    category: "Knowledge",     color: "#34A853" },
+  { provider: "outlook",         name: "Outlook",         category: "Email",         color: "#0072C6" },
 ];
 
 const COMING_SOON_INTEGRATIONS: IntegrationConfig[] = [
   { provider: "salesforce",       name: "Salesforce",       category: "CRM",          color: "#00A1E0" },
-  { provider: "outlook",          name: "Outlook",          category: "Email",         color: "#0072C6" },
   { provider: "microsoft-teams",  name: "Microsoft Teams",  category: "Communication", color: "#6264A7" },
   { provider: "notion",           name: "Notion",           category: "Knowledge",     color: "#000000" },
   { provider: "confluence",       name: "Confluence",       category: "Knowledge",     color: "#172B4D" },

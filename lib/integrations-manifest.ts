@@ -55,6 +55,12 @@ const PROVIDER_CONFIG: Record<string, Omit<IntegrationInfo, "provider">> = {
     sourceTypes: ["document", "attachment"],
     signalPattern: /\b(google\s+drive|gdrive|drive\s+files?|shared\s+docs?)\b/i,
   },
+  "outlook": {
+    name: "Outlook",
+    description: "Microsoft email, calendar events, and contacts",
+    sourceTypes: ["outlook_email", "outlook_event", "outlook_contact"],
+    signalPattern: /\b(outlook|microsoft\s+mail|hotmail|live\.com)\b/i,
+  },
 };
 
 // ── Manifest builder ──────────────────────────────────────────────────────────
@@ -109,7 +115,7 @@ export function queryMatchesCrossIntegrationSignal(
 // ── Ambiguity detection ───────────────────────────────────────────────────────
 
 /** Providers that represent person-to-person communication. */
-const COMM_PROVIDERS = new Set(["slack", "google-mail"]);
+const COMM_PROVIDERS = new Set(["slack", "google-mail", "outlook"]);
 
 /**
  * Patterns that signal a vague communication query that doesn't specify which
