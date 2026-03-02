@@ -361,6 +361,22 @@ export function buildGmailContactMap(contacts: any[]): Record<string, string> {
   return map;
 }
 
+/** Format ISO date string to human-readable "February 7, 2026" */
+function formatEmailDate(dateRaw: string): string {
+  try {
+    const d = new Date(dateRaw);
+    if (isNaN(d.getTime())) return dateRaw;
+    return d.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  } catch { return dateRaw; }
+}
+
+/** Build a searchable context header for email chunks */
+function buildEmailHeader(senderDisplay: string, recipientsRaw: string, subject: string, dateRaw: string): string {
+  const toStr = recipientsRaw || "unknown";
+  const dateStr = dateRaw ? formatEmailDate(dateRaw) : "unknown date";
+  return `From: ${senderDisplay} → To: ${toStr} | Subject: ${subject} | Date: ${dateStr}`;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeGmail(raw: any, contactMap?: Record<string, string>): SyncRecord {
   // Nango GmailEmail model provides flattened fields, not the raw Gmail API payload structure.
@@ -385,7 +401,12 @@ export function normalizeGmail(raw: any, contactMap?: Record<string, string>): S
   const bodyText = stripHtml(bodyRaw);
   const cleanBody = removePromotionalFooter(bodyText);
   const { body, quotedRef } = extractQuotedReply(cleanBody);
-  const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
+  const emailBody = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
+
+  // Prepend searchable context header so semantic search can match on sender/recipient
+  const senderDisplay = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+  const header = buildEmailHeader(senderDisplay, recipientsRaw, subjectRaw, dateRaw);
+  const content = `${header}\n\n${emailBody || body || bodyText}`;
 
   // Convert ISO date string to Unix seconds float string for time-range SQL
   let ts: string | undefined;
@@ -402,7 +423,7 @@ export function normalizeGmail(raw: any, contactMap?: Record<string, string>): S
     external_id: raw.id ?? "",
     source_type: "gmail_message",
     title: subjectRaw,
-    content: content || body || bodyText,
+    content,
     metadata: {
       sender_name: senderName || undefined,
       sender_email: senderEmail || undefined,
@@ -712,7 +733,12 @@ export function normalizeOutlookEmail(raw: any): SyncRecord {
   const bodyText = stripHtml(bodyRaw);
   const cleanBody = removePromotionalFooter(bodyText);
   const { body, quotedRef } = extractQuotedReply(cleanBody);
-  const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
+  const emailBody = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
+
+  // Prepend searchable context header so semantic search can match on sender/recipient
+  const senderDisplay = senderName ? `${senderName} <${senderEmail}>` : senderEmail;
+  const header = buildEmailHeader(senderDisplay, recipientsRaw, subjectRaw, dateRaw);
+  const content = `${header}\n\n${emailBody || body || bodyText}`;
 
   let ts: string | undefined;
   if (dateRaw) {
@@ -726,7 +752,7 @@ export function normalizeOutlookEmail(raw: any): SyncRecord {
     external_id: raw.id ?? "",
     source_type: "outlook_email",
     title: subjectRaw,
-    content: content || body || bodyText,
+    content,
     metadata: {
       sender_name: senderName || undefined,
       sender_email: senderEmail || undefined,
