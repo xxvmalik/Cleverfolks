@@ -256,6 +256,8 @@ export const syncIntegrationFunction = inngest.createFunction(
           let gmailDateSkipped = 0;
           let gmailTransactionalSkipped = 0;
           let gmailSampleLogged = 0;
+          let outlookEmailSampleLogged = 0;
+          let outlookEventSampleLogged = 0;
 
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
@@ -287,6 +289,25 @@ export const syncIntegrationFunction = inngest.createFunction(
               }
 
               for (const raw of page.records) {
+                // Debug: log first 2 raw OutlookEmail records before normalisation
+                if (provider === "outlook" && model === "OutlookEmail" && outlookEmailSampleLogged < 2) {
+                  outlookEmailSampleLogged++;
+                  const json = JSON.stringify(raw, null, 2);
+                  console.log(
+                    `[inngest] RAW OutlookEmail #${outlookEmailSampleLogged} — keys: [${Object.keys(raw).filter(k => !k.startsWith("_nango")).join(", ")}]`
+                  );
+                  console.log(`[inngest] RAW OutlookEmail #${outlookEmailSampleLogged} JSON (first 2000 chars):\n${json.slice(0, 2000)}`);
+                }
+                // Debug: log first 2 raw OutlookCalendarEvent records before normalisation
+                if (provider === "outlook" && model === "OutlookCalendarEvent" && outlookEventSampleLogged < 2) {
+                  outlookEventSampleLogged++;
+                  const json = JSON.stringify(raw, null, 2);
+                  console.log(
+                    `[inngest] RAW OutlookCalendarEvent #${outlookEventSampleLogged} — keys: [${Object.keys(raw).filter(k => !k.startsWith("_nango")).join(", ")}]`
+                  );
+                  console.log(`[inngest] RAW OutlookCalendarEvent #${outlookEventSampleLogged} JSON (first 2000 chars):\n${json.slice(0, 2000)}`);
+                }
+
                 // For Slack replies, augment lookups with the parent text map so
                 // normalizeSlackReply can prepend "[Replying to: ...]" context.
                 const lookupsForRecord =
