@@ -167,8 +167,12 @@ function buildPlannerPrompt(
   const recentHistory =
     conversationHistory.length > 0
       ? conversationHistory
-          .slice(-4)
-          .map((m) => `${m.role}: ${m.content.slice(0, 200)}`)
+          .slice(-5)
+          .map((m) => {
+            // Give assistant responses more room — they contain entities the user may reference
+            const limit = m.role === "assistant" ? 500 : 300;
+            return `${m.role}: ${m.content.slice(0, limit)}`;
+          })
           .join("\n")
       : "(no prior conversation)";
 
@@ -238,6 +242,12 @@ CRITICAL INSTRUCTIONS:
    - "This week" / "last week": use the exact calendar week boundaries.
    - "Recently" or "latest": default to last 7 days unless the user specifies otherwise.
    - NEVER use a 1-day window for a briefing or catch-up — these inherently need multi-day context.
+11. CONVERSATION CONTEXT — use the RECENT CONVERSATION section below to:
+   - Resolve pronouns and references: "they" = the person/company mentioned in the previous exchange, "it" = the email/message/deal discussed previously, "that channel" = the channel just mentioned.
+   - Maintain integration context: if the previous query was about email, a follow-up like "did they reply" is about email too (not Slack). If it was about Slack, follow-ups stay in Slack context unless explicitly changed.
+   - Understand follow-up intent: "did they reply" after an email query = search for reply emails FROM the referenced entity. "What else did they say" after a Slack search = search the same person in Slack.
+   - Carry forward entities: names, email addresses, channel names, subjects, and dates from the previous exchange should inform your strategy choice and search params.
+   - When the user's message is ambiguous on its own but clear in context, use the context. NEVER ignore the conversation history.
 
 HYBRID_AGGREGATION GUIDE:
 - dedicated_channels: list channel names (without #) that are entirely about the query topic
@@ -284,10 +294,10 @@ Available strategies:
 - profile_only: Answer from profile alone — no search needed.
 - hybrid_aggregation: SQL counts per person (dedicated channels: all messages; other channels: keyword-matched) + 300-message sample. Use for ALL person-level counting and ranking questions.
 
-RECENT CONVERSATION:
+RECENT CONVERSATION (use this to resolve pronouns, maintain integration context, and understand follow-ups):
 ${recentHistory}
 ${aggregationFlag}${comparisonFlag}
-USER MESSAGE: "${message}"
+CURRENT USER MESSAGE: "${message}"
 EXTRACTED TIME RANGE: ${timeRangeInfo}
 IS AGGREGATION QUERY: ${queryAnalysis.isAggregation ? "YES — must use hybrid_aggregation" : "no"}
 IS COMPARISON QUERY: ${queryAnalysis.isComparison ? "YES — must output two strategies with different time ranges" : "no"}
