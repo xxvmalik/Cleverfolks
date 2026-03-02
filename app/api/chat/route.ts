@@ -209,7 +209,23 @@ function buildSystemPrompt(
     }
   }
 
+  const now = new Date();
+  const isoDate = now.toISOString();
+  const humanDate = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+  const humanTime = now.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  });
+
   return `You are CleverBrain, the AI knowledge assistant for ${companyName}. You help team members find information and insights from their connected business data.
+
+Today is ${humanDate}, ${humanTime} (${isoDate}). Use this to correctly interpret all time-relative language — upcoming, recent, last week, tomorrow, overdue, this quarter, etc. — across all integrations and data types.
 ${businessContextSection}${intelligenceSection}${companySection}
 RULES:
 - Answer based on the provided context from connected integrations (Slack messages, emails, documents, etc.)
