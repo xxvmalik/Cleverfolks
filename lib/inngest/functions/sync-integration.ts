@@ -250,14 +250,14 @@ export const syncIntegrationFunction = inngest.createFunction(
           const models = PROVIDER_MODELS_MAP[provider] ?? [];
           const normalised: SerialisableSyncRecord[] = [];
 
-          // Gmail date cutoff: only process emails from the last 6 months
-          const gmailCutoff = new Date();
-          gmailCutoff.setMonth(gmailCutoff.getMonth() - 6);
+          // Date cutoff: only process emails from the last 6 months (Gmail + Outlook)
+          const emailCutoff = new Date();
+          emailCutoff.setMonth(emailCutoff.getMonth() - 6);
           let gmailDateSkipped = 0;
           let gmailTransactionalSkipped = 0;
           let gmailSampleLogged = 0;
-          let outlookEmailSampleLogged = 0;
-          let outlookEventSampleLogged = 0;
+          let outlookDateSkipped = 0;
+          let outlookTransactionalSkipped = 0;
 
           // ts → resolved message text. Populated while processing SlackMessage
           // records (which come before SlackMessageReply in PROVIDER_MODELS_MAP)
@@ -289,25 +289,6 @@ export const syncIntegrationFunction = inngest.createFunction(
               }
 
               for (const raw of page.records) {
-                // Debug: log first 2 raw OutlookEmail records before normalisation
-                if (provider === "outlook" && model === "OutlookEmail" && outlookEmailSampleLogged < 2) {
-                  outlookEmailSampleLogged++;
-                  const json = JSON.stringify(raw, null, 2);
-                  console.log(
-                    `[inngest] RAW OutlookEmail #${outlookEmailSampleLogged} — keys: [${Object.keys(raw).filter(k => !k.startsWith("_nango")).join(", ")}]`
-                  );
-                  console.log(`[inngest] RAW OutlookEmail #${outlookEmailSampleLogged} JSON (first 2000 chars):\n${json.slice(0, 2000)}`);
-                }
-                // Debug: log first 2 raw OutlookCalendarEvent records before normalisation
-                if (provider === "outlook" && model === "OutlookCalendarEvent" && outlookEventSampleLogged < 2) {
-                  outlookEventSampleLogged++;
-                  const json = JSON.stringify(raw, null, 2);
-                  console.log(
-                    `[inngest] RAW OutlookCalendarEvent #${outlookEventSampleLogged} — keys: [${Object.keys(raw).filter(k => !k.startsWith("_nango")).join(", ")}]`
-                  );
-                  console.log(`[inngest] RAW OutlookCalendarEvent #${outlookEventSampleLogged} JSON (first 2000 chars):\n${json.slice(0, 2000)}`);
-                }
-
                 // For Slack replies, augment lookups with the parent text map so
                 // normalizeSlackReply can prepend "[Replying to: ...]" context.
                 const lookupsForRecord =
@@ -342,12 +323,10 @@ export const syncIntegrationFunction = inngest.createFunction(
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {
                     const meta = rec.metadata ?? {};
 
-                    // Debug sample: log first 3 gmail_message records so we can
-                    // verify the date fields Nango exposes and the parsed ts value.
                     // Date filter: skip emails older than 6 months
                     const tsRaw = meta.ts as string | undefined;
                     const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
-                    if (!emailDate || emailDate < gmailCutoff) {
+                    if (!emailDate || emailDate < emailCutoff) {
                       if (!emailDate) {
                         console.warn(
                           `[inngest] gmail: ts=undefined for ${rec.external_id} — check _ts_source in sample log above`
@@ -360,6 +339,23 @@ export const syncIntegrationFunction = inngest.createFunction(
                     // Transactional filter: skip automated / payment noise
                     if (isTransactionalEmail(meta)) {
                       gmailTransactionalSkipped++;
+                      continue;
+                    }
+                  }
+
+                  // Outlook email: same 6-month date + transactional filters
+                  if (provider === "outlook" && rec.source_type === "outlook_email") {
+                    const meta = rec.metadata ?? {};
+
+                    const tsRaw = meta.ts as string | undefined;
+                    const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
+                    if (!emailDate || emailDate < emailCutoff) {
+                      outlookDateSkipped++;
+                      continue;
+                    }
+
+                    if (isTransactionalEmail(meta)) {
+                      outlookTransactionalSkipped++;
                       continue;
                     }
                   }
@@ -391,12 +387,22 @@ export const syncIntegrationFunction = inngest.createFunction(
           console.log(`[inngest] parentTextMap has ${Object.keys(parentTextMap).length} entries for reply context`);
           if (gmailDateSkipped > 0) {
             console.log(
-              `[inngest] google-mail: skipped ${gmailDateSkipped} emails older than 6 months (cutoff=${gmailCutoff.toISOString()})`
+              `[inngest] google-mail: skipped ${gmailDateSkipped} emails older than 6 months (cutoff=${emailCutoff.toISOString()})`
             );
           }
           if (gmailTransactionalSkipped > 0) {
             console.log(
               `[inngest] google-mail: skipped ${gmailTransactionalSkipped} automated/transactional emails`
+            );
+          }
+          if (outlookDateSkipped > 0) {
+            console.log(
+              `[inngest] outlook: skipped ${outlookDateSkipped} emails older than 6 months (cutoff=${emailCutoff.toISOString()})`
+            );
+          }
+          if (outlookTransactionalSkipped > 0) {
+            console.log(
+              `[inngest] outlook: skipped ${outlookTransactionalSkipped} automated/transactional emails`
             );
           }
           return normalised;

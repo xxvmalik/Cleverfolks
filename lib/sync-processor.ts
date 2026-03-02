@@ -686,25 +686,38 @@ export function normalizeHubspot(raw: any): SyncRecord {
 }
 
 // ============================================================
-// Outlook normalizers (stubs — Nango model shapes TBD)
+// Outlook normalizers
 // ============================================================
+// Nango's OutlookEmail model exposes the same flattened fields as GmailEmail:
+//   raw.sender, raw.recipients, raw.date, raw.subject, raw.body
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeOutlookEmail(raw: any): SyncRecord {
-  const subject = (raw.subject as string | undefined) ?? "(No Subject)";
-  const bodyContent = (raw.body?.content as string | undefined) ?? (raw.bodyPreview as string | undefined) ?? "";
-  const from = raw.from?.emailAddress?.name ?? raw.from?.emailAddress?.address ?? "";
-  const fromEmail = raw.from?.emailAddress?.address ?? "";
-  const toRecipients = (raw.toRecipients ?? []) as Array<{ emailAddress?: { address?: string; name?: string } }>;
-  const recipients = toRecipients.map((r) => r.emailAddress?.address).filter(Boolean) as string[];
-  const receivedAt = (raw.receivedDateTime as string | undefined) ?? "";
+  const senderRaw = (raw.sender as string | undefined) ?? "";
+  const subjectRaw = (raw.subject as string | undefined) ?? "(No Subject)";
+  const dateRaw = (raw.date as string | undefined) ?? "";
+  const bodyRaw = (raw.body as string | undefined) ?? "";
+  const recipientsRaw = (raw.recipients as string | undefined) ?? "";
 
-  const body = bodyContent.includes("<") ? stripHtml(bodyContent) : bodyContent;
+  const { name: senderNameRaw, email: senderEmail } = parseFromHeader(senderRaw);
+  const senderName = senderNameRaw;
+
+  const recipients = recipientsRaw
+    ? recipientsRaw
+        .split(",")
+        .map((r) => parseFromHeader(r.trim()).email)
+        .filter(Boolean)
+    : [];
+
+  const bodyText = stripHtml(bodyRaw);
+  const cleanBody = removePromotionalFooter(bodyText);
+  const { body, quotedRef } = extractQuotedReply(cleanBody);
+  const content = quotedRef ? `[Replying to: ${quotedRef}]\n${body}` : body;
 
   let ts: string | undefined;
-  if (receivedAt) {
+  if (dateRaw) {
     try {
-      const parsed = new Date(receivedAt);
+      const parsed = new Date(dateRaw);
       if (!isNaN(parsed.getTime())) ts = String(parsed.getTime() / 1000);
     } catch { /* ignore */ }
   }
@@ -712,18 +725,18 @@ export function normalizeOutlookEmail(raw: any): SyncRecord {
   return {
     external_id: raw.id ?? "",
     source_type: "outlook_email",
-    title: subject,
-    content: body,
+    title: subjectRaw,
+    content: content || body || bodyText,
     metadata: {
-      sender_name: from || undefined,
-      sender_email: fromEmail || undefined,
-      user_name: from || fromEmail || undefined,
-      from: `${from} <${fromEmail}>`,
-      to: recipients.join(", "),
+      sender_name: senderName || undefined,
+      sender_email: senderEmail || undefined,
+      user_name: senderName || senderEmail || undefined,
+      from: senderRaw,
+      to: recipientsRaw,
       recipients,
-      subject,
-      date: receivedAt,
-      conversation_id: raw.conversationId ?? undefined,
+      subject: subjectRaw,
+      date: dateRaw,
+      thread_id: raw.threadId ?? raw.conversationId ?? undefined,
       ts,
     },
   };
