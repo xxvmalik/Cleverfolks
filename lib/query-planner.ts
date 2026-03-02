@@ -207,7 +207,18 @@ function buildPlannerPrompt(
     ? `\n⚠️  COMPARISON DETECTED: This query compares two time periods. You MUST output TWO separate strategies (one per period) — e.g. two broad_fetch strategies with different after/before ranges, or two hybrid_aggregation strategies for counting comparisons. Use "label" param on each strategy with the period name (e.g. "Last week", "This week").\n`
     : "";
 
+  const now = new Date();
+  const isoDate = now.toISOString();
+  const humanDate = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
   return `You are a search strategist for a business AI assistant. Your job is to decide the best search strategy for the user's question.
+
+TODAY: ${humanDate} (${isoDate}). Use this date to calculate all time ranges — "last 7 days", "this week", "yesterday", "this month", etc. must be relative to TODAY.
 
 ${profileBlock}
 ${integrationsBlock ? `\n${integrationsBlock}\n` : ""}${businessContextBlock ? `\n${businessContextBlock}\n` : ""}
