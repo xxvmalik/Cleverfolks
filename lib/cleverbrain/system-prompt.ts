@@ -327,23 +327,64 @@ export function buildAgentSystemPrompt(
   // ── Integration awareness map ─────────────────────────────────────────
   const integrationMap = buildIntegrationAwarenessMap(connectedIntegrations);
 
+  // Use workspace timezone if available, otherwise default to UTC
+  const workspaceTimezone = (settings.timezone as string | undefined)?.trim() || "UTC";
+
   const now = new Date();
-  const isoDate = now.toISOString();
-  const humanDate = now.toLocaleDateString("en-US", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-  const humanTime = now.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZoneName: "short",
-  });
+  let isoDate: string;
+  let humanDate: string;
+  let humanTime: string;
+
+  try {
+    // Generate timezone-aware date strings
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: workspaceTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    // Build an ISO-like string in the workspace's local time
+    isoDate = `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
+
+    humanDate = now.toLocaleDateString("en-US", {
+      timeZone: workspaceTimezone,
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    humanTime = now.toLocaleTimeString("en-US", {
+      timeZone: workspaceTimezone,
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  } catch {
+    // Fallback to UTC if timezone string is invalid
+    isoDate = now.toISOString();
+    humanDate = now.toLocaleDateString("en-US", {
+      weekday: "long",
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    humanTime = now.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+  }
 
   return `You are CleverBrain, the AI knowledge assistant for ${companyName}. You help team members find information and insights from their connected business data.
 
-TODAY IS: ${humanDate}, ${humanTime} (${isoDate}).
+TODAY IS: ${humanDate}, ${humanTime} (${isoDate}). Workspace timezone: ${workspaceTimezone}.
+All date/time comparisons should use this timezone. When checking if a calendar event is "upcoming" or "past", compare against this local time — not UTC. An event at 2:00 PM WAT is still upcoming if the local time is 1:00 PM WAT, even if the UTC timestamp says 1:00 PM UTC.
 Use this to correctly interpret ALL time-relative language across all integrations and data types.
 CRITICAL TIME RULES:
 - "next meeting" / "upcoming" / "what's coming up" → set after=${isoDate} (FUTURE ONLY — never show past events)
@@ -372,12 +413,14 @@ You have access to tools that search and analyze the workspace's connected busin
 - For finding messages from a specific person: use search_by_person
 - For external/web information: use search_web. When web results return specific names, brands, data, or facts — USE THEM directly in your answer. Do not generalise web results into vague categories. Be specific and concrete.
 - MANDATORY WEB SEARCH — you MUST call search_web (not just rely on your own knowledge) when:
-  → The user asks about competitors, market landscape, or competitive analysis — search for "[industry/business type] competitors [region]"
+  → The user asks about competitors, market landscape, or competitive analysis — ALWAYS use the Company Context above to build a location-aware and industry-specific search query. If the company operates in Nigeria, search for "[business type] competitors Nigeria" and "[business type] competitors Africa", not generic global results. If the company targets a specific region, market, or audience, include that in the search query. Run 2-3 searches with different angles (e.g., "SMM panel Nigeria", "SMM panel competitors Africa", "social media marketing reseller panel Lagos") to get comprehensive regional results.
   → The user asks about industry trends, benchmarks, or market data
   → The user asks about a specific external company, product, or person you don't have data on
   → Your business data search returned no results AND the question is about something that exists publicly
   → The user explicitly asks "search the web" or "look it up"
   NEVER substitute a web search with generic advice from your own knowledge. If the user wants competitor names, SEARCH FOR THEM and return the actual names you find. Do not give the user a list of "research methods" — YOU do the research.
+  SEARCH QUERY INTELLIGENCE:
+  When constructing ANY web search query, always consider the Company Context above. Your search queries should reflect the business's actual market — their location, region, target audience, industry niche, and positioning. A Nigerian SMM panel's competitors are other Nigerian and African SMM panels, not random global ones. A London-based SaaS company's competitors are other companies in that space targeting the same market. Never search in a vacuum — use what you know about the business to search smarter.
 - For greetings, general knowledge, or questions you can answer from the company intelligence above: respond directly without tools
 - You can call multiple tools in one turn if the query needs data from different sources
 - Use the Integration Awareness Map above to set source_types when the user targets a specific integration
