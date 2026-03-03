@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
@@ -335,6 +335,13 @@ export async function POST(request: NextRequest) {
   let conversationId: string | null = inputConversationId ?? null;
   let isNewConversation = false;
 
+  // Hoisted state for after() callbacks (populated inside stream, read after response)
+  let afterData: {
+    savedContent: string;
+    history: Array<{ role: "user" | "assistant"; content: string }>;
+    fullResponse: string;
+  } | null = null;
+
   const responseStream = new ReadableStream({
     async start(controller) {
       function send(data: object) {
@@ -441,78 +448,15 @@ export async function POST(request: NextRequest) {
           messageId: assistantMsgId ?? null,
         });
         send({ type: "done" });
+
+        // Save data for after() callbacks before closing the stream
+        afterData = {
+          savedContent,
+          history,
+          fullResponse: agentResult.fullResponse,
+        };
+
         controller.close();
-
-        // ── Auto-title (non-blocking) ─────────────────────────────────────────
-        if (isNewConversation && conversationId) {
-          void (async () => {
-            try {
-              const anthropic = new Anthropic({
-                apiKey: process.env.ANTHROPIC_API_KEY,
-              });
-              const titleRes = await anthropic.messages.create({
-                model: "claude-sonnet-4-20250514",
-                max_tokens: 50,
-                messages: [
-                  {
-                    role: "user",
-                    content: `Generate a short, specific title (max 6 words) for a conversation based on the user's question and the assistant's response. Use names, IDs, or topics from the actual content — avoid generic titles. Return only the title, nothing else.\n\nUser question: "${message}"\n\nAssistant response (first 300 chars): "${savedContent.slice(0, 300)}"`,
-                  },
-                ],
-              });
-              const raw =
-                titleRes.content[0]?.type === "text"
-                  ? titleRes.content[0].text.trim().replace(/^["']|["']$/g, "")
-                  : null;
-              if (raw && conversationId) {
-                await db
-                  .from("conversations")
-                  .update({ title: raw })
-                  .eq("id", conversationId);
-                console.log(
-                  `[chat] Auto-titled conversation ${conversationId}: "${raw}"`
-                );
-              }
-            } catch (titleErr) {
-              console.error("[chat] Auto-title failed:", titleErr);
-            }
-          })();
-        }
-
-        // ── Memory extraction (non-blocking) ──────────────────────────────────
-        void (async () => {
-          try {
-            const fullConversation = [
-              ...history,
-              { role: "user" as const, content: message },
-              { role: "assistant" as const, content: savedContent },
-            ];
-
-            const existingMemories = await getAllMemoryContents(
-              db,
-              workspaceId
-            );
-            const extracted = await extractMemories(
-              fullConversation,
-              existingMemories
-            );
-
-            for (const memory of extracted) {
-              const result = await saveMemory(
-                db,
-                workspaceId,
-                memory,
-                user.id,
-                conversationId ?? undefined
-              );
-              console.log(
-                `[memory] ${result.action}: ${memory.content.slice(0, 80)}`
-              );
-            }
-          } catch (error) {
-            console.error("[memory] Extraction failed:", error);
-          }
-        })();
       } catch (err) {
         console.error("[chat] Pipeline error:", err);
         try {
@@ -531,6 +475,83 @@ export async function POST(request: NextRequest) {
         }
       }
     },
+  });
+
+  // ── Background tasks (run after response is sent, kept alive on Vercel) ───
+  after(async () => {
+    // Auto-title new conversations
+    if (isNewConversation && conversationId && afterData) {
+      try {
+        const anthropic = new Anthropic({
+          apiKey: process.env.ANTHROPIC_API_KEY,
+        });
+        const titleRes = await anthropic.messages.create({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 50,
+          messages: [
+            {
+              role: "user",
+              content: `Generate a short, specific title (max 6 words) for a conversation based on the user's question and the assistant's response. Use names, IDs, or topics from the actual content — avoid generic titles. Return only the title, nothing else.\n\nUser question: "${message}"\n\nAssistant response (first 300 chars): "${afterData.savedContent.slice(0, 300)}"`,
+            },
+          ],
+        });
+        const raw =
+          titleRes.content[0]?.type === "text"
+            ? titleRes.content[0].text.trim().replace(/^["']|["']$/g, "")
+            : null;
+        if (raw && conversationId) {
+          await db
+            .from("conversations")
+            .update({ title: raw })
+            .eq("id", conversationId);
+          console.log(
+            `[chat] Auto-titled conversation ${conversationId}: "${raw}"`
+          );
+        }
+      } catch (titleErr) {
+        console.error("[chat] Auto-title failed:", titleErr);
+      }
+    }
+
+    // Memory extraction
+    if (afterData) {
+      try {
+        const fullConversation = [
+          ...afterData.history,
+          { role: "user" as const, content: message },
+          { role: "assistant" as const, content: afterData.savedContent },
+        ];
+
+        console.log(
+          `[memory] Starting extraction for workspace ${workspaceId}, ${fullConversation.length} messages`
+        );
+
+        const existingMemories = await getAllMemoryContents(db, workspaceId);
+        const extracted = await extractMemories(
+          fullConversation,
+          existingMemories
+        );
+
+        for (const memory of extracted) {
+          const result = await saveMemory(
+            db,
+            workspaceId,
+            memory,
+            user.id,
+            conversationId ?? undefined
+          );
+          console.log(
+            `[memory] ${result.action}: ${memory.content.slice(0, 80)}`
+          );
+        }
+
+        console.log(
+          `[memory] Extraction complete: ${extracted.length} memories found`
+        );
+      } catch (error) {
+        console.error("[memory] Extraction failed:", error);
+      }
+    }
   });
 
   return new Response(responseStream, {
