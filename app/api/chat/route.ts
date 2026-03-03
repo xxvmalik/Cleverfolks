@@ -526,7 +526,12 @@ export async function POST(request: NextRequest) {
           `[memory] Starting extraction for workspace ${workspaceId}, ${fullConversation.length} messages`
         );
 
+        console.log(`[memory] Conversation length: ${fullConversation.length} messages`);
+        console.log(`[memory] Last user message: ${fullConversation.filter(m => m.role === 'user').pop()?.content?.slice(0, 200)}`);
+        console.log(`[memory] Last assistant message: ${fullConversation.filter(m => m.role === 'assistant').pop()?.content?.slice(0, 200)}`);
+
         const existingMemories = await getAllMemoryContents(db, workspaceId);
+        console.log(`[memory] Existing memories count: ${existingMemories.length}`);
         const extracted = await extractMemories(
           fullConversation,
           existingMemories

@@ -70,6 +70,7 @@ export async function extractMemories(
     });
 
     const textBlock = response.content.find((b) => b.type === "text");
+    console.log(`[memory-extractor] Raw Claude response: ${textBlock?.type === 'text' ? textBlock.text.slice(0, 500) : 'no text block'}`);
     if (!textBlock || textBlock.type !== "text") return [];
 
     // Parse JSON response, handling potential markdown fences
