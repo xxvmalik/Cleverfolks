@@ -250,7 +250,14 @@ export function buildAgentSystemPrompt(
   workspace: WorkspaceRow | null,
   onboarding: OnboardingRow | null,
   knowledgeProfile: KnowledgeProfileRow | null,
-  connectedIntegrations: IntegrationInfo[] = []
+  connectedIntegrations: IntegrationInfo[] = [],
+  memories?: Array<{
+    scope: string;
+    type: string;
+    content: string;
+    confidence: string;
+    times_reinforced: number;
+  }>
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
@@ -322,6 +329,62 @@ export function buildAgentSystemPrompt(
     if (formatted) {
       intelligenceSection = `\nCOMPANY INTELLIGENCE (auto-generated from your connected data):\n${formatted}\n`;
     }
+  }
+
+  // ── Memory context ──────────────────────────────────────────────────
+  let memorySection = "";
+  if (memories && memories.length > 0) {
+    const corrections = memories.filter((m) => m.type === "correction");
+    const preferences = memories.filter((m) => m.type === "preference");
+    const terminology = memories.filter((m) => m.type === "terminology");
+    const patterns = memories.filter((m) => m.type === "pattern");
+    const learnings = memories.filter((m) => m.type === "learning");
+
+    const sections: string[] = [];
+
+    if (corrections.length > 0) {
+      sections.push(
+        "CORRECTIONS (facts you got wrong before — do NOT repeat these mistakes):\n" +
+          corrections.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+    if (terminology.length > 0) {
+      sections.push(
+        "BUSINESS TERMINOLOGY (how this company talks):\n" +
+          terminology.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+    if (preferences.length > 0) {
+      sections.push(
+        "USER PREFERENCES:\n" +
+          preferences.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+    if (patterns.length > 0) {
+      sections.push(
+        "KNOWN PATTERNS:\n" +
+          patterns.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+    if (learnings.length > 0) {
+      sections.push(
+        "AGENT LEARNINGS (how to be a better assistant for this workspace):\n" +
+          learnings.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+
+    memorySection = `
+MEMORY — LEARNED CONTEXT FROM PAST CONVERSATIONS:
+The following was learned from previous interactions with this workspace. Use this information to give better, more personalised responses. If memory contradicts your default behaviour, follow the memory — it represents corrections and preferences from real usage.
+
+${sections.join("\n\n")}
+
+MEMORY USAGE RULES:
+- If memory can fully answer the question, answer from memory WITHOUT calling tools
+- If memory provides context that helps interpret the question, use it to make better tool calls
+- Never mention "my memory" or "I remember" — just use the knowledge naturally
+- Memory takes priority over generic knowledge when they conflict
+`;
   }
 
   // ── Integration awareness map ─────────────────────────────────────────
@@ -410,7 +473,7 @@ Calendar events from Outlook have 'start' and 'end' fields in their metadata. Th
 4. If the event's start time is BEFORE the current time → it is PAST
 5. NEVER rely on 'created_at' to determine if a calendar event is upcoming — that's the sync time, not the event time
 6. For today's events, always check the HOUR — an event at 1:00 PM today is still upcoming if it's currently 2:00 AM
-${businessContextSection}${intelligenceSection}${companySection}
+${businessContextSection}${intelligenceSection}${companySection}${memorySection}
 ${integrationMap}
 
 TOOL USAGE:

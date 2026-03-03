@@ -14,6 +14,12 @@ import {
   type KnowledgeProfileRow,
 } from "@/lib/cleverbrain/system-prompt";
 import type { UnifiedResult } from "@/lib/strategy-executor";
+import {
+  retrieveMemories,
+  saveMemory,
+  getAllMemoryContents,
+} from "@/lib/cleverbrain/memory-store";
+import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -306,11 +312,24 @@ export async function POST(request: NextRequest) {
     `[chat] connected integrations: [${connectedProviders.join(", ")}]`
   );
 
+  // Retrieve relevant memories for this query
+  const memories = await retrieveMemories(
+    db,
+    workspaceId,
+    message,
+    user.id,
+    15
+  );
+  if (memories.length > 0) {
+    console.log(`[chat] Retrieved ${memories.length} memories for query`);
+  }
+
   const systemPrompt = buildAgentSystemPrompt(
     workspaceRow as WorkspaceRow | null,
     onboardingRow as OnboardingRow | null,
     profileRow as KnowledgeProfileRow | null,
-    integrationManifest
+    integrationManifest,
+    memories
   );
 
   let conversationId: string | null = inputConversationId ?? null;
@@ -459,6 +478,41 @@ export async function POST(request: NextRequest) {
             }
           })();
         }
+
+        // ── Memory extraction (non-blocking) ──────────────────────────────────
+        void (async () => {
+          try {
+            const fullConversation = [
+              ...history,
+              { role: "user" as const, content: message },
+              { role: "assistant" as const, content: savedContent },
+            ];
+
+            const existingMemories = await getAllMemoryContents(
+              db,
+              workspaceId
+            );
+            const extracted = await extractMemories(
+              fullConversation,
+              existingMemories
+            );
+
+            for (const memory of extracted) {
+              const result = await saveMemory(
+                db,
+                workspaceId,
+                memory,
+                user.id,
+                conversationId ?? undefined
+              );
+              console.log(
+                `[memory] ${result.action}: ${memory.content.slice(0, 80)}`
+              );
+            }
+          } catch (error) {
+            console.error("[memory] Extraction failed:", error);
+          }
+        })();
       } catch (err) {
         console.error("[chat] Pipeline error:", err);
         try {
