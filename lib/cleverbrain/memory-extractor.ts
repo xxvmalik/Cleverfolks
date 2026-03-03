@@ -83,27 +83,34 @@ export async function extractMemories(
     const parsed = JSON.parse(jsonStr);
     if (!Array.isArray(parsed)) return [];
 
-    // Validate each memory
-    return parsed.filter(
-      (m: unknown): m is ExtractedMemory =>
-        typeof m === "object" &&
-        m !== null &&
-        "type" in m &&
-        "scope" in m &&
-        "content" in m &&
-        "confidence" in m &&
-        ["correction", "preference", "terminology", "pattern", "learning"].includes(
-          (m as ExtractedMemory).type
-        ) &&
-        ["workspace", "user", "agent"].includes(
-          (m as ExtractedMemory).scope
-        ) &&
-        ["high", "medium", "low"].includes(
-          (m as ExtractedMemory).confidence
-        ) &&
-        typeof (m as ExtractedMemory).content === "string" &&
-        (m as ExtractedMemory).content.length > 0
-    );
+    // Normalize and validate each memory
+    return parsed
+      .map((m: Record<string, unknown>) => ({
+        ...m,
+        type: typeof m.type === "string" ? m.type.toLowerCase() : m.type,
+        scope: typeof m.scope === "string" ? m.scope.toLowerCase() : m.scope,
+        confidence: typeof m.confidence === "string" ? m.confidence.toLowerCase() : m.confidence,
+      }))
+      .filter(
+        (m: unknown): m is ExtractedMemory =>
+          typeof m === "object" &&
+          m !== null &&
+          "type" in m &&
+          "scope" in m &&
+          "content" in m &&
+          "confidence" in m &&
+          ["correction", "preference", "terminology", "pattern", "learning"].includes(
+            (m as ExtractedMemory).type
+          ) &&
+          ["workspace", "user", "agent"].includes(
+            (m as ExtractedMemory).scope
+          ) &&
+          ["high", "medium", "low"].includes(
+            (m as ExtractedMemory).confidence
+          ) &&
+          typeof (m as ExtractedMemory).content === "string" &&
+          (m as ExtractedMemory).content.length > 0
+      );
   } catch (error) {
     console.error("[memory-extractor] Failed to extract memories:", error);
     return [];
