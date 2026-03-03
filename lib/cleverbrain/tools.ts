@@ -53,7 +53,8 @@ export const CLEVERBRAIN_TOOLS: Anthropic.Tool[] = [
       "Do NOT use this for counting/ranking — use count_messages_by_person instead. " +
       "ALSO use this tool for ALL calendar/meeting/schedule queries — you MUST set source_types to ['outlook_event', 'calendar_event'] for meeting queries. " +
       "For 'next meeting' or 'upcoming': set 'after' to the current date/time ISO string. For 'last meeting' or 'past': set 'before' to the current date/time. " +
-      "If no results, retry with a wider window (14 days before and after today). Sort results chronologically to find the nearest event.",
+      "If no results, retry with a wider window (14 days before and after today). Sort results chronologically to find the nearest event. " +
+      "IMPORTANT FOR CALENDAR EVENTS: The time filter on this tool uses sync time, not event time. For calendar events, always check the 'start' field in the event metadata to determine if the event is actually upcoming or past. An event synced yesterday with start time tomorrow is still an UPCOMING event.",
     input_schema: {
       type: "object" as const,
       properties: {

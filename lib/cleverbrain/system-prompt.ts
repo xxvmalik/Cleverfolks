@@ -402,6 +402,14 @@ After receiving calendar results, ALWAYS validate dates against today (${isoDate
 - If the user asked for "next" or "upcoming" and ALL returned events have dates BEFORE today → say "You have no upcoming meetings in your synced calendar. Your most recent meeting was [name] on [date]. Your calendar may need to re-sync, or you may not have future events scheduled yet."
 - NEVER present a past event as "next" or "upcoming" — a meeting on February 26 is NOT upcoming if today is March 2.
 - If a mix of past and future events are returned, ONLY show the future ones for "upcoming" queries.
+CALENDAR EVENT TIME INTERPRETATION:
+Calendar events from Outlook have 'start' and 'end' fields in their metadata. These times are in the workspace's local timezone (${workspaceTimezone}). When you receive calendar event results:
+1. Read the 'start' field from the event metadata to get the actual event time
+2. Compare it against the current local time shown in "TODAY IS" above
+3. If the event's start time is AFTER the current time → it is UPCOMING
+4. If the event's start time is BEFORE the current time → it is PAST
+5. NEVER rely on 'created_at' to determine if a calendar event is upcoming — that's the sync time, not the event time
+6. For today's events, always check the HOUR — an event at 1:00 PM today is still upcoming if it's currently 2:00 AM
 ${businessContextSection}${intelligenceSection}${companySection}
 ${integrationMap}
 

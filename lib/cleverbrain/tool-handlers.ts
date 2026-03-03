@@ -100,7 +100,7 @@ export async function handleFetchRecentMessages(
       return { results: [], summary: `Fetch failed: ${error.message}` };
     }
 
-    const results = (
+    const rawResults = (
       (data ?? []) as Omit<UnifiedResult, "similarity">[]
     ).map((r) => ({
       ...r,
@@ -108,6 +108,29 @@ export async function handleFetchRecentMessages(
       title: r.title ?? "",
       similarity: 0,
     }));
+
+    // Enrich calendar event results with parsed time info
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results = rawResults.map((chunk: any) => {
+      const sourceType = chunk.metadata?.source_type;
+      if (sourceType === 'outlook_event' || sourceType === 'calendar_event') {
+        const eventStart = chunk.metadata?.start;
+        const eventEnd = chunk.metadata?.end;
+        if (eventStart) {
+          // Add explicit fields so Claude can easily compare
+          return {
+            ...chunk,
+            metadata: {
+              ...chunk.metadata,
+              _event_start_local: eventStart, // Already in workspace local time
+              _event_end_local: eventEnd,
+              _is_calendar_event: true,
+            }
+          };
+        }
+      }
+      return chunk;
+    });
 
     console.log(
       `[tool-handler] fetch_recent_messages: after=${after} before=${before} → ${results.length} messages`
