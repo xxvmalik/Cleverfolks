@@ -109,7 +109,7 @@ export async function handleFetchRecentMessages(
       similarity: 0,
     }));
 
-    // Enrich calendar event results with parsed time info
+    // Enrich calendar event results — surface times in text Claude can see
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const results = rawResults.map((chunk: any) => {
       const sourceType = chunk.metadata?.source_type;
@@ -117,12 +117,32 @@ export async function handleFetchRecentMessages(
         const eventStart = chunk.metadata?.start;
         const eventEnd = chunk.metadata?.end;
         if (eventStart) {
-          // Add explicit fields so Claude can easily compare
+          // Format the times for readability
+          const startDate = new Date(eventStart);
+          const endDate = eventEnd ? new Date(eventEnd) : null;
+
+          const formatTime = (d: Date) => {
+            return d.toLocaleString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            });
+          };
+
+          const timePrefix = endDate
+            ? `[EVENT TIME: ${formatTime(startDate)} to ${endDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}]\n`
+            : `[EVENT TIME: ${formatTime(startDate)}]\n`;
+
           return {
             ...chunk,
+            chunk_text: timePrefix + chunk.chunk_text,
             metadata: {
               ...chunk.metadata,
-              _event_start_local: eventStart, // Already in workspace local time
+              _event_start_local: eventStart,
               _event_end_local: eventEnd,
               _is_calendar_event: true,
             }
