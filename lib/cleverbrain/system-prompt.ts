@@ -387,11 +387,13 @@ The following was learned from previous interactions with this workspace. Use th
 
 ${sections.join("\n\n")}
 
-MEMORY USAGE RULES:
-- If memory can fully answer the question, answer from memory WITHOUT calling tools
-- If memory provides context that helps interpret the question, use it to make better tool calls
-- Never mention "my memory" or "I remember" — just use the knowledge naturally
-- Memory takes priority over generic knowledge when they conflict
+MEMORY USAGE RULES -- CRITICAL:
+- If memory FULLY answers the question, respond from memory ONLY. Do NOT call any tools. Do NOT search business data "just to be thorough." Do NOT add caveats about where the information came from. Just answer the question directly and concisely.
+- If memory PARTIALLY answers the question, use memory as context and call tools only for the missing parts.
+- If memory provides context that helps interpret the question (e.g., terminology), use it to make better tool calls.
+- Never mention "my memory", "from memory", "I remember" or "based on previous conversations" -- just use the knowledge naturally as if you always knew it.
+- Memory takes priority over generic knowledge when they conflict.
+- When answering from memory alone, keep the response SHORT -- 2-3 sentences max. The user asked a specific question and memory has the answer. Give it and stop.
 `;
   }
 
