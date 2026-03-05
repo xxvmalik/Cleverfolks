@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
@@ -308,6 +309,59 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         return { personSamples, channelSamples };
       });
 
+      // ── Step 3.5: Check if rebuild is needed (daily cap + content hash) ──
+      const shouldSkip = await step.run("check-rebuild-needed", async () => {
+        const db = createAdminSupabaseClient();
+
+        // Generate hash of input data (same data sent to Claude)
+        const inputHash = createHash("sha256")
+          .update(JSON.stringify({ teamData, sampleData }))
+          .digest("hex");
+
+        const { data: workspace } = await db
+          .from("workspaces")
+          .select("settings")
+          .eq("id", workspaceId)
+          .single();
+
+        const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
+
+        // Safety cap: max 1 rebuild per day per workspace
+        const lastBuildTime = settings.last_profile_build_at as string | undefined;
+        if (lastBuildTime) {
+          const hoursSinceLastBuild =
+            (Date.now() - new Date(lastBuildTime).getTime()) / (1000 * 60 * 60);
+          if (hoursSinceLastBuild < 24) {
+            console.log(
+              `[knowledge-profile] Last built ${hoursSinceLastBuild.toFixed(1)}h ago -- skipping (24h cap)`
+            );
+            return { skip: true, inputHash };
+          }
+        }
+
+        // Content hash guard: skip if data hasn't changed
+        const lastProfileHash = settings.last_profile_hash as string | undefined;
+        if (lastProfileHash === inputHash) {
+          console.log(
+            `[knowledge-profile] Data unchanged (hash: ${inputHash.slice(0, 8)}...) -- skipping rebuild`
+          );
+          return { skip: true, inputHash };
+        }
+
+        console.log(
+          `[knowledge-profile] Data changed (old: ${lastProfileHash?.slice(0, 8) ?? "none"}, new: ${inputHash.slice(0, 8)}...) -- rebuilding`
+        );
+        return { skip: false, inputHash };
+      });
+
+      if (shouldSkip.skip) {
+        return {
+          status: "skipped",
+          members: teamData.activity.length,
+          channels: teamData.channels.length,
+        };
+      }
+
       // ── Step 4: Single Claude call to analyze all data ────────────────────
       const finalProfile = await step.run("analyze-with-claude", async () => {
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -316,8 +370,8 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         console.log("[knowledge-profile] Calling Claude for analysis");
 
         const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4096,
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 2048,
           messages: [{ role: "user", content: prompt }],
         });
 
@@ -335,7 +389,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         return parsed;
       });
 
-      // ── Step 5: Save profile ──────────────────────────────────────────────
+      // ── Step 5: Save profile + hash ────────────────────────────────────────
       await step.run("save-profile", async () => {
         const db = createAdminSupabaseClient();
 
@@ -357,8 +411,27 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
           p_status: status,
         });
         if (error) throw new Error(`Failed to save profile: ${error.message}`);
+
+        // Save hash and build timestamp so we can skip unnecessary rebuilds
+        const { data: workspace } = await db
+          .from("workspaces")
+          .select("settings")
+          .eq("id", workspaceId)
+          .single();
+
+        await db
+          .from("workspaces")
+          .update({
+            settings: {
+              ...(workspace?.settings as Record<string, unknown> ?? {}),
+              last_profile_hash: shouldSkip.inputHash,
+              last_profile_build_at: new Date().toISOString(),
+            },
+          })
+          .eq("id", workspaceId);
+
         console.log(
-          `[knowledge-profile] Profile saved (${status}) — workspace ${workspaceId}`
+          `[knowledge-profile] Profile rebuilt and hash saved (${status}) — workspace ${workspaceId}`
         );
       });
 
