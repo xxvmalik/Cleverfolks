@@ -35,7 +35,8 @@ Rules:
 - confidence is "high" for explicit corrections/statements, "medium" for inferred preferences, "low" for uncertain patterns
 - If nothing worth remembering, return an empty array: []
 - content should be a concise, self-contained statement that makes sense without the original conversation
-- Do NOT extract: the user's question itself, generic AI knowledge, things already in the business profile, trivial conversational details`;
+- Do NOT extract: the user's question itself, generic AI knowledge, trivial conversational details
+- If the user restates or confirms something that appears in EXISTING MEMORIES below, DO extract it again with the same content. This allows the system to track reinforcement.`;
 
 export async function extractMemories(
   conversationMessages: Array<{ role: "user" | "assistant"; content: string }>,
@@ -53,7 +54,7 @@ export async function extractMemories(
   // Include existing memories so we don't extract duplicates
   const existingContext =
     existingMemories.length > 0
-      ? `\n\nEXISTING MEMORIES (do NOT re-extract these):\n${existingMemories.map((m, i) => `${i + 1}. ${m}`).join("\n")}`
+      ? `\n\nEXISTING MEMORIES (for reference -- re-extract if the user confirms or restates any of these):\n${existingMemories.map((m, i) => `${i + 1}. ${m}`).join("\n")}`
       : "";
 
   try {
