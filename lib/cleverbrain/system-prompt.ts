@@ -208,6 +208,14 @@ const ALL_PROVIDERS: Array<{
     description: "calendar events, meetings, schedules, attendees, recurring events, availability",
     sourceTypes: ["calendar_event"],
   },
+
+  // Internal
+  {
+    provider: "cleverbrain",
+    name: "CleverBrain Chat History",
+    description: "past CleverBrain conversations — previous questions, answers, and decisions discussed with the AI assistant",
+    sourceTypes: ["cleverbrain_chat"],
+  },
 ];
 
 function buildIntegrationAwarenessMap(

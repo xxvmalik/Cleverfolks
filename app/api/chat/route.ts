@@ -20,6 +20,8 @@ import {
   getAllMemoryContents,
 } from "@/lib/cleverbrain/memory-store";
 import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
+import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
+import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -63,6 +65,9 @@ function getChannelName(
   if (sourceType === "gmail_message") {
     const subject = (meta.subject as string | undefined) ?? "";
     return subject ? `📧 ${subject.slice(0, 60)}` : "📧 Gmail";
+  }
+  if (sourceType === "cleverbrain_chat") {
+    return "CleverBrain conversation";
   }
   return "";
 }
@@ -378,19 +383,46 @@ export async function POST(request: NextRequest) {
         });
 
         // ── Step 2: Load conversation history ────────────────────────────────
+        const FULL_HISTORY_COUNT = 15;
         let history: Array<{ role: "user" | "assistant"; content: string }> =
           [];
         try {
           const { data: msgs } = await db.rpc("get_conversation_messages", {
             p_conversation_id: conversationId,
           });
-          history = ((msgs ?? []) as HistoryMessage[])
-            .slice(0, -1)
-            .slice(-10)
+          const allMessages = ((msgs ?? []) as HistoryMessage[])
+            .slice(0, -1) // exclude the just-saved user message
             .map((m) => ({
               role: m.role as "user" | "assistant",
               content: m.content,
             }));
+
+          if (allMessages.length <= FULL_HISTORY_COUNT) {
+            // Short conversation — send everything
+            history = allMessages;
+          } else {
+            // Long conversation — summarize older messages, keep recent in full
+            const olderMessages = allMessages.slice(0, -FULL_HISTORY_COUNT);
+            const recentMessages = allMessages.slice(-FULL_HISTORY_COUNT);
+
+            const summary = await summarizeConversation(olderMessages);
+
+            if (summary) {
+              history = [
+                {
+                  role: "user" as const,
+                  content: `[CONVERSATION CONTEXT: Earlier in this conversation, we discussed: ${summary}]`,
+                },
+                {
+                  role: "assistant" as const,
+                  content: "Understood, I have that context.",
+                },
+                ...recentMessages,
+              ];
+            } else {
+              history = recentMessages;
+            }
+          }
         } catch (histErr) {
           console.error("[chat] Failed to load history:", histErr);
         }
@@ -553,6 +585,19 @@ export async function POST(request: NextRequest) {
         console.log(
           `[memory] Extraction complete: ${extracted.length} memories found`
         );
+
+        // Embed conversation for cross-chat search
+        try {
+          await embedChatHistory(
+            db,
+            workspaceId,
+            conversationId!,
+            fullConversation,
+            user.id
+          );
+        } catch (embedError) {
+          console.error("[chat-embedder] Failed:", embedError);
+        }
       } catch (error) {
         console.error("[memory] Extraction failed:", error);
       }

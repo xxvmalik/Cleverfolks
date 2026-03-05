@@ -20,7 +20,8 @@ export type SyncRecord = {
     | "outlook_event"
     | "outlook_contact"
     | "document"
-    | "attachment";
+    | "attachment"
+    | "cleverbrain_chat";
   title?: string;
   content?: string;
   metadata?: Record<string, unknown>;
