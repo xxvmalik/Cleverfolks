@@ -398,6 +398,7 @@ export async function handleBrowseWebsite(
       body: JSON.stringify({
         api_key: process.env.TAVILY_API_KEY,
         urls: [url],
+        extract_depth: "advanced",
       }),
     });
 
@@ -409,10 +410,10 @@ export async function handleBrowseWebsite(
     if (data.results && data.results.length > 0) {
       const pageContent = data.results[0].raw_content || data.results[0].text || "";
 
-      // Truncate if very long (keep first 8000 chars to stay within token limits)
+      // Truncate if very long (keep first 15000 chars to stay within token limits)
       const truncated =
-        pageContent.length > 8000
-          ? pageContent.slice(0, 8000) + "\n\n[Content truncated -- page had more content]"
+        pageContent.length > 15000
+          ? pageContent.slice(0, 15000) + "\n\n[Content truncated -- page had more content]"
           : pageContent;
 
       console.log(
