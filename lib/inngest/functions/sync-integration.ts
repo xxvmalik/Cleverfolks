@@ -409,11 +409,23 @@ export const syncIntegrationFunction = inngest.createFunction(
             }
 
             console.log(`[inngest] model=${model}: fetched ${modelCount} raw → ${normalised.length} total normalised so far`);
-            } catch (modelErr) {
-              console.warn(
-                `[inngest] model=${model} fetch failed (model may not be configured in Nango):`,
-                modelErr instanceof Error ? modelErr.message : String(modelErr)
-              );
+            } catch (modelErr: unknown) {
+              // Extract Axios response details for Nango API errors
+              const axiosErr = modelErr as { response?: { status?: number; data?: unknown }; config?: { url?: string; headers?: Record<string, string> } };
+              if (axiosErr.response) {
+                console.error(
+                  `[inngest] model=${model} fetch FAILED — status=${axiosErr.response.status}`,
+                  `response_body=${JSON.stringify(axiosErr.response.data)}`,
+                  `request_url=${axiosErr.config?.url ?? "unknown"}`,
+                  `connection_id_header=${axiosErr.config?.headers?.["Connection-Id"] ?? "missing"}`,
+                  `provider_config_key_header=${axiosErr.config?.headers?.["Provider-Config-Key"] ?? "missing"}`
+                );
+              } else {
+                console.warn(
+                  `[inngest] model=${model} fetch failed (non-HTTP error):`,
+                  modelErr instanceof Error ? modelErr.message : String(modelErr)
+                );
+              }
               // Continue with remaining models
             }
           }
