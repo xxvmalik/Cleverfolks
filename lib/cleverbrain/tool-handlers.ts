@@ -381,16 +381,10 @@ export async function handleSearchWeb(
 
 // ── browse_website ────────────────────────────────────────────────────────
 
-export async function handleBrowseWebsite(
-  ctx: ToolContext
-): Promise<ToolHandlerResult> {
-  const { input } = ctx;
-  const url = input.url as string;
-
-  if (!url) {
-    return { results: [], summary: "No URL provided." };
-  }
-
+/**
+ * Fetch page content using Tavily Extract API (handles JS-rendered pages).
+ */
+async function fetchWithTavily(url: string): Promise<string | null> {
   try {
     const response = await fetch("https://api.tavily.com/extract", {
       method: "POST",
@@ -407,40 +401,137 @@ export async function handleBrowseWebsite(
       failed_results?: Array<{ url: string; error: string }>;
     };
 
+    console.log(
+      `[browse_website:tavily] ${url}: ${data.results?.length ?? 0} results, ${data.failed_results?.length ?? 0} failed`
+    );
+
     if (data.results && data.results.length > 0) {
-      const pageContent = data.results[0].raw_content || data.results[0].text || "";
-
-      // Truncate if very long (keep first 15000 chars to stay within token limits)
-      const truncated =
-        pageContent.length > 15000
-          ? pageContent.slice(0, 15000) + "\n\n[Content truncated -- page had more content]"
-          : pageContent;
-
+      const content =
+        data.results[0].raw_content || data.results[0].text || "";
       console.log(
-        `[tool-handler] browse_website: ${url} → ${pageContent.length} chars`
+        `[browse_website:tavily] Content length: ${content.length} chars`
       );
-
-      return {
-        results: [],
-        summary: `Content from ${url}:\n\n${truncated}`,
-      };
+      return content;
     }
 
-    if (data.failed_results && data.failed_results.length > 0) {
-      return {
-        results: [],
-        summary: `Could not extract content from ${url}. The page may require login, block bots, or use JavaScript rendering. Try a different page on the site.`,
-      };
-    }
-
-    return { results: [], summary: `No content found at ${url}.` };
+    return null;
   } catch (error) {
-    console.error("[tool-handler] browse_website error:", error);
+    console.error(`[browse_website:tavily] Error fetching ${url}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fallback: direct HTTP fetch for static HTML pages.
+ * Strips HTML tags to get text content.
+ */
+async function fetchDirect(url: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
+      redirect: "follow",
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      console.log(
+        `[browse_website:direct] ${url} returned ${response.status}`
+      );
+      return null;
+    }
+
+    const html = await response.text();
+
+    // Strip HTML tags to get text content
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<\/(div|p|tr|li|h[1-6]|br|hr)[^>]*>/gi, "\n")
+      .replace(/<(br|hr)[^>]*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&#x20A6;/g, "\u20A6")
+      .replace(/&#8358;/g, "\u20A6")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n\s*\n\s*\n/g, "\n\n")
+      .trim();
+
+    console.log(
+      `[browse_website:direct] ${url}: ${html.length} chars HTML -> ${text.length} chars text`
+    );
+    return text;
+  } catch (error) {
+    console.error(`[browse_website:direct] Error fetching ${url}:`, error);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function handleBrowseWebsite(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input } = ctx;
+  const url = input.url as string;
+
+  if (!url) {
+    return { results: [], summary: "No URL provided." };
+  }
+
+  // Try Tavily Extract first (handles JS-rendered pages)
+  let pageContent = await fetchWithTavily(url);
+
+  // If Tavily returned very little content, try direct HTTP fetch as fallback
+  if (!pageContent || pageContent.length < 500) {
+    console.log(
+      `[browse_website] Tavily returned ${pageContent?.length ?? 0} chars -- trying direct fetch`
+    );
+    const directContent = await fetchDirect(url);
+    if (directContent && directContent.length > (pageContent?.length ?? 0)) {
+      pageContent = directContent;
+      console.log(
+        `[browse_website] Direct fetch got ${pageContent.length} chars`
+      );
+    }
+  }
+
+  if (!pageContent || pageContent.length < 100) {
     return {
       results: [],
-      summary: `Failed to fetch ${url}. Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+      summary: `Could not extract meaningful content from ${url}. The page may require login, block automated access, or use heavy client-side rendering. Try a different page on the site.`,
     };
   }
+
+  // Truncate if very long
+  const truncated =
+    pageContent.length > 15000
+      ? pageContent.slice(0, 15000) +
+        "\n\n[Content truncated -- page had more content]"
+      : pageContent;
+
+  console.log(
+    `[browse_website] ${url} → ${pageContent.length} chars (truncated to ${truncated.length})`
+  );
+
+  return {
+    results: [],
+    summary: `Content from ${url}:\n\n${truncated}`,
+  };
 }
 
 // ── map_website ──────────────────────────────────────────────────────────
