@@ -721,6 +721,8 @@ export function normalizeHubspot(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotContact(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Contact record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Contact record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const firstname = props.firstname ?? "";
   const lastname = props.lastname ?? "";
@@ -756,6 +758,8 @@ export function normalizeHubspotContact(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotCompany(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Company record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Company record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const name = props.name ?? "Unknown Company";
 
@@ -788,6 +792,8 @@ export function normalizeHubspotCompany(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotDeal(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Deal record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Deal record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const dealname = props.dealname ?? "Untitled Deal";
 
@@ -821,6 +827,8 @@ export function normalizeHubspotDeal(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotTicket(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Ticket record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Ticket record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const subject = props.subject ?? "Untitled Ticket";
 
@@ -852,6 +860,8 @@ export function normalizeHubspotTicket(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotTask(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Task record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Task record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const subject = props.hs_task_subject ?? "Untitled Task";
 
@@ -882,6 +892,8 @@ export function normalizeHubspotTask(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotNote(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Note record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Note record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
 
   const parts: string[] = ["[HubSpot Note]"];
@@ -905,6 +917,8 @@ export function normalizeHubspotNote(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotOwner(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Owner record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Owner record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? raw;
   const firstname = props.firstName ?? props.firstname ?? "";
   const lastname = props.lastName ?? props.lastname ?? "";
@@ -934,6 +948,8 @@ export function normalizeHubspotOwner(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotProduct(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Product record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Product record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const name = props.name ?? "Untitled Product";
 
@@ -965,6 +981,8 @@ export function normalizeHubspotProduct(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotUser(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] User record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] User record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? raw;
   const email = props.email ?? "";
   const firstname = props.firstName ?? props.firstname ?? "";
@@ -995,6 +1013,8 @@ export function normalizeHubspotUser(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotKbArticle(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] KbArticle record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] KbArticle record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? raw;
   const title = props.title ?? props.name ?? "Untitled Article";
 
@@ -1027,6 +1047,8 @@ export function normalizeHubspotKbArticle(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] ServiceTicket record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] ServiceTicket record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? {};
   const subject = props.subject ?? props.hs_ticket_id ?? "Untitled Service Ticket";
 
@@ -1060,6 +1082,8 @@ export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotCurrency(raw: any): SyncRecord {
+  console.log(`[hubspot-normalizer] Currency record keys: ${Object.keys(raw).join(', ')}`);
+  console.log(`[hubspot-normalizer] Currency record: ${JSON.stringify(raw).slice(0, 500)}`);
   const props = raw.properties ?? raw;
   const code = props.currencyCode ?? props.currency_code ?? props.code ?? "Unknown";
   const name = props.currencyName ?? props.currency_name ?? props.name ?? code;
