@@ -191,6 +191,13 @@ export const CLEVERBRAIN_TOOLS: Anthropic.Tool[] = [
           description:
             "The full URL to fetch (must include https://). Example: https://the-owlet.com/services",
         },
+        query: {
+          type: "string",
+          description:
+            "What you're looking for on this page. Used to extract the most relevant section from large pages. " +
+            "Example: 'cheapest Instagram followers price', 'contact email', 'team members'. " +
+            "Always provide this so the tool can find the right content on large pages.",
+        },
       },
       required: ["url"],
     },

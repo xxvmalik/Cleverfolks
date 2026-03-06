@@ -517,21 +517,126 @@ export async function handleBrowseWebsite(
     };
   }
 
-  // Truncate if very long
-  const truncated =
-    pageContent.length > 15000
-      ? pageContent.slice(0, 15000) +
-        "\n\n[Content truncated -- page had more content]"
-      : pageContent;
+  // Smart extraction: if page is large and we have a query, find relevant sections
+  const query = input.query as string | undefined;
+  let extractedContent: string;
+
+  if (pageContent.length > 15000 && query) {
+    extractedContent = extractRelevantSections(pageContent, query, 15000);
+    console.log(
+      `[browse_website] Smart extraction: ${pageContent.length} chars -> ${extractedContent.length} chars for query "${query}"`
+    );
+  } else if (pageContent.length > 15000) {
+    extractedContent =
+      pageContent.slice(0, 15000) +
+      "\n\n[Content truncated -- page had more content. Tip: provide a query parameter to extract relevant sections from large pages.]";
+    console.log(
+      `[browse_website] Blind truncation: ${pageContent.length} -> 15000 chars (no query provided)`
+    );
+  } else {
+    extractedContent = pageContent;
+  }
 
   console.log(
-    `[browse_website] ${url} → ${pageContent.length} chars (truncated to ${truncated.length})`
+    `[browse_website] ${url} → ${pageContent.length} chars total, ${extractedContent.length} chars returned`
   );
 
   return {
     results: [],
-    summary: `Content from ${url}:\n\n${truncated}`,
+    summary: `Content from ${url}:\n\n${extractedContent}`,
   };
+}
+
+/**
+ * Extract sections of text that are most relevant to a query.
+ * Splits content into chunks, scores each by keyword relevance,
+ * and returns the highest-scoring chunks up to maxLength.
+ */
+function extractRelevantSections(
+  content: string,
+  query: string,
+  maxLength: number
+): string {
+  // Build keyword list from query
+  const keywords = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 2)
+    .map((w) => w.replace(/[^a-z0-9]/g, ""))
+    .filter(Boolean);
+
+  // Split content into chunks by lines
+  const lines = content.split("\n");
+  const CHUNK_SIZE = 30;
+  const chunks: Array<{ text: string; score: number; index: number }> = [];
+
+  for (let i = 0; i < lines.length; i += CHUNK_SIZE) {
+    const chunkLines = lines.slice(i, i + CHUNK_SIZE);
+    const chunkText = chunkLines.join("\n").trim();
+    if (chunkText.length < 20) continue;
+
+    // Score by keyword matches
+    const lowerChunk = chunkText.toLowerCase();
+    let score = 0;
+    for (const keyword of keywords) {
+      const regex = new RegExp(keyword, "gi");
+      const matches = lowerChunk.match(regex);
+      if (matches) score += matches.length;
+    }
+
+    // Bonus for price-like patterns (numbers with currency)
+    if (
+      /(?:\u20A6|NGN|naira|\$|USD)\s*[\d,]+/i.test(chunkText) ||
+      /[\d,]+\s*(?:\u20A6|NGN|naira|\$|USD)/i.test(chunkText)
+    ) {
+      score += 3;
+    }
+    // Bonus for "per 1,000" or "per 1K" patterns (common in SMM)
+    if (/per\s*(?:1[,.]?000|1k)/i.test(chunkText)) {
+      score += 3;
+    }
+
+    chunks.push({ text: chunkText, score, index: i });
+  }
+
+  // Sort by score (highest first), then by position (earlier first for ties)
+  chunks.sort((a, b) => b.score - a.score || a.index - b.index);
+
+  // Take highest-scoring chunks until we hit maxLength
+  const selectedChunks: Array<{ text: string; index: number }> = [];
+  let totalLength = 0;
+
+  for (const chunk of chunks) {
+    if (chunk.score === 0) continue;
+    if (totalLength + chunk.text.length > maxLength) {
+      if (selectedChunks.length === 0) {
+        selectedChunks.push({
+          text: chunk.text.slice(0, maxLength),
+          index: chunk.index,
+        });
+        totalLength = maxLength;
+      }
+      break;
+    }
+    selectedChunks.push({ text: chunk.text, index: chunk.index });
+    totalLength += chunk.text.length;
+  }
+
+  // If no relevant chunks found, fall back to first maxLength chars
+  if (selectedChunks.length === 0) {
+    return (
+      content.slice(0, maxLength) +
+      "\n\n[No sections matched the query. Showing beginning of page.]"
+    );
+  }
+
+  // Sort selected chunks back into document order for readability
+  selectedChunks.sort((a, b) => a.index - b.index);
+
+  return (
+    selectedChunks.map((c) => c.text).join("\n\n---\n\n") +
+    `\n\n[Extracted ${selectedChunks.length} relevant sections from ${content.length.toLocaleString()} character page]`
+  );
 }
 
 // ── map_website ──────────────────────────────────────────────────────────
