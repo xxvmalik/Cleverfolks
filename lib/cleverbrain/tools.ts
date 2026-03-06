@@ -175,4 +175,44 @@ export const CLEVERBRAIN_TOOLS: Anthropic.Tool[] = [
       required: ["query"],
     },
   },
+  {
+    name: "browse_website",
+    description:
+      "Fetch and read the full content of a specific web page. Use this when you need to visit a specific URL and read its actual content " +
+      "-- for example, checking a competitor's services page, reading a product page, or getting details from a specific webpage. " +
+      "This is different from search_web: search_web finds pages via search engines, browse_website reads the actual content of a known URL. " +
+      "Use browse_website when: the user gives you a specific URL, you need to check a specific page on a website (like /services, /pricing, /about), " +
+      "or search_web returned a relevant URL that needs deeper reading.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "The full URL to fetch (must include https://). Example: https://the-owlet.com/services",
+        },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "map_website",
+    description:
+      "Discover all pages on a website by mapping its structure. Returns a list of URLs found on the site. " +
+      "Use this BEFORE browse_website when you need to find the right page on a website but don't know the exact URL. " +
+      "For example: user says 'check owlet's pricing' -- first map_website('https://the-owlet.com') to find the pricing/services page URL, " +
+      "then browse_website that URL to read the actual content. " +
+      "Only use this when you need to discover pages. If you already know the URL (user gave it or it's obvious like /services or /pricing), skip mapping and go straight to browse_website.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        url: {
+          type: "string",
+          description:
+            "The base URL of the website to map (must include https://). Example: https://the-owlet.com",
+        },
+      },
+      required: ["url"],
+    },
+  },
 ];

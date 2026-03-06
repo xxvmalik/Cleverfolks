@@ -81,6 +81,26 @@ function generateActivityLabel(
     }
     case "search_web":
       return "Searching the web...";
+    case "browse_website": {
+      const browseUrl = input.url as string | undefined;
+      try {
+        return browseUrl
+          ? `Reading ${new URL(browseUrl).hostname}...`
+          : "Reading webpage...";
+      } catch {
+        return "Reading webpage...";
+      }
+    }
+    case "map_website": {
+      const mapUrl = input.url as string | undefined;
+      try {
+        return mapUrl
+          ? `Mapping ${new URL(mapUrl).hostname}...`
+          : "Mapping website...";
+      } catch {
+        return "Mapping website...";
+      }
+    }
     default:
       return "Processing...";
   }
@@ -176,6 +196,10 @@ function formatToolResultForClaude(
   toolName: string,
   handlerResult: ToolHandlerResult
 ): string {
+  if (toolName === "browse_website" || toolName === "map_website") {
+    return handlerResult.summary;
+  }
+
   if (toolName === "search_web") {
     const webResults = handlerResult.results as WebResult[];
     if (webResults.length === 0) return "No web results found.";

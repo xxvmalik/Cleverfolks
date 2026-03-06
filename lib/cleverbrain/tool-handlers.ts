@@ -379,6 +379,121 @@ export async function handleSearchWeb(
   }
 }
 
+// ── browse_website ────────────────────────────────────────────────────────
+
+export async function handleBrowseWebsite(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input } = ctx;
+  const url = input.url as string;
+
+  if (!url) {
+    return { results: [], summary: "No URL provided." };
+  }
+
+  try {
+    const response = await fetch("https://api.tavily.com/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: process.env.TAVILY_API_KEY,
+        urls: [url],
+      }),
+    });
+
+    const data = (await response.json()) as {
+      results?: Array<{ raw_content?: string; text?: string }>;
+      failed_results?: Array<{ url: string; error: string }>;
+    };
+
+    if (data.results && data.results.length > 0) {
+      const pageContent = data.results[0].raw_content || data.results[0].text || "";
+
+      // Truncate if very long (keep first 8000 chars to stay within token limits)
+      const truncated =
+        pageContent.length > 8000
+          ? pageContent.slice(0, 8000) + "\n\n[Content truncated -- page had more content]"
+          : pageContent;
+
+      console.log(
+        `[tool-handler] browse_website: ${url} → ${pageContent.length} chars`
+      );
+
+      return {
+        results: [],
+        summary: `Content from ${url}:\n\n${truncated}`,
+      };
+    }
+
+    if (data.failed_results && data.failed_results.length > 0) {
+      return {
+        results: [],
+        summary: `Could not extract content from ${url}. The page may require login, block bots, or use JavaScript rendering. Try a different page on the site.`,
+      };
+    }
+
+    return { results: [], summary: `No content found at ${url}.` };
+  } catch (error) {
+    console.error("[tool-handler] browse_website error:", error);
+    return {
+      results: [],
+      summary: `Failed to fetch ${url}. Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+    };
+  }
+}
+
+// ── map_website ──────────────────────────────────────────────────────────
+
+export async function handleMapWebsite(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input } = ctx;
+  const url = input.url as string;
+
+  if (!url) {
+    return { results: [], summary: "No URL provided." };
+  }
+
+  try {
+    const response = await fetch("https://api.tavily.com/map", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: process.env.TAVILY_API_KEY,
+        url,
+        max_depth: 1,
+        limit: 30,
+      }),
+    });
+
+    const data = (await response.json()) as {
+      results?: string[];
+    };
+
+    if (data.results && data.results.length > 0) {
+      const urlList = data.results.join("\n");
+      console.log(
+        `[tool-handler] map_website: ${url} → ${data.results.length} pages`
+      );
+      return {
+        results: [],
+        summary: `Pages found on ${url}:\n\n${urlList}\n\nUse browse_website to read the content of any of these pages.`,
+      };
+    }
+
+    return {
+      results: [],
+      summary: `Could not map ${url}. The site may block crawlers.`,
+    };
+  } catch (error) {
+    console.error("[tool-handler] map_website error:", error);
+    return {
+      results: [],
+      summary: `Failed to map ${url}. Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+    };
+  }
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 const HANDLERS: Record<
@@ -390,6 +505,8 @@ const HANDLERS: Record<
   count_messages_by_person: handleCountMessagesByPerson,
   search_by_person: handleSearchByPerson,
   search_web: handleSearchWeb,
+  browse_website: handleBrowseWebsite,
+  map_website: handleMapWebsite,
 };
 
 export async function executeToolCall(
