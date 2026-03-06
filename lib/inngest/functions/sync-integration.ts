@@ -14,6 +14,12 @@ import {
   normalizeSlackUser,
   normalizeCalendar,
   normalizeHubspot,
+  normalizeHubspotContact,
+  normalizeHubspotCompany,
+  normalizeHubspotDeal,
+  normalizeHubspotTicket,
+  normalizeHubspotTask,
+  normalizeHubspotNote,
   normalizeOutlookEmail,
   normalizeOutlookEvent,
   normalizeOutlookContact,
@@ -82,7 +88,7 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
-  hubspot:           ["HubSpotDeal"],
+  hubspot:           ["HubSpotDeal", "HubSpotContact", "HubSpotCompany", "HubSpotTicket", "HubSpotTask", "HubSpotNote"],
   "google-drive":    ["GoogleDriveFile"],
   outlook:           ["OutlookEmail", "OutlookCalendarEvent", "OutlookContact"],
 };
@@ -120,9 +126,19 @@ function normalizeRecord(
       default:                      return null;
     }
   }
+  if (provider === "hubspot") {
+    switch (model) {
+      case "HubSpotDeal":    return normalizeHubspotDeal(raw);
+      case "HubSpotContact": return normalizeHubspotContact(raw);
+      case "HubSpotCompany": return normalizeHubspotCompany(raw);
+      case "HubSpotTicket":  return normalizeHubspotTicket(raw);
+      case "HubSpotTask":    return normalizeHubspotTask(raw);
+      case "HubSpotNote":    return normalizeHubspotNote(raw);
+      default:               return normalizeHubspot(raw);
+    }
+  }
   switch (provider) {
     case "google-calendar":  return normalizeCalendar(raw);
-    case "hubspot":          return normalizeHubspot(raw);
     case "google-drive":     return normalizeDrive(raw);
     default:                 return null;
   }

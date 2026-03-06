@@ -69,6 +69,10 @@ function getChannelName(
   if (sourceType === "cleverbrain_chat") {
     return "CleverBrain conversation";
   }
+  if (sourceType.startsWith("hubspot_")) {
+    const label = sourceType.replace("hubspot_", "").replace(/^\w/, (c) => c.toUpperCase());
+    return `HubSpot ${label}`;
+  }
   return "";
 }
 
@@ -93,6 +97,12 @@ function getUserName(
   }
   if (sourceType === "email") {
     return (meta.from as string | undefined) ?? "";
+  }
+  if (sourceType === "hubspot_contact") {
+    return (meta.name as string | undefined) ?? "";
+  }
+  if (sourceType === "hubspot_company") {
+    return (meta.name as string | undefined) ?? "";
   }
   return "";
 }

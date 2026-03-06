@@ -21,7 +21,13 @@ export type SyncRecord = {
     | "outlook_contact"
     | "document"
     | "attachment"
-    | "cleverbrain_chat";
+    | "cleverbrain_chat"
+    | "hubspot_contact"
+    | "hubspot_company"
+    | "hubspot_deal"
+    | "hubspot_ticket"
+    | "hubspot_task"
+    | "hubspot_note";
   title?: string;
   content?: string;
   metadata?: Record<string, unknown>;
@@ -703,6 +709,190 @@ export function normalizeHubspot(raw: any): SyncRecord {
       amount: props.amount,
       close_date: props.closedate,
       owner_id: props.hubspot_owner_id,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotContact(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const firstname = props.firstname ?? "";
+  const lastname = props.lastname ?? "";
+  const name = [firstname, lastname].filter(Boolean).join(" ") || "Unknown Contact";
+
+  const parts: string[] = [`[HubSpot Contact] Name: ${name}`];
+  if (props.email) parts.push(`Email: ${props.email}`);
+  if (props.phone) parts.push(`Phone: ${props.phone}`);
+  if (props.company) parts.push(`Company: ${props.company}`);
+  if (props.jobtitle) parts.push(`Job Title: ${props.jobtitle}`);
+  if (props.lifecyclestage) parts.push(`Lifecycle Stage: ${props.lifecyclestage}`);
+  if (props.hs_lead_status) parts.push(`Lead Status: ${props.hs_lead_status}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+
+  const header = parts.join(" | ");
+  const body = props.description ?? props.notes_last_updated ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_contact",
+    title: name,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_contact",
+      name,
+      email: props.email ?? undefined,
+      company: props.company ?? undefined,
+      lifecycle_stage: props.lifecyclestage ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotCompany(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const name = props.name ?? "Unknown Company";
+
+  const parts: string[] = [`[HubSpot Company] Name: ${name}`];
+  if (props.domain) parts.push(`Domain: ${props.domain}`);
+  if (props.industry) parts.push(`Industry: ${props.industry}`);
+  if (props.city) parts.push(`City: ${props.city}`);
+  if (props.country) parts.push(`Country: ${props.country}`);
+  if (props.numberofemployees) parts.push(`Employees: ${props.numberofemployees}`);
+  if (props.annualrevenue) parts.push(`Annual Revenue: ${props.annualrevenue}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+
+  const header = parts.join(" | ");
+  const body = props.description ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_company",
+    title: name,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_company",
+      name,
+      domain: props.domain ?? undefined,
+      industry: props.industry ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotDeal(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const dealname = props.dealname ?? "Untitled Deal";
+
+  const parts: string[] = [`[HubSpot Deal] Name: ${dealname}`];
+  if (props.dealstage) parts.push(`Stage: ${props.dealstage}`);
+  if (props.pipeline) parts.push(`Pipeline: ${props.pipeline}`);
+  if (props.amount) parts.push(`Amount: ${props.amount}`);
+  if (props.closedate) parts.push(`Close Date: ${props.closedate}`);
+  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+
+  const header = parts.join(" | ");
+  const body = props.description ?? props.notes_last_updated ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_deal",
+    title: dealname,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_deal",
+      deal_name: dealname,
+      stage: props.dealstage ?? undefined,
+      amount: props.amount ?? undefined,
+      close_date: props.closedate ?? undefined,
+      owner_id: props.hubspot_owner_id ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotTicket(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const subject = props.subject ?? "Untitled Ticket";
+
+  const parts: string[] = [`[HubSpot Ticket] Subject: ${subject}`];
+  if (props.hs_pipeline_stage) parts.push(`Status: ${props.hs_pipeline_stage}`);
+  if (props.hs_ticket_priority) parts.push(`Priority: ${props.hs_ticket_priority}`);
+  if (props.hs_ticket_category) parts.push(`Category: ${props.hs_ticket_category}`);
+  if (props.hs_pipeline) parts.push(`Pipeline: ${props.hs_pipeline}`);
+  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+
+  const header = parts.join(" | ");
+  const body = props.content ?? props.hs_ticket_description ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_ticket",
+    title: subject,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_ticket",
+      subject,
+      status: props.hs_pipeline_stage ?? undefined,
+      priority: props.hs_ticket_priority ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotTask(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const subject = props.hs_task_subject ?? "Untitled Task";
+
+  const parts: string[] = [`[HubSpot Task] Subject: ${subject}`];
+  if (props.hs_task_status) parts.push(`Status: ${props.hs_task_status}`);
+  if (props.hs_task_priority) parts.push(`Priority: ${props.hs_task_priority}`);
+  if (props.hs_task_type) parts.push(`Type: ${props.hs_task_type}`);
+  if (props.hs_timestamp) parts.push(`Due Date: ${props.hs_timestamp}`);
+  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+
+  const header = parts.join(" | ");
+  const body = props.hs_task_body ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_task",
+    title: subject,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_task",
+      subject,
+      status: props.hs_task_status ?? undefined,
+      due_date: props.hs_timestamp ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotNote(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+
+  const parts: string[] = ["[HubSpot Note]"];
+  if (props.hs_timestamp) parts.push(`Created: ${props.hs_timestamp}`);
+  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+
+  const header = parts.join(" | ");
+  const body = props.hs_note_body ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_note",
+    title: "HubSpot Note",
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_note",
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
     },
   };
 }

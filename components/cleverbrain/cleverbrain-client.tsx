@@ -238,6 +238,13 @@ function SourceIcon({ sourceType }: { sourceType: string }) {
       return <Globe className={cls} />;
     case "cleverbrain_chat":
       return <MessageSquare className={cls} />;
+    case "hubspot_contact":
+    case "hubspot_company":
+    case "hubspot_deal":
+    case "hubspot_ticket":
+    case "hubspot_task":
+    case "hubspot_note":
+      return <Database className={cls} />;
     default:
       return <Database className={cls} />;
   }

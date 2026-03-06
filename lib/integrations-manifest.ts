@@ -39,9 +39,9 @@ const PROVIDER_CONFIG: Record<string, Omit<IntegrationInfo, "provider">> = {
   },
   "hubspot": {
     name: "HubSpot",
-    description: "CRM data (deals, contacts, pipeline)",
-    sourceTypes: ["deal"],
-    signalPattern: /\b(hubspot|deals?|pipeline|crm)\b/i,
+    description: "CRM data (contacts, companies, deals, tickets, tasks, notes)",
+    sourceTypes: ["hubspot_contact", "hubspot_company", "hubspot_deal", "hubspot_ticket", "hubspot_task", "hubspot_note"],
+    signalPattern: /\b(hubspot|deals?|pipeline|crm|contacts?|companies|company|tickets?|leads?)\b/i,
   },
   "google-calendar": {
     name: "Google Calendar",
