@@ -295,6 +295,7 @@ export const syncIntegrationFunction = inngest.createFunction(
             let pageNum = 0;
             let modelCount = 0;
 
+            try {
             for (;;) {
               const page: {
                 records: Record<string, unknown>[];
@@ -408,6 +409,13 @@ export const syncIntegrationFunction = inngest.createFunction(
             }
 
             console.log(`[inngest] model=${model}: fetched ${modelCount} raw → ${normalised.length} total normalised so far`);
+            } catch (modelErr) {
+              console.warn(
+                `[inngest] model=${model} fetch failed (model may not be configured in Nango):`,
+                modelErr instanceof Error ? modelErr.message : String(modelErr)
+              );
+              // Continue with remaining models
+            }
           }
 
           console.log(`[inngest] parentTextMap has ${Object.keys(parentTextMap).length} entries for reply context`);
