@@ -497,7 +497,7 @@ export async function handleBrowseWebsite(
   let pageContent = await fetchWithTavily(url);
 
   // If Tavily returned very little content, try direct HTTP fetch as fallback
-  if (!pageContent || pageContent.length < 500) {
+  if (!pageContent || pageContent.length < 1000) {
     console.log(
       `[browse_website] Tavily returned ${pageContent?.length ?? 0} chars -- trying direct fetch`
     );
@@ -535,6 +535,23 @@ export async function handleBrowseWebsite(
     );
   } else {
     extractedContent = pageContent;
+  }
+
+  // If query is price-related and extracted content has no price patterns, force direct fetch
+  if (query && isPriceQuery(query) && !hasPricePatterns(extractedContent)) {
+    console.log(
+      `[browse_website] Price query but no prices found in Tavily content -- forcing direct fetch`
+    );
+    const directContent = await fetchDirect(url);
+    if (directContent && directContent.length > 500) {
+      const directExtracted = extractRelevantSections(directContent, query, 15000);
+      if (hasPricePatterns(directExtracted)) {
+        console.log(
+          `[browse_website] Direct fetch found prices! Using direct content (${directExtracted.length} chars)`
+        );
+        extractedContent = directExtracted;
+      }
+    }
   }
 
   console.log(
@@ -637,6 +654,29 @@ function extractRelevantSections(
     selectedChunks.map((c) => c.text).join("\n\n---\n\n") +
     `\n\n[Extracted ${selectedChunks.length} relevant sections from ${content.length.toLocaleString()} character page]`
   );
+}
+
+/**
+ * Check if a query is asking about prices, costs, rates, or similar.
+ */
+function isPriceQuery(query: string): boolean {
+  const priceTerms =
+    /price|pricing|cost|rate|charge|fee|cheap|expensive|afford|\u20A6|NGN|naira|\$|USD|how much|per 1k|per 1,000/i;
+  return priceTerms.test(query);
+}
+
+/**
+ * Check if content contains price-like patterns.
+ */
+function hasPricePatterns(content: string): boolean {
+  const patterns = [
+    /(?:\u20A6|NGN|naira)\s*[\d,]+(?:\.\d{1,2})?/i,
+    /[\d,]+(?:\.\d{1,2})?\s*(?:\u20A6|NGN|naira)/i,
+    /(?:\$|USD)\s*[\d,]+(?:\.\d{1,2})?/i,
+    /[\d,]+(?:\.\d{1,2})?\s*(?:\$|USD)/i,
+    /NGN\s+\d/i,
+  ];
+  return patterns.some((p) => p.test(content));
 }
 
 // ── map_website ──────────────────────────────────────────────────────────
