@@ -28,5 +28,11 @@ ALTER TABLE synced_documents
     'hubspot_deal',
     'hubspot_ticket',
     'hubspot_task',
-    'hubspot_note'
+    'hubspot_note',
+    'hubspot_owner',
+    'hubspot_product',
+    'hubspot_user',
+    'hubspot_kb_article',
+    'hubspot_service_ticket',
+    'hubspot_currency'
   ));

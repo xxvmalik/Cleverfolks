@@ -20,6 +20,12 @@ import {
   normalizeHubspotTicket,
   normalizeHubspotTask,
   normalizeHubspotNote,
+  normalizeHubspotOwner,
+  normalizeHubspotProduct,
+  normalizeHubspotUser,
+  normalizeHubspotKbArticle,
+  normalizeHubspotServiceTicket,
+  normalizeHubspotCurrency,
   normalizeOutlookEmail,
   normalizeOutlookEvent,
   normalizeOutlookContact,
@@ -88,7 +94,7 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
-  hubspot:           ["HubSpotDeal", "HubSpotContact", "HubSpotCompany", "HubSpotTicket", "HubSpotTask", "HubSpotNote"],
+  hubspot:           ["HubSpotDeal", "HubSpotContact", "HubSpotCompany", "HubSpotTicket", "HubSpotTask", "HubSpotNote", "HubSpotOwner", "HubSpotProduct", "HubSpotUser", "HubSpotKnowledgeBase", "HubSpotServiceTicket", "HubSpotCurrencyCode"],
   "google-drive":    ["GoogleDriveFile"],
   outlook:           ["OutlookEmail", "OutlookCalendarEvent", "OutlookContact"],
 };
@@ -133,8 +139,14 @@ function normalizeRecord(
       case "HubSpotCompany": return normalizeHubspotCompany(raw);
       case "HubSpotTicket":  return normalizeHubspotTicket(raw);
       case "HubSpotTask":    return normalizeHubspotTask(raw);
-      case "HubSpotNote":    return normalizeHubspotNote(raw);
-      default:               return normalizeHubspot(raw);
+      case "HubSpotNote":          return normalizeHubspotNote(raw);
+      case "HubSpotOwner":         return normalizeHubspotOwner(raw);
+      case "HubSpotProduct":       return normalizeHubspotProduct(raw);
+      case "HubSpotUser":          return normalizeHubspotUser(raw);
+      case "HubSpotKnowledgeBase": return normalizeHubspotKbArticle(raw);
+      case "HubSpotServiceTicket": return normalizeHubspotServiceTicket(raw);
+      case "HubSpotCurrencyCode":  return normalizeHubspotCurrency(raw);
+      default:                     return normalizeHubspot(raw);
     }
   }
   switch (provider) {

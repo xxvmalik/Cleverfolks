@@ -27,7 +27,13 @@ export type SyncRecord = {
     | "hubspot_deal"
     | "hubspot_ticket"
     | "hubspot_task"
-    | "hubspot_note";
+    | "hubspot_note"
+    | "hubspot_owner"
+    | "hubspot_product"
+    | "hubspot_user"
+    | "hubspot_kb_article"
+    | "hubspot_service_ticket"
+    | "hubspot_currency";
   title?: string;
   content?: string;
   metadata?: Record<string, unknown>;
@@ -893,6 +899,190 @@ export function normalizeHubspotNote(raw: any): SyncRecord {
     metadata: {
       source_type: "hubspot_note",
       external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotOwner(raw: any): SyncRecord {
+  const props = raw.properties ?? raw;
+  const firstname = props.firstName ?? props.firstname ?? "";
+  const lastname = props.lastName ?? props.lastname ?? "";
+  const name = [firstname, lastname].filter(Boolean).join(" ") || "Unknown Owner";
+
+  const parts: string[] = [`[HubSpot Owner] Name: ${name}`];
+  if (props.email) parts.push(`Email: ${props.email}`);
+  if (props.userId ?? props.user_id) parts.push(`User ID: ${props.userId ?? props.user_id}`);
+  if (props.teams) parts.push(`Teams: ${Array.isArray(props.teams) ? props.teams.map((t: any) => t.name ?? t).join(", ") : props.teams}`);
+  if (props.createdAt ?? props.createdate) parts.push(`Created: ${props.createdAt ?? props.createdate}`);
+
+  const header = parts.join(" | ");
+
+  return {
+    external_id: raw.id ?? raw.ownerId ?? "",
+    source_type: "hubspot_owner",
+    title: name,
+    content: header,
+    metadata: {
+      source_type: "hubspot_owner",
+      name,
+      email: props.email ?? undefined,
+      external_id: raw.id ?? raw.ownerId ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotProduct(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const name = props.name ?? "Untitled Product";
+
+  const parts: string[] = [`[HubSpot Product] Name: ${name}`];
+  if (props.price) parts.push(`Price: ${props.price}`);
+  if (props.hs_sku) parts.push(`SKU: ${props.hs_sku}`);
+  if (props.hs_cost_of_goods_sold) parts.push(`COGS: ${props.hs_cost_of_goods_sold}`);
+  if (props.hs_recurring_billing_period) parts.push(`Billing Period: ${props.hs_recurring_billing_period}`);
+  if (props.tax) parts.push(`Tax: ${props.tax}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+
+  const header = parts.join(" | ");
+  const body = props.description ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_product",
+    title: name,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_product",
+      name,
+      price: props.price ?? undefined,
+      sku: props.hs_sku ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotUser(raw: any): SyncRecord {
+  const props = raw.properties ?? raw;
+  const email = props.email ?? "";
+  const firstname = props.firstName ?? props.firstname ?? "";
+  const lastname = props.lastName ?? props.lastname ?? "";
+  const name = [firstname, lastname].filter(Boolean).join(" ") || email || "Unknown User";
+
+  const parts: string[] = [`[HubSpot User] Name: ${name}`];
+  if (email) parts.push(`Email: ${email}`);
+  if (props.roleId ?? props.role_id) parts.push(`Role ID: ${props.roleId ?? props.role_id}`);
+  if (props.superAdmin ?? props.super_admin) parts.push(`Super Admin: yes`);
+  if (props.primaryTeamId ?? props.primary_team_id) parts.push(`Team ID: ${props.primaryTeamId ?? props.primary_team_id}`);
+
+  const header = parts.join(" | ");
+
+  return {
+    external_id: raw.id ?? props.userId ?? "",
+    source_type: "hubspot_user",
+    title: name,
+    content: header,
+    metadata: {
+      source_type: "hubspot_user",
+      name,
+      email: email || undefined,
+      external_id: raw.id ?? props.userId ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotKbArticle(raw: any): SyncRecord {
+  const props = raw.properties ?? raw;
+  const title = props.title ?? props.name ?? "Untitled Article";
+
+  const parts: string[] = [`[HubSpot KB Article] Title: ${title}`];
+  if (props.language) parts.push(`Language: ${props.language}`);
+  if (props.category) parts.push(`Category: ${props.category}`);
+  if (props.subcategory) parts.push(`Subcategory: ${props.subcategory}`);
+  if (props.state ?? props.status) parts.push(`Status: ${props.state ?? props.status}`);
+  if (props.url ?? props.slug) parts.push(`URL: ${props.url ?? props.slug}`);
+  if (props.created ?? props.createdate) parts.push(`Created: ${props.created ?? props.createdate}`);
+  if (props.updated ?? props.updated_at) parts.push(`Updated: ${props.updated ?? props.updated_at}`);
+
+  const header = parts.join(" | ");
+  const body = props.body ?? props.htmlBody ?? props.description ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_kb_article",
+    title,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_kb_article",
+      title,
+      category: props.category ?? undefined,
+      status: props.state ?? props.status ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
+  const props = raw.properties ?? {};
+  const subject = props.subject ?? props.hs_ticket_id ?? "Untitled Service Ticket";
+
+  const parts: string[] = [`[HubSpot Service Ticket] Subject: ${subject}`];
+  if (props.hs_pipeline_stage) parts.push(`Status: ${props.hs_pipeline_stage}`);
+  if (props.hs_ticket_priority) parts.push(`Priority: ${props.hs_ticket_priority}`);
+  if (props.hs_ticket_category) parts.push(`Category: ${props.hs_ticket_category}`);
+  if (props.hs_pipeline) parts.push(`Pipeline: ${props.hs_pipeline}`);
+  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+  if (props.source_type) parts.push(`Source: ${props.source_type}`);
+  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (props.closed_date) parts.push(`Closed: ${props.closed_date}`);
+
+  const header = parts.join(" | ");
+  const body = props.content ?? props.hs_ticket_description ?? "";
+
+  return {
+    external_id: raw.id ?? props.hs_object_id ?? "",
+    source_type: "hubspot_service_ticket",
+    title: subject,
+    content: body ? `${header}\n\n${body}` : header,
+    metadata: {
+      source_type: "hubspot_service_ticket",
+      subject,
+      status: props.hs_pipeline_stage ?? undefined,
+      priority: props.hs_ticket_priority ?? undefined,
+      external_id: raw.id ?? props.hs_object_id ?? undefined,
+    },
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function normalizeHubspotCurrency(raw: any): SyncRecord {
+  const props = raw.properties ?? raw;
+  const code = props.currencyCode ?? props.currency_code ?? props.code ?? "Unknown";
+  const name = props.currencyName ?? props.currency_name ?? props.name ?? code;
+
+  const parts: string[] = [`[HubSpot Currency] Code: ${code}`];
+  if (name !== code) parts.push(`Name: ${name}`);
+  if (props.exchangeRate ?? props.exchange_rate) parts.push(`Exchange Rate: ${props.exchangeRate ?? props.exchange_rate}`);
+  if (props.symbol) parts.push(`Symbol: ${props.symbol}`);
+  if (props.visible) parts.push(`Visible: ${props.visible}`);
+
+  const header = parts.join(" | ");
+
+  return {
+    external_id: raw.id ?? code,
+    source_type: "hubspot_currency",
+    title: `${code} — ${name}`,
+    content: header,
+    metadata: {
+      source_type: "hubspot_currency",
+      code,
+      name,
+      exchange_rate: props.exchangeRate ?? props.exchange_rate ?? undefined,
+      external_id: raw.id ?? code,
     },
   };
 }

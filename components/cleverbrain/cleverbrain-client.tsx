@@ -244,6 +244,12 @@ function SourceIcon({ sourceType }: { sourceType: string }) {
     case "hubspot_ticket":
     case "hubspot_task":
     case "hubspot_note":
+    case "hubspot_owner":
+    case "hubspot_product":
+    case "hubspot_user":
+    case "hubspot_kb_article":
+    case "hubspot_service_ticket":
+    case "hubspot_currency":
       return <Database className={cls} />;
     default:
       return <Database className={cls} />;

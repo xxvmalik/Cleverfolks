@@ -135,8 +135,8 @@ const ALL_PROVIDERS: Array<{
   {
     provider: "hubspot",
     name: "HubSpot",
-    description: "CRM — contacts, companies, deals with pipeline stages and values, tickets, tasks, notes, sales activity, revenue tracking",
-    sourceTypes: ["hubspot_contact", "hubspot_company", "hubspot_deal", "hubspot_ticket", "hubspot_task", "hubspot_note"],
+    description: "CRM — contacts, companies, deals, tickets, tasks, notes, owners, products, users, knowledge base articles, service tickets, currency codes",
+    sourceTypes: ["hubspot_contact", "hubspot_company", "hubspot_deal", "hubspot_ticket", "hubspot_task", "hubspot_note", "hubspot_owner", "hubspot_product", "hubspot_user", "hubspot_kb_article", "hubspot_service_ticket", "hubspot_currency"],
   },
   {
     provider: "salesforce",
