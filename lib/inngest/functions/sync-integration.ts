@@ -94,7 +94,7 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
-  hubspot:           ["HubSpotDeal", "HubSpotContact", "HubSpotCompany", "HubSpotTicket", "HubSpotTask", "HubSpotNote", "HubSpotOwner", "HubSpotProduct", "HubSpotUser", "HubSpotKnowledgeBase", "HubSpotServiceTicket", "HubSpotCurrencyCode"],
+  hubspot:           ["Company", "Contact", "CurrencyCode", "Deal", "HubspotKnowledgeBaseArticle", "HubspotOwner", "Product", "HubSpotServiceTicket", "Task", "User"],
   "google-drive":    ["GoogleDriveFile"],
   outlook:           ["OutlookEmail", "OutlookCalendarEvent", "OutlookContact"],
 };
@@ -134,19 +134,17 @@ function normalizeRecord(
   }
   if (provider === "hubspot") {
     switch (model) {
-      case "HubSpotDeal":    return normalizeHubspotDeal(raw);
-      case "HubSpotContact": return normalizeHubspotContact(raw);
-      case "HubSpotCompany": return normalizeHubspotCompany(raw);
-      case "HubSpotTicket":  return normalizeHubspotTicket(raw);
-      case "HubSpotTask":    return normalizeHubspotTask(raw);
-      case "HubSpotNote":          return normalizeHubspotNote(raw);
-      case "HubSpotOwner":         return normalizeHubspotOwner(raw);
-      case "HubSpotProduct":       return normalizeHubspotProduct(raw);
-      case "HubSpotUser":          return normalizeHubspotUser(raw);
-      case "HubSpotKnowledgeBase": return normalizeHubspotKbArticle(raw);
-      case "HubSpotServiceTicket": return normalizeHubspotServiceTicket(raw);
-      case "HubSpotCurrencyCode":  return normalizeHubspotCurrency(raw);
-      default:                     return normalizeHubspot(raw);
+      case "Deal":                        return normalizeHubspotDeal(raw);
+      case "Contact":                     return normalizeHubspotContact(raw);
+      case "Company":                     return normalizeHubspotCompany(raw);
+      case "Task":                        return normalizeHubspotTask(raw);
+      case "HubspotOwner":                return normalizeHubspotOwner(raw);
+      case "Product":                     return normalizeHubspotProduct(raw);
+      case "User":                        return normalizeHubspotUser(raw);
+      case "HubspotKnowledgeBaseArticle": return normalizeHubspotKbArticle(raw);
+      case "HubSpotServiceTicket":        return normalizeHubspotServiceTicket(raw);
+      case "CurrencyCode":               return normalizeHubspotCurrency(raw);
+      default:                            return normalizeHubspot(raw);
     }
   }
   switch (provider) {
