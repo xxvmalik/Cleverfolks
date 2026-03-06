@@ -17,6 +17,8 @@ import {
   UserCheck,
   X,
   Edit2,
+  Globe,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -227,7 +229,15 @@ function SourceIcon({ sourceType }: { sourceType: string }) {
     case "attachment":
       return <FileText className={cls} />;
     case "calendar_event":
+    case "outlook_event":
       return <Calendar className={cls} />;
+    case "gmail_message":
+    case "outlook_email":
+      return <Mail className={cls} />;
+    case "web":
+      return <Globe className={cls} />;
+    case "cleverbrain_chat":
+      return <MessageSquare className={cls} />;
     default:
       return <Database className={cls} />;
   }
@@ -237,18 +247,23 @@ function SourceIcon({ sourceType }: { sourceType: string }) {
 
 function SourcePills({ sources }: { sources: SourceInfo[] }) {
   if (!sources.length) return null;
-  // Deduplicate by title + channel
+  // Deduplicate by source_type + channel/title
   const seen = new Set<string>();
   const unique = sources.filter((s) => {
-    const key = `${s.source_type}:${s.title}:${s.channel ?? ""}`;
+    const label = s.channel ?? s.title ?? s.source_type;
+    const key = `${s.source_type}:${label}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
+  const MAX_PILLS = 6;
+  const displayed = unique.slice(0, MAX_PILLS);
+  const remaining = unique.length - MAX_PILLS;
+
   return (
     <div className="flex flex-wrap gap-1.5 mt-2">
-      {unique.map((src, i) => (
+      {displayed.map((src, i) => (
         <span
           key={i}
           className="inline-flex items-center gap-1 bg-[#131619] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs px-2.5 py-1"
@@ -259,6 +274,11 @@ function SourcePills({ sources }: { sources: SourceInfo[] }) {
           </span>
         </span>
       ))}
+      {remaining > 0 && (
+        <span className="inline-flex items-center bg-[#131619] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs px-2.5 py-1">
+          +{remaining} more
+        </span>
+      )}
     </div>
   );
 }
