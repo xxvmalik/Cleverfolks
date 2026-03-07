@@ -189,17 +189,62 @@ function formatSourceDate(meta: Record<string, unknown>): string {
   }
 }
 
-function formatUnifiedResult(r: UnifiedResult): string {
+/**
+ * For HubSpot deal records, pre-calculate date differences so Claude
+ * doesn't have to do date math (which LLMs do unreliably).
+ */
+function enrichDealDates(r: UnifiedResult): UnifiedResult {
+  if (r.source_type !== "hubspot_deal") return r;
+
+  const text = r.chunk_text ?? "";
   const meta = r.metadata ?? {};
-  const srcParts: string[] = [r.source_type];
-  const ch = getChannelName(r.source_type, meta);
+
+  // Extract close date from chunk_text or metadata
+  const closeDateMatch = text.match(/Close Date:\s*(\S+)/i);
+  const closeDateStr =
+    closeDateMatch?.[1] ?? (meta.close_date as string | undefined);
+  if (!closeDateStr) return r;
+
+  const closeDate = new Date(closeDateStr);
+  if (isNaN(closeDate.getTime())) return r;
+
+  const now = new Date();
+  const diffMs = closeDate.getTime() - now.getTime();
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+  // Determine if deal is closed from chunk_text
+  const isClosed = /Status:\s*Closed/i.test(text);
+
+  let dateSuffix: string;
+  if (isClosed) {
+    dateSuffix = "| Closed";
+  } else if (diffDays > 0) {
+    dateSuffix = `| Due: in ${diffDays} day${diffDays === 1 ? "" : "s"}`;
+  } else if (diffDays === 0) {
+    dateSuffix = "| Due: today";
+  } else {
+    const overdue = Math.abs(diffDays);
+    dateSuffix = `| OVERDUE: ${overdue} day${overdue === 1 ? "" : "s"} past due`;
+  }
+
+  return {
+    ...r,
+    chunk_text: `${text}\n${dateSuffix}`,
+  };
+}
+
+function formatUnifiedResult(r: UnifiedResult): string {
+  const enriched = enrichDealDates(r);
+  const meta = enriched.metadata ?? {};
+  const srcParts: string[] = [enriched.source_type];
+  const ch = getChannelName(enriched.source_type, meta);
   if (ch) srcParts.push(ch);
-  const usr = getUserName(r.source_type, meta);
+  const usr = getUserName(enriched.source_type, meta);
   if (usr) srcParts.push(usr);
   const dt = formatSourceDate(meta);
   if (dt) srcParts.push(dt);
-  if (r.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
-  return `[Source: ${srcParts.join(" | ")}]\n${r.chunk_text}`;
+  if (enriched.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
+  return `[Source: ${srcParts.join(" | ")}]\n${enriched.chunk_text}`;
 }
 
 function formatToolResultForClaude(
