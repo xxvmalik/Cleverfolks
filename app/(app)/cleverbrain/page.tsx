@@ -24,5 +24,18 @@ export default async function CleverBrainPage() {
     onboarding_completed: boolean;
   };
 
-  return <CleverBrainClient workspaceId={ws.id} />;
+  // Get user display name
+  const displayName =
+    user.user_metadata?.full_name ??
+    user.user_metadata?.name ??
+    user.email?.split("@")[0] ??
+    "User";
+
+  return (
+    <CleverBrainClient
+      workspaceId={ws.id}
+      userName={displayName}
+      companyName={ws.name}
+    />
+  );
 }

@@ -1,26 +1,22 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
-  Brain,
-  Plus,
-  Send,
   Loader2,
   Check,
-  ChevronLeft,
-  ChevronRight,
-  Mail,
-  FileText,
-  Calendar,
-  Database,
-  Hash,
+  ChevronDown,
+  ChevronUp,
+  Mic,
   UserCheck,
   X,
   Edit2,
-  Globe,
-  MessageSquare,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { signOut } from "@/lib/auth";
 import {
   getConversationsAction,
   getMessagesAction,
@@ -50,7 +46,7 @@ type UIMessage = {
   content: string;
   sources: SourceInfo[] | null;
   created_at: string;
-  activities?: ActivityItem[]; // only on assistant messages from current session
+  activities?: ActivityItem[];
 };
 
 type StreamingState = {
@@ -86,7 +82,7 @@ const SUGGESTIONS = [
   "Are there any action items from recent discussions?",
 ];
 
-// ── Markdown renderer (regex-based, no external library) ─────────────────────
+// ── Markdown renderer ─────────────────────────────────────────────────────────
 
 function applyInline(s: string): string {
   return s
@@ -113,7 +109,6 @@ function renderMarkdown(text: string): string {
   };
 
   for (const line of lines) {
-    // Code block fence
     if (line.startsWith("```")) {
       if (inCodeBlock) {
         const escaped = codeLines
@@ -138,7 +133,6 @@ function renderMarkdown(text: string): string {
       continue;
     }
 
-    // Determine if this line starts a list item
     const isUl = /^[-*] /.test(line);
     const isOl = /^\d+\. /.test(line);
 
@@ -177,7 +171,6 @@ function renderMarkdown(text: string): string {
   }
 
   flushList();
-  // Unclosed code block
   if (inCodeBlock && codeLines.length > 0) {
     const escaped = codeLines
       .join("\n")
@@ -215,52 +208,10 @@ function groupConversations(convs: ConversationRow[]) {
   };
 }
 
-// ── Source icon ───────────────────────────────────────────────────────────────
-
-function SourceIcon({ sourceType }: { sourceType: string }) {
-  const cls = "w-3 h-3 flex-shrink-0";
-  switch (sourceType) {
-    case "slack_message":
-    case "slack_reply":
-      return <Hash className={cls} />;
-    case "email":
-      return <Mail className={cls} />;
-    case "document":
-    case "attachment":
-      return <FileText className={cls} />;
-    case "calendar_event":
-    case "outlook_event":
-      return <Calendar className={cls} />;
-    case "gmail_message":
-    case "outlook_email":
-      return <Mail className={cls} />;
-    case "web":
-      return <Globe className={cls} />;
-    case "cleverbrain_chat":
-      return <MessageSquare className={cls} />;
-    case "hubspot_contact":
-    case "hubspot_company":
-    case "hubspot_deal":
-    case "hubspot_ticket":
-    case "hubspot_task":
-    case "hubspot_note":
-    case "hubspot_owner":
-    case "hubspot_product":
-    case "hubspot_user":
-    case "hubspot_kb_article":
-    case "hubspot_service_ticket":
-    case "hubspot_currency":
-      return <Database className={cls} />;
-    default:
-      return <Database className={cls} />;
-  }
-}
-
 // ── Source pills ──────────────────────────────────────────────────────────────
 
 function SourcePills({ sources }: { sources: SourceInfo[] }) {
   if (!sources.length) return null;
-  // Deduplicate by source_type + channel/title
   const seen = new Set<string>();
   const unique = sources.filter((s) => {
     const label = s.channel ?? s.title ?? s.source_type;
@@ -275,23 +226,14 @@ function SourcePills({ sources }: { sources: SourceInfo[] }) {
   const remaining = unique.length - MAX_PILLS;
 
   return (
-    <div className="flex flex-wrap gap-1.5 mt-2">
-      {displayed.map((src, i) => (
-        <span
-          key={i}
-          className="inline-flex items-center gap-1 bg-[#131619] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs px-2.5 py-1"
-        >
-          <SourceIcon sourceType={src.source_type} />
-          <span className="truncate max-w-[140px]">
-            {src.channel ?? src.title ?? src.source_type}
-          </span>
-        </span>
-      ))}
-      {remaining > 0 && (
-        <span className="inline-flex items-center bg-[#131619] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs px-2.5 py-1">
-          +{remaining} more
-        </span>
-      )}
+    <div className="mt-3 bg-[#1E1E1E] rounded-xl px-4 py-3">
+      <p className="text-[#8B8F97] text-xs mb-2 flex items-center gap-1.5">
+        <span className="text-[#3A89FF] font-bold">#</span>
+        Sources: {displayed.map((s) => s.channel ?? s.title ?? s.source_type).join(", ")}
+        {remaining > 0 && ` • +${remaining} more`}
+        {" • "}
+        {sources.length} messages
+      </p>
     </div>
   );
 }
@@ -328,8 +270,8 @@ function ConvItem({
       className={cn(
         "w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150",
         isActive
-          ? "bg-[#3A89FF]/15 text-[#3A89FF]"
-          : "text-[#8B8F97] hover:bg-[#1C1F24] hover:text-white"
+          ? "bg-white/10 text-white"
+          : "text-[#8B8F97] hover:bg-white/5 hover:text-white"
       )}
     >
       {conv.title || "New conversation"}
@@ -363,7 +305,6 @@ function ProfileReviewCard({
   async function handleConfirm() {
     setIsConfirming(true);
     try {
-      // Collect only edits that differ from the detected role
       const corrections: Record<string, string> = {};
       for (const m of members) {
         if (roleEdits[m.name] && roleEdits[m.name] !== m.detected_role) {
@@ -377,7 +318,6 @@ function ProfileReviewCard({
       });
       onConfirm();
     } catch {
-      /* swallow — card will just close */
       onConfirm();
     } finally {
       setIsConfirming(false);
@@ -387,8 +327,7 @@ function ProfileReviewCard({
   if (uncertainMembers.length === 0) return null;
 
   return (
-    <div className="w-full bg-[#1C1F24] border border-[#3A89FF]/30 rounded-2xl p-4 mb-4">
-      {/* Header */}
+    <div className="w-full bg-[#1E1E1E] border border-[#3A89FF]/30 rounded-2xl p-4 mb-4">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-[#3A89FF]/15 flex items-center justify-center flex-shrink-0">
@@ -410,7 +349,6 @@ function ProfileReviewCard({
         </button>
       </div>
 
-      {/* Member rows */}
       <div className="space-y-2 mb-3">
         {uncertainMembers.map((m) => (
           <div key={m.name} className="flex items-center gap-2">
@@ -428,7 +366,7 @@ function ProfileReviewCard({
                 onKeyDown={(e) => {
                   if (e.key === "Enter" || e.key === "Escape") setEditingName(null);
                 }}
-                className="flex-1 bg-[#131619] border border-[#3A89FF]/50 rounded-lg px-2 py-1 text-sm text-white outline-none"
+                className="flex-1 bg-[#151515] border border-[#3A89FF]/50 rounded-lg px-2 py-1 text-sm text-white outline-none"
                 placeholder="Enter role…"
               />
             ) : (
@@ -456,7 +394,6 @@ function ProfileReviewCard({
         ))}
       </div>
 
-      {/* Actions */}
       <div className="flex items-center gap-2">
         <button
           onClick={() => void handleConfirm()}
@@ -481,26 +418,101 @@ function ProfileReviewCard({
   );
 }
 
+// ── Right Icon Bar ────────────────────────────────────────────────────────────
+
+function RightIconBar() {
+  return (
+    <div className="w-[60px] bg-[#151515] border-l border-[#2A2D35] flex flex-col items-center py-4 gap-5 flex-shrink-0">
+      {/* CleverBrain chat */}
+      <Link href="/cleverbrain" title="CleverBrain">
+        <Image
+          src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png"
+          alt="CleverBrain"
+          width={32}
+          height={32}
+          className="opacity-70 hover:opacity-100 transition-opacity"
+        />
+      </Link>
+
+      {/* Skyler */}
+      <Link href="/skyler" title="Skyler">
+        <Image
+          src="/cleverbrain-chat-icons/skyler-icon.png"
+          alt="Skyler"
+          width={32}
+          height={32}
+          className="rounded-full opacity-70 hover:opacity-100 transition-opacity"
+        />
+      </Link>
+
+      {/* Connectors */}
+      <Link href="/integrations" title="Connectors">
+        <Image
+          src="/cleverbrain-chat-icons/conectors-icon.png"
+          alt="Connectors"
+          width={28}
+          height={28}
+          className="opacity-70 hover:opacity-100 transition-opacity"
+        />
+      </Link>
+
+      {/* AI Employee */}
+      <Link href="/marketplace" title="AI Employees">
+        <Image
+          src="/cleverbrain-chat-icons/hire-ai-employee-icon.png"
+          alt="AI Employees"
+          width={28}
+          height={28}
+          className="opacity-70 hover:opacity-100 transition-opacity"
+        />
+      </Link>
+
+      {/* Spacer to push org icon to bottom */}
+      <div className="flex-1" />
+
+      {/* Organization */}
+      <Link href="/settings" title="Organization">
+        <Image
+          src="/cleverbrain-chat-icons/organization-icon.png"
+          alt="Organization"
+          width={36}
+          height={36}
+        />
+      </Link>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
-export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
+export function CleverBrainClient({
+  workspaceId,
+  userName,
+  companyName,
+}: {
+  workspaceId: string;
+  userName?: string;
+  companyName?: string;
+}) {
+  const router = useRouter();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [streamingState, setStreamingState] = useState<StreamingState | null>(null);
   const [inputValue, setInputValue] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  // Profile review card state
   const [reviewMembers, setReviewMembers] = useState<TeamMemberForReview[] | null>(null);
   const [reviewDismissed, setReviewDismissed] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const isStreamingRef = useRef(false); // shadow for stable reference in async
+  const isStreamingRef = useRef(false);
 
-  // ── Load conversations on mount ──────────────────────────────────────────
+  // ── Load conversations ──────────────────────────────────────────────────
   const fetchConversations = useCallback(async () => {
     const { conversations: data } = await getConversationsAction(workspaceId);
     setConversations(data);
@@ -510,7 +522,7 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
     void fetchConversations();
   }, [fetchConversations]);
 
-  // ── Check if profile needs role review ───────────────────────────────────
+  // ── Check profile review ────────────────────────────────────────────────
   useEffect(() => {
     async function checkProfileReview() {
       try {
@@ -523,7 +535,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
           confirmed: boolean;
           team_members: TeamMemberForReview[];
         };
-        // Show card only when profile is pending_review and not yet confirmed
         if (data.status === "pending_review" && !data.confirmed) {
           const uncertain = data.team_members.filter(
             (m) => m.confidence === "low" || m.confidence === "medium"
@@ -531,18 +542,18 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
           if (uncertain.length > 0) setReviewMembers(uncertain);
         }
       } catch {
-        /* silently ignore — the review card is optional */
+        /* silently ignore */
       }
     }
     void checkProfileReview();
   }, [workspaceId]);
 
-  // ── Auto-scroll ──────────────────────────────────────────────────────────
+  // ── Auto-scroll ─────────────────────────────────────────────────────────
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingState?.content, streamingState?.activities?.length]);
 
-  // ── Load conversation messages ───────────────────────────────────────────
+  // ── Load conversation messages ──────────────────────────────────────────
   const loadConversation = useCallback(async (convId: string) => {
     setActiveConversationId(convId);
     setStreamingState(null);
@@ -558,7 +569,7 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
     );
   }, []);
 
-  // ── New chat ─────────────────────────────────────────────────────────────
+  // ── New chat ────────────────────────────────────────────────────────────
   const handleNewChat = useCallback(() => {
     setActiveConversationId(null);
     setMessages([]);
@@ -567,13 +578,13 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
     setTimeout(() => textareaRef.current?.focus(), 50);
   }, []);
 
-  // ── Textarea auto-resize ─────────────────────────────────────────────────
+  // ── Textarea auto-resize ────────────────────────────────────────────────
   function resizeTextarea(el: HTMLTextAreaElement) {
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }
 
-  // ── Send message + SSE stream handling ──────────────────────────────────
+  // ── Send message + SSE stream ───────────────────────────────────────────
   const sendMessage = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
@@ -582,11 +593,8 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
       isStreamingRef.current = true;
       setIsStreaming(true);
       setInputValue("");
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-      }
+      if (textareaRef.current) textareaRef.current.style.height = "auto";
 
-      // Optimistic user message
       const tempId = `temp-${Date.now()}`;
       const userMsg: UIMessage = {
         id: tempId,
@@ -597,7 +605,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
       };
       setMessages((prev) => [...prev, userMsg]);
 
-      // Init streaming state
       const initState: StreamingState = {
         activities: [],
         content: "",
@@ -610,10 +617,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
       setStreamingState(initState);
 
       let finalConversationId = activeConversationId;
-
-      // Local mirror of streaming state — updated in sync with setStreamingState.
-      // This avoids reading React state inside another setState updater (which React
-      // Strict Mode would call twice, causing duplicate messages in the done handler).
       let localStreaming: StreamingState = initState;
 
       try {
@@ -631,7 +634,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
           const err = await res.text();
           throw new Error(err || `HTTP ${res.status}`);
         }
-
         if (!res.body) throw new Error("No response body");
 
         const reader = res.body.getReader();
@@ -687,7 +689,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
               localStreaming = { ...localStreaming, conversationId: cid, messageId };
               setStreamingState(localStreaming);
               setActiveConversationId(cid);
-              // Optimistically add new conversation to sidebar if not present
               setConversations((prev) => {
                 if (prev.some((c) => c.id === cid)) return prev;
                 const placeholder: ConversationRow = {
@@ -701,10 +702,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                 return [placeholder, ...prev];
               });
             } else if (event.type === "done") {
-              // Finalize: move streaming message into messages list.
-              // We read from localStreaming (not React state) to avoid the React Strict Mode
-              // double-invocation bug that would occur if we nested setMessages inside
-              // setStreamingState's updater function.
               const finalActivities = localStreaming.activities.map((a) => ({ ...a, complete: true }));
               const assistantMsg: UIMessage = {
                 id: localStreaming.messageId ?? `assistant-${Date.now()}`,
@@ -716,8 +713,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
               };
               setMessages((msgs) => [...msgs, assistantMsg]);
               setStreamingState(null);
-
-              // Refetch conversations to pick up auto-title
               void fetchConversations();
             } else if (event.type === "error") {
               const errMsg: UIMessage = {
@@ -746,9 +741,8 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
       } finally {
         isStreamingRef.current = false;
         setIsStreaming(false);
-        // If we got a conversationId from the stream, ensure sidebar is updated
         if (finalConversationId) {
-          setTimeout(() => void fetchConversations(), 3000); // pick up auto-title
+          setTimeout(() => void fetchConversations(), 3000);
         }
         setTimeout(() => textareaRef.current?.focus(), 50);
       }
@@ -765,7 +759,6 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
     void sendMessage(inputValue);
   }, [inputValue, sendMessage]);
 
-  // ── Keyboard handler ─────────────────────────────────────────────────────
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -773,105 +766,233 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  // ── Sidebar groups ───────────────────────────────────────────────────────
+  async function handleSignOut() {
+    await signOut();
+    router.push("/login");
+  }
+
   const groups = groupConversations(conversations);
   const hasMessages = messages.length > 0 || streamingState !== null;
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-screen w-full overflow-hidden bg-[#151515]">
       {/* ── Left Sidebar ──────────────────────────────────────────────────── */}
       <aside
         className={cn(
-          "flex flex-col bg-[#131619] border-r border-[#2A2D35] flex-shrink-0 transition-all duration-300 overflow-hidden",
-          sidebarCollapsed ? "w-0" : "w-[280px]"
+          "flex flex-col flex-shrink-0 transition-all duration-300 overflow-hidden",
+          sidebarCollapsed ? "w-0" : "w-[240px]"
         )}
       >
-        {/* New chat button */}
-        <div className="p-3 border-b border-[#2A2D35]">
+        {/* Top blue gradient section */}
+        <div
+          className="flex flex-col items-center px-4 pt-6 pb-5"
+          style={{
+            background: "linear-gradient(180deg, #0167DB 0%, #013A7A 100%)",
+          }}
+        >
+          {/* Cleverfolks logo */}
+          <div className="self-start mb-6">
+            <Image
+              src="/cleverbrain-chat-icons/cleverfolks-logo.png"
+              alt="Cleverfolks"
+              width={140}
+              height={28}
+              className="brightness-0 invert"
+            />
+          </div>
+
+          {/* Brain avatar */}
+          <div className="w-[120px] h-[120px] rounded-full overflow-hidden mb-4">
+            <Image
+              src="/cleverbrain-chat-icons/cleverbrain-icon.png"
+              alt="CleverBrain"
+              width={120}
+              height={120}
+            />
+          </div>
+
+          {/* Title */}
+          <h2 className="text-white font-bold text-lg">Cleverbrain</h2>
+          <p className="text-white/60 text-sm mt-0.5">AI for your Business</p>
+
+          {/* New chat button */}
           <button
             onClick={handleNewChat}
-            className="flex items-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium text-[#8B8F97] hover:bg-[#1C1F24] hover:text-white transition-colors"
+            className="mt-4 w-full h-[40px] rounded-full flex items-center justify-center gap-2 text-white text-sm font-medium"
+            style={{
+              background: "linear-gradient(135deg, rgba(255,255,255,0.25) 0%, rgba(255,255,255,0.08) 100%)",
+              backdropFilter: "blur(8px)",
+              border: "1px solid rgba(255,255,255,0.2)",
+            }}
           >
-            <Plus className="w-4 h-4 flex-shrink-0" />
-            <span>New chat</span>
+            <span className="text-lg leading-none">+</span>
+            Start new chat
           </button>
         </div>
 
-        {/* Conversations list */}
-        <div className="flex-1 overflow-y-auto py-2 px-2">
-          {(["today", "yesterday", "previous7Days", "older"] as const).map((key) => {
-            const label = {
-              today: "Today",
-              yesterday: "Yesterday",
-              previous7Days: "Previous 7 days",
-              older: "Older",
-            }[key];
-            const items = groups[key];
-            if (!items.length) return null;
-            return (
-              <div key={key} className="mb-3">
-                <div className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[#555A63]">
-                  {label}
-                </div>
-                <div className="space-y-0.5">
-                  {items.map((conv) => (
-                    <ConvItem
-                      key={conv.id}
-                      conv={conv}
-                      isActive={conv.id === activeConversationId}
-                      onClick={() => void loadConversation(conv.id)}
-                    />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
+        {/* History section */}
+        <div className="flex-1 bg-[#1B1B1B] flex flex-col overflow-hidden">
+          {/* History header */}
+          <button
+            onClick={() => setHistoryCollapsed((v) => !v)}
+            className="flex items-center justify-between px-4 py-3 text-white text-sm font-medium hover:bg-white/5 transition-colors"
+          >
+            <span>History</span>
+            {historyCollapsed ? (
+              <ChevronDown className="w-4 h-4 text-[#8B8F97]" />
+            ) : (
+              <ChevronUp className="w-4 h-4 text-[#8B8F97]" />
+            )}
+          </button>
 
-          {conversations.length === 0 && (
-            <p className="px-3 py-4 text-xs text-[#555A63] text-center">
-              No conversations yet
-            </p>
+          {/* Conversation list */}
+          {!historyCollapsed && (
+            <div className="flex-1 overflow-y-auto px-2 pb-2">
+              {(["today", "yesterday", "previous7Days", "older"] as const).map((key) => {
+                const label = {
+                  today: "Today",
+                  yesterday: "Yesterday",
+                  previous7Days: "Previous 7 days",
+                  older: "Older",
+                }[key];
+                const items = groups[key];
+                if (!items.length) return null;
+                return (
+                  <div key={key} className="mb-2">
+                    <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[#555A63]">
+                      {label}
+                    </div>
+                    <div className="space-y-0.5">
+                      {items.map((conv) => (
+                        <ConvItem
+                          key={conv.id}
+                          conv={conv}
+                          isActive={conv.id === activeConversationId}
+                          onClick={() => void loadConversation(conv.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {conversations.length === 0 && (
+                <p className="px-3 py-4 text-xs text-[#555A63] text-center">
+                  No conversations yet
+                </p>
+              )}
+            </div>
           )}
         </div>
       </aside>
 
-      {/* ── Right Panel ───────────────────────────────────────────────────── */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        {/* Sidebar toggle */}
-        <button
-          onClick={() => setSidebarCollapsed((v) => !v)}
-          className="absolute top-3 left-3 z-10 flex items-center justify-center w-7 h-7 rounded-lg bg-[#1C1F24] border border-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#2A2D35] transition-colors"
-          aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-        >
-          {sidebarCollapsed ? (
-            <ChevronRight className="w-3.5 h-3.5" />
-          ) : (
-            <ChevronLeft className="w-3.5 h-3.5" />
-          )}
-        </button>
+      {/* ── Center Chat Area ──────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Top bar */}
+        <div className="h-[56px] flex items-center justify-between px-5 flex-shrink-0 border-b border-[#2A2D35]/50">
+          {/* Left: sidebar toggle + search */}
+          <div className="flex items-center gap-3 flex-1">
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="text-[#8B8F97] hover:text-white transition-colors mr-1"
+                aria-label="Show sidebar"
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <rect x="2" y="4" width="16" height="2" rx="1" fill="currentColor"/>
+                  <rect x="2" y="9" width="16" height="2" rx="1" fill="currentColor"/>
+                  <rect x="2" y="14" width="16" height="2" rx="1" fill="currentColor"/>
+                </svg>
+              </button>
+            )}
+            {!sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="text-[#8B8F97] hover:text-white transition-colors mr-1"
+                aria-label="Hide sidebar"
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                  <rect x="2" y="4" width="16" height="2" rx="1" fill="currentColor"/>
+                  <rect x="2" y="9" width="16" height="2" rx="1" fill="currentColor"/>
+                  <rect x="2" y="14" width="16" height="2" rx="1" fill="currentColor"/>
+                </svg>
+              </button>
+            )}
+            <div className="relative max-w-[320px] w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#555A63]" />
+              <input
+                type="text"
+                placeholder="Search across everything"
+                className="w-full bg-[#1E1E1E] border border-[#2A2D35] rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-[#555A63] outline-none focus:border-[#3A89FF]/50 transition-colors"
+              />
+            </div>
+          </div>
 
-        {/* ── Messages / Empty State ───────────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
+          {/* Right: user profile */}
+          <div className="relative">
+            <button
+              onClick={() => setUserMenuOpen((v) => !v)}
+              className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
+            >
+              <Image
+                src="/cleverbrain-chat-icons/organization-dp.png"
+                alt="User"
+                width={32}
+                height={32}
+                className="rounded-full"
+              />
+              <div className="text-right">
+                <p className="text-white text-sm font-medium leading-tight">
+                  {userName || "User"}
+                </p>
+                <p className="text-[#8B8F97] text-xs leading-tight">
+                  {companyName || "Company"}
+                </p>
+              </div>
+              <ChevronDown className="w-4 h-4 text-[#8B8F97]" />
+            </button>
+
+            {/* Dropdown menu */}
+            {userMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
+                  <Link
+                    href="/settings"
+                    className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
+                    onClick={() => setUserMenuOpen(false)}
+                  >
+                    Settings
+                  </Link>
+                  <button
+                    onClick={() => void handleSignOut()}
+                    className="w-full text-left px-4 py-2 text-sm text-[#F87171] hover:bg-white/5 transition-colors"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Chat heading */}
+        <div className="px-5 pt-4 pb-2 flex-shrink-0">
+          <h1 className="text-white font-bold text-xl">Chat with CleverBrain</h1>
+        </div>
+
+        {/* ── Messages / Empty State ────────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto relative">
           {!hasMessages ? (
-            /* Empty state */
             <div className="flex flex-col items-center justify-center h-full px-6 py-12">
               <div className="flex flex-col items-center gap-4 max-w-lg w-full">
-                {/* Icon */}
-                <div className="w-14 h-14 rounded-2xl bg-[#3A89FF]/10 flex items-center justify-center">
-                  <Brain className="w-7 h-7 text-[#3A89FF]" />
-                </div>
-                {/* Heading */}
-                <h1 className="font-heading font-semibold text-2xl text-white text-center">
-                  What would you like to know?
-                </h1>
-                {/* Subtext */}
                 <p className="text-[#8B8F97] text-sm text-center leading-relaxed">
-                  CleverBrain has access to your connected integrations. Ask about conversations,
-                  documents, emails, and more.
+                  Hi! I&apos;m CleverBrain. I have access to your Slack, Gmail, and Calendar data.
+                  <br />
+                  Ask me anything — I can search across all your connected tools.
                 </p>
 
-                {/* Profile review card */}
                 {reviewMembers && !reviewDismissed && (
                   <ProfileReviewCard
                     workspaceId={workspaceId}
@@ -881,14 +1002,13 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                   />
                 )}
 
-                {/* Suggestion cards */}
                 <div className="grid grid-cols-2 gap-3 w-full mt-2">
                   {SUGGESTIONS.map((suggestion) => (
                     <button
                       key={suggestion}
                       onClick={() => handleSuggestion(suggestion)}
                       disabled={isStreaming}
-                      className="text-left p-3.5 rounded-xl border border-[#2A2D35] bg-[#131619] text-[#8B8F97] text-sm leading-snug hover:border-[#3A89FF]/40 hover:bg-[#3A89FF]/5 hover:text-white transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="text-left p-3.5 rounded-xl border border-[#2A2D35] bg-[#1E1E1E] text-[#8B8F97] text-sm leading-snug hover:border-[#3A89FF]/40 hover:bg-[#3A89FF]/5 hover:text-white transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {suggestion}
                     </button>
@@ -897,22 +1017,22 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
               </div>
             </div>
           ) : (
-            /* Messages list */
-            <div className="px-4 py-6 max-w-3xl mx-auto w-full space-y-6">
+            <div className="px-5 py-6 max-w-3xl mx-auto w-full space-y-6">
               {messages.map((msg) => (
                 <MessageBubble key={msg.id} msg={msg} />
               ))}
 
-              {/* Streaming assistant message */}
               {streamingState && (
                 <div className="flex gap-3">
-                  {/* Avatar */}
-                  <div className="w-8 h-8 rounded-full bg-[#3A89FF]/15 flex items-center justify-center flex-shrink-0 mt-1">
-                    <Brain className="w-4 h-4 text-[#3A89FF]" />
+                  <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 mt-1">
+                    <Image
+                      src="/cleverbrain-chat-icons/cleverbrain-icon.png"
+                      alt="CleverBrain"
+                      width={32}
+                      height={32}
+                    />
                   </div>
-
                   <div className="flex-1 min-w-0">
-                    {/* Activity indicators */}
                     {streamingState.activities.length > 0 && (
                       <div className="mb-3 space-y-0.5">
                         {streamingState.activities.map((a, i) => (
@@ -920,23 +1040,18 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                         ))}
                       </div>
                     )}
-
-                    {/* Streaming text bubble */}
                     {streamingState.content && (
-                      <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl rounded-bl-md px-4 py-3 text-[#E0E0E0] text-sm leading-relaxed">
+                      <div className="text-[#E0E0E0] text-sm leading-relaxed">
                         <div
                           dangerouslySetInnerHTML={{
                             __html: renderMarkdown(streamingState.content),
                           }}
                         />
-                        {/* Blinking cursor while streaming */}
                         {!streamingState.isComplete && (
                           <span className="inline-block w-0.5 h-4 bg-[#3A89FF] ml-0.5 animate-pulse align-middle" />
                         )}
                       </div>
                     )}
-
-                    {/* Thinking indicator when no content yet */}
                     {!streamingState.content && streamingState.activities.length === 0 && (
                       <div className="flex items-center gap-2 text-[#8B8F97] text-sm">
                         <Loader2 className="w-4 h-4 animate-spin" />
@@ -952,11 +1067,27 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
           )}
         </div>
 
-        {/* ── Input Area ──────────────────────────────────────────────────── */}
-        <div className="border-t border-[#2A2D35] px-6 py-4 flex-shrink-0">
+        {/* ── Input Area ─────────────────────────────────────────────────── */}
+        <div className="px-5 pb-4 pt-2 flex-shrink-0">
           <div className="max-w-3xl mx-auto">
-            {/* Input container */}
-            <div className="flex items-end gap-3 bg-[#131619] border border-[#2A2D35] rounded-xl px-4 py-3 focus-within:border-[#3A89FF]/50 transition-colors">
+            <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#3A89FF]/50 transition-all">
+              {/* Add media icon */}
+              <button className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                <Image
+                  src="/cleverbrain-chat-icons/add-media-icon.png"
+                  alt="Attach"
+                  width={20}
+                  height={20}
+                  className="opacity-60 hover:opacity-100"
+                />
+              </button>
+
+              {/* Mic icon */}
+              <button className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                <Mic className="w-5 h-5" />
+              </button>
+
+              {/* Text input */}
               <textarea
                 ref={textareaRef}
                 value={inputValue}
@@ -966,7 +1097,7 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
                 }}
                 onKeyDown={handleKeyDown}
                 disabled={isStreaming}
-                placeholder="Ask CleverBrain anything..."
+                placeholder="Ask CleverBrain Anything about your business"
                 rows={1}
                 className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
                 style={{ maxHeight: "160px", overflowY: "auto" }}
@@ -976,40 +1107,46 @@ export function CleverBrainClient({ workspaceId }: { workspaceId: string }) {
               <button
                 onClick={handleSubmit}
                 disabled={isStreaming || !inputValue.trim()}
-                className={cn(
-                  "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors",
-                  isStreaming || !inputValue.trim()
-                    ? "text-[#555A63] cursor-not-allowed"
-                    : "bg-[#3A89FF] text-white hover:bg-[#2d7aff]"
-                )}
+                className="flex-shrink-0 pb-0.5"
                 aria-label="Send message"
               >
                 {isStreaming ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-5 h-5 text-[#8B8F97] animate-spin" />
                 ) : (
-                  <Send className="w-4 h-4" />
+                  <Image
+                    src="/cleverbrain-chat-icons/send-prompt-icon.png"
+                    alt="Send"
+                    width={24}
+                    height={24}
+                    className={cn(
+                      "transition-opacity",
+                      inputValue.trim() ? "opacity-100" : "opacity-40"
+                    )}
+                  />
                 )}
               </button>
             </div>
 
-            {/* Helper text */}
-            <p className="text-[#555A63] text-xs text-center mt-2">
-              CleverBrain searches your connected integrations to answer questions
+            <p className="text-[#555A63] text-xs text-center mt-2.5">
+              CleverBrain searches across all your connected tools to give you answers.
             </p>
           </div>
         </div>
       </div>
+
+      {/* ── Right Icon Bar ────────────────────────────────────────────────── */}
+      <RightIconBar />
     </div>
   );
 }
 
-// ── MessageBubble component ───────────────────────────────────────────────────
+// ── MessageBubble ──────────────────────────────────────────────────────────────
 
 function MessageBubble({ msg }: { msg: UIMessage }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[75%] bg-[#3A89FF] text-white text-sm rounded-2xl rounded-br-md px-4 py-3 leading-relaxed whitespace-pre-wrap">
+        <div className="max-w-[75%] bg-[#2B2B2B] text-white text-sm rounded-2xl rounded-br-md px-4 py-3 leading-relaxed whitespace-pre-wrap">
           {msg.content}
         </div>
       </div>
@@ -1018,13 +1155,16 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
 
   return (
     <div className="flex gap-3">
-      {/* Avatar */}
-      <div className="w-8 h-8 rounded-full bg-[#3A89FF]/15 flex items-center justify-center flex-shrink-0 mt-1">
-        <Brain className="w-4 h-4 text-[#3A89FF]" />
+      <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 mt-1">
+        <Image
+          src="/cleverbrain-chat-icons/cleverbrain-icon.png"
+          alt="CleverBrain"
+          width={32}
+          height={32}
+        />
       </div>
 
       <div className="flex-1 min-w-0">
-        {/* Activity indicators (from current session — static all-checked) */}
         {msg.activities && msg.activities.length > 0 && (
           <div className="mb-3 space-y-0.5">
             {msg.activities.map((a, i) => (
@@ -1033,14 +1173,12 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
           </div>
         )}
 
-        {/* Message bubble */}
-        <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl rounded-bl-md px-4 py-3 text-[#E0E0E0] text-sm leading-relaxed">
+        <div className="text-[#E0E0E0] text-sm leading-relaxed">
           <div
             dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
           />
         </div>
 
-        {/* Source citations */}
         {msg.sources && msg.sources.length > 0 && (
           <SourcePills sources={msg.sources} />
         )}
@@ -1048,4 +1186,3 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
     </div>
   );
 }
-
