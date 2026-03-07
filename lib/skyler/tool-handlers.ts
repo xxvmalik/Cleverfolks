@@ -119,47 +119,32 @@ function buildNangoPayload(
         owner: context?.ownerId,
       };
     }
-    case "create_task":
+    case "create_task": {
+      // Nango Task model: title, notes, priority, due_date, task_type, assigned_to
+      let dueDate: string;
+      if (input.due_date) {
+        try {
+          dueDate = new Date(input.due_date as string).toISOString();
+        } catch {
+          dueDate = new Date().toISOString();
+        }
+      } else {
+        dueDate = new Date().toISOString();
+      }
       return {
-        hs_task_subject: input.subject,
-        hs_task_body: input.body,
-        hs_task_priority: input.priority ?? "MEDIUM",
-        hs_timestamp: input.due_date
-          ? new Date(input.due_date as string).toISOString()
-          : new Date().toISOString(),
-        // Associations
-        ...(input.contact_id || input.deal_id
-          ? {
-              associations: [
-                ...(input.contact_id
-                  ? [{ to: { id: input.contact_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 204 }] }]
-                  : []),
-                ...(input.deal_id
-                  ? [{ to: { id: input.deal_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 216 }] }]
-                  : []),
-              ],
-            }
-          : {}),
+        title: input.subject,
+        notes: input.body,
+        priority: (input.priority as string)?.toUpperCase() ?? "MEDIUM",
+        due_date: dueDate,
+        task_type: "TODO",
       };
+    }
     case "create_note":
+      // Nango's create-note action doesn't map hs_timestamp, so HubSpot always rejects.
+      // Pass through raw HubSpot property names as a best-effort attempt.
       return {
         hs_note_body: input.body,
         hs_timestamp: new Date().toISOString(),
-        ...(input.contact_id || input.deal_id || input.company_id
-          ? {
-              associations: [
-                ...(input.contact_id
-                  ? [{ to: { id: input.contact_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 202 }] }]
-                  : []),
-                ...(input.deal_id
-                  ? [{ to: { id: input.deal_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 214 }] }]
-                  : []),
-                ...(input.company_id
-                  ? [{ to: { id: input.company_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 190 }] }]
-                  : []),
-              ],
-            }
-          : {}),
       };
     default:
       return input;
