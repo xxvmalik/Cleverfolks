@@ -133,7 +133,7 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
   {
     name: "create_task",
     description:
-      "Create a new task in HubSpot CRM. Use for follow-ups, reminders, or action items related to deals or contacts.",
+      "Create a new task in HubSpot CRM. Use for follow-ups, reminders, or action items. IMPORTANT: When creating a task for a specific person, FIRST use search_by_person to find their HubSpot contact ID, then pass it as contact_id so the task is properly associated.",
     input_schema: {
       type: "object" as const,
       properties: {

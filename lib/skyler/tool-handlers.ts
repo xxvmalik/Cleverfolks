@@ -120,7 +120,9 @@ function buildNangoPayload(
       };
     }
     case "create_task": {
-      // Nango Task model: title, notes, priority, due_date, task_type, assigned_to
+      // Nango Task model: title, notes, priority, due_date, task_type
+      // Associations: contact_id, deal_id, company_id (top-level fields)
+      // Owner: owner (HubSpot owner ID)
       let dueDate: string;
       if (input.due_date) {
         try {
@@ -137,6 +139,9 @@ function buildNangoPayload(
         priority: (input.priority as string)?.toUpperCase() ?? "MEDIUM",
         due_date: dueDate,
         task_type: "TODO",
+        ...(input.contact_id ? { contact_id: input.contact_id } : {}),
+        ...(input.deal_id ? { deal_id: input.deal_id } : {}),
+        ...(context?.ownerId ? { owner: context.ownerId } : {}),
       };
     }
     case "create_note":
@@ -262,6 +267,7 @@ async function executeViaNango(
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
     // Build context for deal tools: resolve stage label → ID and get default owner
+    // Build context: resolve stage IDs and owner for deals and tasks
     let context: { stageId?: string; ownerId?: string } | undefined;
     if (toolName === "create_deal" || toolName === "update_deal") {
       const [stageId, ownerId] = await Promise.all([
@@ -270,6 +276,10 @@ async function executeViaNango(
       ]);
       context = { stageId, ownerId };
       console.log(`[skyler-tools] Deal context: stageId=${stageId ?? "none"}, ownerId=${ownerId ?? "none"}`);
+    } else if (toolName === "create_task") {
+      const ownerId = await getDefaultOwnerId(nango, connectionId);
+      context = { ownerId };
+      console.log(`[skyler-tools] Task context: ownerId=${ownerId ?? "none"}, contact_id=${input.contact_id ?? "none"}`);
     }
 
     const payload = buildNangoPayload(toolName, input, context);
