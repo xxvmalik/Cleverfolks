@@ -194,9 +194,8 @@ export async function processSyncedData(
 
     } catch (recordErr) {
       console.error(`${label} fatal error — skipping record:`, recordErr);
-      // Re-throw so the caller (sync route) can surface this to the client
-      // If you'd prefer to skip bad records instead of aborting, change to: skipped++; continue;
-      throw recordErr;
+      skipped++;
+      continue;
     }
   }
 
