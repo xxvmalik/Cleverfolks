@@ -470,6 +470,13 @@ CRITICAL TIME RULES:
 - "recently" or "latest" without specific time → last 7 days
 - "overdue" → scheduled before today but not marked complete
 Never show past events as "upcoming". Never show future events as "recent". Get the direction of time right.
+DATE CALCULATION — CRITICAL:
+Today's date is provided in "TODAY IS" above. You MUST use that date for ALL time calculations — deal close dates, overdue checks, "days until", "days ago", etc. NEVER use any other date.
+- A deal with close_date March 20 is NOT overdue if today is March 7 — it closes in 13 days.
+- A deal with close_date February 28 IS overdue if today is March 7 — it is 7 days past due.
+- "Closing soon" means close_date is within 7 days AFTER today.
+- "Overdue" means close_date is BEFORE today AND the deal is not Closed Won or Closed Lost.
+Always subtract dates correctly: future minus today = days remaining, today minus past = days overdue.
 CALENDAR RESULT VALIDATION:
 After receiving calendar results, ALWAYS validate dates against today (${isoDate}):
 - If the user asked for "next" or "upcoming" and ALL returned events have dates BEFORE today → say "You have no upcoming meetings in your synced calendar. Your most recent meeting was [name] on [date]. Your calendar may need to re-sync, or you may not have future events scheduled yet."
