@@ -288,6 +288,48 @@ export function SkylerClient({
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatMessages, streamingContent]);
 
+  // Poll for pending actions every 3 seconds when we have an active conversation
+  useEffect(() => {
+    if (!activeConversationId || isStreaming) return;
+
+    const pollActions = async () => {
+      try {
+        const res = await fetch(
+          `/api/skyler/actions?workspaceId=${workspaceId}&conversationId=${activeConversationId}&status=pending`
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const pending: PendingAction[] = (data.actions ?? [])
+          .filter((a: { status: string }) => a.status === "pending")
+          .map((a: { id: string; description: string }) => ({
+            id: a.id,
+            description: a.description,
+          }));
+
+        if (pending.length > 0) {
+          // Attach to the last assistant message
+          const lastAssistantMsg = [...chatMessages].reverse().find((m) => m.role === "assistant");
+          if (lastAssistantMsg) {
+            setMessageActions((prev) => {
+              const existing = prev[lastAssistantMsg.id] ?? [];
+              const existingIds = new Set(existing.map((a) => a.id));
+              const newActions = pending.filter((a) => !existingIds.has(a.id));
+              if (newActions.length === 0) return prev;
+              return { ...prev, [lastAssistantMsg.id]: [...existing, ...newActions] };
+            });
+          }
+        }
+      } catch {
+        // Silently ignore polling errors
+      }
+    };
+
+    // Poll immediately once, then every 3 seconds
+    pollActions();
+    const interval = setInterval(pollActions, 3000);
+    return () => clearInterval(interval);
+  }, [activeConversationId, isStreaming, workspaceId, chatMessages]);
+
   // Toggle sales closer
   async function handleSalesCloserToggle() {
     const newValue = !salesCloserEnabled;
@@ -381,13 +423,17 @@ export function SkylerClient({
               setActivityLabel(null);
 
               // Fetch pending actions from API (bulletproof — DB is source of truth)
-              if (currentConversationId) {
+              const convIdForActions = currentConversationId;
+              console.log("[skyler] Stream done. Polling for pending actions, conversationId:", convIdForActions);
+              if (convIdForActions) {
                 try {
-                  const actionsRes = await fetch(
-                    `/api/skyler/actions?workspaceId=${workspaceId}&conversationId=${currentConversationId}&status=pending`
-                  );
+                  const actionsUrl = `/api/skyler/actions?workspaceId=${workspaceId}&conversationId=${convIdForActions}&status=pending`;
+                  console.log("[skyler] Fetching:", actionsUrl);
+                  const actionsRes = await fetch(actionsUrl);
+                  console.log("[skyler] Actions response status:", actionsRes.status);
                   if (actionsRes.ok) {
                     const actionsData = await actionsRes.json();
+                    console.log("[skyler] Actions data:", JSON.stringify(actionsData));
                     const pending: PendingAction[] = (actionsData.actions ?? [])
                       .filter((a: { status: string }) => a.status === "pending")
                       .map((a: { id: string; description: string }) => ({
@@ -395,12 +441,17 @@ export function SkylerClient({
                         description: a.description,
                       }));
                     if (pending.length > 0) {
+                      console.log("[skyler] Found", pending.length, "pending actions, attaching to message", msgId);
                       setMessageActions((prev) => ({ ...prev, [msgId]: pending }));
+                    } else {
+                      console.log("[skyler] No pending actions found");
                     }
                   }
-                } catch {
-                  console.error("[skyler-client] Failed to fetch pending actions");
+                } catch (actionsErr) {
+                  console.error("[skyler] Failed to fetch pending actions:", actionsErr);
                 }
+              } else {
+                console.warn("[skyler] No conversationId available — cannot poll for pending actions");
               }
 
               // Refresh conversation list
@@ -451,16 +502,35 @@ export function SkylerClient({
     setStreamingContent("");
     setMessageActions({});
     try {
-      const res = await fetch(`/api/skyler/conversations/${convId}/messages`);
-      if (res.ok) {
-        const data = await res.json();
-        setChatMessages(
-          (data.messages ?? []).map((m: { id: string; role: string; content: string }) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          }))
-        );
+      const [msgsRes, actionsRes] = await Promise.all([
+        fetch(`/api/skyler/conversations/${convId}/messages`),
+        fetch(`/api/skyler/actions?workspaceId=${workspaceId}&conversationId=${convId}&status=pending`),
+      ]);
+      let loadedMessages: ChatMessage[] = [];
+      if (msgsRes.ok) {
+        const data = await msgsRes.json();
+        loadedMessages = (data.messages ?? []).map((m: { id: string; role: string; content: string }) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+        }));
+        setChatMessages(loadedMessages);
+      }
+      // Attach pending actions to the last assistant message
+      if (actionsRes.ok) {
+        const actionsData = await actionsRes.json();
+        const pending: PendingAction[] = (actionsData.actions ?? [])
+          .filter((a: { status: string }) => a.status === "pending")
+          .map((a: { id: string; description: string }) => ({
+            id: a.id,
+            description: a.description,
+          }));
+        if (pending.length > 0) {
+          const lastAssistant = [...loadedMessages].reverse().find((m) => m.role === "assistant");
+          if (lastAssistant) {
+            setMessageActions({ [lastAssistant.id]: pending });
+          }
+        }
       }
     } catch {
       // Silently ignore
