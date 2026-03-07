@@ -348,20 +348,31 @@ export function buildAgentSystemPrompt(
     const patterns = memories.filter((m) => m.type === "pattern");
     const learnings = memories.filter((m) => m.type === "learning");
 
+    // ── Mandatory terminology/correction overrides ──────────────────
+    // These are formatted as direct instructions, not passive context,
+    // so Claude applies them even when source data uses different terms.
+    const mandatoryRules: string[] = [];
+
+    if (terminology.length > 0 || corrections.length > 0) {
+      const allRules = [...terminology, ...corrections];
+      for (const m of allRules) {
+        mandatoryRules.push(`- ${m.content}`);
+      }
+    }
+
+    const mandatoryBlock =
+      mandatoryRules.length > 0
+        ? `## TERMINOLOGY AND CORRECTIONS YOU MUST USE — NON-NEGOTIABLE
+The user has explicitly corrected the following. These override ANY terminology in source data, tool results, or your own assumptions. Even if a HubSpot ticket, Slack message, or email says "order", if the rule below says it's a "service", you MUST call it a "service."
+
+${mandatoryRules.join("\n")}
+
+Apply these rules to EVERY response. Rewrite source data terminology before presenting it to the user. Do NOT echo incorrect terms from source data.\n\n`
+        : "";
+
+    // ── Regular memory sections ─────────────────────────────────────
     const sections: string[] = [];
 
-    if (corrections.length > 0) {
-      sections.push(
-        "CORRECTIONS (facts you got wrong before — do NOT repeat these mistakes):\n" +
-          corrections.map((m) => `- ${m.content}`).join("\n")
-      );
-    }
-    if (terminology.length > 0) {
-      sections.push(
-        "BUSINESS TERMINOLOGY (how this company talks):\n" +
-          terminology.map((m) => `- ${m.content}`).join("\n")
-      );
-    }
     if (preferences.length > 0) {
       sections.push(
         "USER PREFERENCES:\n" +
@@ -381,12 +392,13 @@ export function buildAgentSystemPrompt(
       );
     }
 
-    memorySection = `
-MEMORY — LEARNED CONTEXT FROM PAST CONVERSATIONS:
-The following was learned from previous interactions with this workspace. If memory contradicts your default behaviour, follow the memory — it represents corrections and preferences from real usage.
+    const contextBlock =
+      sections.length > 0
+        ? `MEMORY — LEARNED CONTEXT FROM PAST CONVERSATIONS:\n${sections.join("\n\n")}\n`
+        : "";
 
-${sections.join("\n\n")}
-`;
+    memorySection = `
+${mandatoryBlock}${contextBlock}`;
   }
 
   // ── Integration awareness map ─────────────────────────────────────────
