@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
+import { ActionApproval } from "@/components/skyler/action-approval";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -189,6 +190,32 @@ const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "sales-closer", label: "Sales Closer", icon: Target },
   { id: "workflows-settings", label: "Workflows Settings", icon: Settings },
 ];
+
+// ── Action tag parser ─────────────────────────────────────────────────────────
+
+const ACTION_PENDING_RE = /\[ACTION_PENDING:([0-9a-f-]+)\]\s*/gi;
+const ACTION_EXECUTED_RE = /\[ACTION_EXECUTED\]\s*/gi;
+
+function parseActionTags(content: string): { cleanContent: string; pendingActions: Array<{ id: string; description: string }> } {
+  const pendingActions: Array<{ id: string; description: string }> = [];
+  let clean = content;
+
+  // Extract pending action IDs and descriptions
+  let match: RegExpExecArray | null;
+  ACTION_PENDING_RE.lastIndex = 0;
+  while ((match = ACTION_PENDING_RE.exec(content)) !== null) {
+    const actionId = match[1];
+    // The description follows the tag until the next newline
+    const afterTag = content.slice(match.index + match[0].length);
+    const descLine = afterTag.split("\n")[0]?.trim() ?? "";
+    pendingActions.push({ id: actionId, description: descLine });
+  }
+
+  // Strip tags from display text
+  clean = clean.replace(ACTION_PENDING_RE, "");
+  clean = clean.replace(ACTION_EXECUTED_RE, "");
+  return { cleanContent: clean.trim(), pendingActions };
+}
 
 const QUICK_ACTIONS = [
   "How's our pipeline looking?",
@@ -766,35 +793,56 @@ export function SkylerClient({
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {chatMessages.map((msg) => (
-                      <div key={msg.id} className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
-                        {msg.role === "assistant" && (
-                          <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
-                            <Image
-                              src="/skyler-icons/skyler-avatar.png"
-                              alt="Skyler"
-                              width={28}
-                              height={28}
-                              className="w-full h-full object-cover"
-                            />
+                    {chatMessages.map((msg) => {
+                      const { cleanContent, pendingActions } =
+                        msg.role === "assistant"
+                          ? parseActionTags(msg.content)
+                          : { cleanContent: msg.content, pendingActions: [] };
+
+                      return (
+                        <div key={msg.id}>
+                          <div className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
+                            {msg.role === "assistant" && (
+                              <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                                <Image
+                                  src="/skyler-icons/skyler-avatar.png"
+                                  alt="Skyler"
+                                  width={28}
+                                  height={28}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                            )}
+                            <div
+                              className={cn(
+                                "rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]",
+                                msg.role === "user"
+                                  ? "bg-[#F2903D]/20 text-white"
+                                  : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
+                              )}
+                            >
+                              {msg.role === "assistant" ? (
+                                <MarkdownRenderer content={cleanContent} />
+                              ) : (
+                                <div className="whitespace-pre-wrap">{msg.content}</div>
+                              )}
+                            </div>
                           </div>
-                        )}
-                        <div
-                          className={cn(
-                            "rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]",
-                            msg.role === "user"
-                              ? "bg-[#F2903D]/20 text-white"
-                              : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
-                          )}
-                        >
-                          {msg.role === "assistant" ? (
-                            <MarkdownRenderer content={msg.content} />
-                          ) : (
-                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                          {pendingActions.length > 0 && (
+                            <div className="ml-10 mt-2 space-y-2">
+                              {pendingActions.map((pa) => (
+                                <ActionApproval
+                                  key={pa.id}
+                                  actionId={pa.id}
+                                  description={pa.description}
+                                  workspaceId={workspaceId}
+                                />
+                              ))}
+                            </div>
                           )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     {/* Streaming response */}
                     {(streamingContent || activityLabel) && (

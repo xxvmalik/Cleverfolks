@@ -23,6 +23,13 @@ export type AgentLoopParams = {
   integrationManifest: IntegrationInfo[];
   /** Override the default CLEVERBRAIN_TOOLS. Pass a custom tool set for other agents (e.g. Skyler). */
   tools?: Anthropic.Tool[];
+  /** Override the default tool executor. Used by Skyler for autonomy-aware write tools. */
+  toolExecutor?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    workspaceId: string,
+    adminSupabase: AdminDb
+  ) => Promise<ToolHandlerResult>;
 };
 
 export type AgentLoopResult = {
@@ -103,6 +110,22 @@ function generateActivityLabel(
         return "Mapping website...";
       }
     }
+    case "create_contact":
+      return "Creating contact in CRM...";
+    case "update_contact":
+      return "Updating contact in CRM...";
+    case "create_company":
+      return "Creating company in CRM...";
+    case "update_company":
+      return "Updating company in CRM...";
+    case "create_deal":
+      return "Creating deal in CRM...";
+    case "update_deal":
+      return "Updating deal in CRM...";
+    case "create_task":
+      return "Creating task in CRM...";
+    case "create_note":
+      return "Creating note in CRM...";
     default:
       return "Processing...";
   }
@@ -359,6 +382,7 @@ export async function runAgentLoop(
     workspaceId,
     adminSupabase,
     tools: customTools,
+    toolExecutor: customToolExecutor,
   } = params;
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -428,7 +452,8 @@ export async function runAgentLoop(
         `[agent-loop] calling tool: ${toolUse.name} input=${JSON.stringify(toolInput).slice(0, 200)}`
       );
 
-      const handlerResult = await executeToolCall(
+      const executor = customToolExecutor ?? executeToolCall;
+      const handlerResult = await executor(
         toolUse.name,
         toolInput,
         workspaceId,

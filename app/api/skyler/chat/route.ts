@@ -14,6 +14,7 @@ import {
   type KnowledgeProfileRow,
 } from "@/lib/skyler/system-prompt";
 import { SKYLER_TOOLS } from "@/lib/skyler/tools";
+import { executeSkylerToolCall } from "@/lib/skyler/tool-handlers";
 import type { UnifiedResult } from "@/lib/strategy-executor";
 import {
   retrieveMemories,
@@ -294,6 +295,23 @@ export async function POST(request: NextRequest) {
         }
 
         // ── Step 3: Run agent loop (reusing CleverBrain's) ──────────────
+        // Build autonomy-aware tool executor that passes context to Skyler's handler
+        const skylerToolExecutor = (
+          toolName: string,
+          input: Record<string, unknown>,
+          wsId: string,
+          adminDb: typeof db
+        ) =>
+          executeSkylerToolCall(
+            toolName,
+            input,
+            wsId,
+            adminDb,
+            autonomyLevel,
+            conversationId ?? undefined,
+            user.id
+          );
+
         const agentResult = await runAgentLoop(
           {
             message,
@@ -303,6 +321,7 @@ export async function POST(request: NextRequest) {
             adminSupabase: db,
             integrationManifest,
             tools: SKYLER_TOOLS,
+            toolExecutor: skylerToolExecutor,
           },
           (event: SSEEvent) => {
             send(event);
