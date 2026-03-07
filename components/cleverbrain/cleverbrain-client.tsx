@@ -14,6 +14,8 @@ import {
   X,
   Edit2,
   Search,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -422,15 +424,15 @@ function ProfileReviewCard({
 
 function RightIconBar() {
   return (
-    <div className="w-[76px] bg-[#1E1E1E] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
-      <div className="flex flex-col items-center gap-8">
+    <div className="w-[76px] bg-[#151515] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
+      <div className="flex flex-col items-center gap-6 rounded-2xl border border-[#2A2D35]/60 px-3 py-5" style={{ background: "#1F1F1FCC" }}>
         {/* CleverBrain chat */}
         <Link href="/cleverbrain" title="CleverBrain" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image
             src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png"
             alt="CleverBrain"
-            width={44}
-            height={44}
+            width={36}
+            height={36}
           />
         </Link>
 
@@ -439,8 +441,8 @@ function RightIconBar() {
           <Image
             src="/cleverbrain-chat-icons/skyler-icon.png"
             alt="Skyler"
-            width={44}
-            height={44}
+            width={36}
+            height={36}
             className="rounded-full"
           />
         </Link>
@@ -450,8 +452,8 @@ function RightIconBar() {
           <Image
             src="/cleverbrain-chat-icons/conectors-icon.png"
             alt="Connectors"
-            width={40}
-            height={40}
+            width={34}
+            height={34}
           />
         </Link>
 
@@ -460,8 +462,8 @@ function RightIconBar() {
           <Image
             src="/cleverbrain-chat-icons/hire-ai-employee-icon.png"
             alt="AI Employees"
-            width={40}
-            height={40}
+            width={34}
+            height={34}
           />
         </Link>
 
@@ -470,8 +472,8 @@ function RightIconBar() {
           <Image
             src="/cleverbrain-chat-icons/organization-icon.png"
             alt="Organization"
-            width={44}
-            height={44}
+            width={36}
+            height={36}
           />
         </Link>
       </div>
@@ -784,11 +786,11 @@ export function CleverBrainClient({
         <div
           className="flex flex-col items-center px-4 pt-6 pb-5"
           style={{
-            background: "linear-gradient(180deg, #0167DB 0%, #013A7A 100%)",
+            background: "linear-gradient(180deg, #000000CC 0%, #0167DB 100%)",
           }}
         >
           {/* Cleverfolks logo */}
-          <div className="self-start mb-6">
+          <div className="flex justify-center w-full mb-6">
             <Image
               src="/cleverbrain-chat-icons/cleverfolks-logo.png"
               alt="Cleverfolks"
@@ -889,32 +891,17 @@ export function CleverBrainClient({
         <div className="h-[60px] flex items-center justify-between px-10 flex-shrink-0 border-b border-[#2A2D35]/40">
           {/* Left: sidebar toggle + search */}
           <div className="flex items-center gap-3 flex-1">
-            {sidebarCollapsed && (
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                className="text-[#8B8F97] hover:text-white transition-colors mr-1"
-                aria-label="Show sidebar"
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <rect x="2" y="4" width="16" height="2" rx="1" fill="currentColor"/>
-                  <rect x="2" y="9" width="16" height="2" rx="1" fill="currentColor"/>
-                  <rect x="2" y="14" width="16" height="2" rx="1" fill="currentColor"/>
-                </svg>
-              </button>
-            )}
-            {!sidebarCollapsed && (
-              <button
-                onClick={() => setSidebarCollapsed(true)}
-                className="text-[#8B8F97] hover:text-white transition-colors mr-1"
-                aria-label="Hide sidebar"
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <rect x="2" y="4" width="16" height="2" rx="1" fill="currentColor"/>
-                  <rect x="2" y="9" width="16" height="2" rx="1" fill="currentColor"/>
-                  <rect x="2" y="14" width="16" height="2" rx="1" fill="currentColor"/>
-                </svg>
-              </button>
-            )}
+            <button
+              onClick={() => setSidebarCollapsed((v) => !v)}
+              className="text-[#8B8F97] hover:text-white transition-colors mr-1"
+              aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="w-5 h-5" />
+              ) : (
+                <PanelLeftClose className="w-5 h-5" />
+              )}
+            </button>
             <div className="relative max-w-[320px] w-full">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#555A63]" />
               <input
