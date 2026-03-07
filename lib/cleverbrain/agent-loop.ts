@@ -427,6 +427,8 @@ export async function runAgentLoop(
         b.type === "tool_use"
     );
 
+    console.log(`[agent-loop] iteration ${iterations}: stop_reason=${response.stop_reason}, tool_use_blocks=${toolUseBlocks.length}, content_types=[${response.content.map(b => b.type).join(",")}]`);
+
     if (toolUseBlocks.length === 0) {
       // No tool calls — this is the final text response.
       // Extract and stream the text.

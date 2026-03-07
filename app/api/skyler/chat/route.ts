@@ -332,6 +332,10 @@ export async function POST(request: NextRequest) {
             user.id
           );
 
+        // Log the exact tool names being passed to the agent loop
+        console.log(`[skyler-chat] Tools passed to agent loop: [${SKYLER_TOOLS.map(t => t.name).join(", ")}]`);
+        console.log(`[skyler-chat] Autonomy level: ${autonomyLevel}`);
+
         const agentResult = await runAgentLoop(
           {
             message,
