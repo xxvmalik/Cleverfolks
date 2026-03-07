@@ -1043,32 +1043,32 @@ export function normalizeHubspotKbArticle(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
-  // Nango returns flat fields -- no sample data yet, read from top-level
-  const subject = raw.subject ?? raw.name ?? "Untitled Service Ticket";
+  // Nango returns: id, subject, content, priority, ownerId, pipelineName, pipelineStage, category, createdAt, updatedAt, objectId, archived
+  const subject = raw.subject ?? "Untitled Service Ticket";
 
   const parts: string[] = [`[HubSpot Service Ticket] Subject: ${subject}`];
-  if (raw.pipeline_stage) parts.push(`Status: ${raw.pipeline_stage}`);
+  if (raw.pipelineStage) parts.push(`Stage: ${raw.pipelineStage}`);
   if (raw.priority) parts.push(`Priority: ${raw.priority}`);
   if (raw.category) parts.push(`Category: ${raw.category}`);
-  if (raw.pipeline) parts.push(`Pipeline: ${raw.pipeline}`);
-  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
-  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
-  if (raw.closed_date) parts.push(`Closed: ${raw.closed_date}`);
+  if (raw.pipelineName) parts.push(`Pipeline: ${raw.pipelineName}`);
+  if (raw.ownerId) parts.push(`Owner: ${raw.ownerId}`);
+  if (raw.createdAt) parts.push(`Created: ${raw.createdAt}`);
 
   const header = parts.join(" | ");
-  const body = raw.content ?? raw.description ?? "";
+  const body = raw.content ?? "";
 
   return {
-    external_id: raw.id ?? "",
+    external_id: raw.id ?? raw.objectId ?? "",
     source_type: "hubspot_service_ticket",
     title: subject,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_service_ticket",
       subject,
-      status: raw.pipeline_stage ?? undefined,
+      stage: raw.pipelineStage ?? undefined,
       priority: raw.priority ?? undefined,
-      external_id: raw.id ?? undefined,
+      owner_id: raw.ownerId ?? undefined,
+      external_id: raw.id ?? raw.objectId ?? undefined,
     },
   };
 }
