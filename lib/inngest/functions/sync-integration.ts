@@ -248,7 +248,7 @@ export const syncIntegrationFunction = inngest.createFunction(
       connectionId: string;
     };
 
-    console.log(`[inngest] sync-integration started — provider=${provider} integrationId=${integrationId}`);
+    console.log(`[inngest] sync-integration started — provider=${provider} integrationId=${integrationId} connectionId=${connectionId}`);
 
     try {
       // ── Step 1a (Slack only): pre-fetch users + channels for ID resolution ──
@@ -299,6 +299,10 @@ export const syncIntegrationFunction = inngest.createFunction(
 
             try {
             for (;;) {
+              if (pageNum === 0) {
+                console.log(`[inngest] About to call listRecords — provider=${provider} connectionId=${connectionId} model=${model}`);
+              }
+
               const page: {
                 records: Record<string, unknown>[];
                 next_cursor: string | null;
@@ -309,11 +313,15 @@ export const syncIntegrationFunction = inngest.createFunction(
                 cursor,
               });
 
+              if (pageNum === 0) {
+                console.log(`[inngest] listRecords returned ${page.records.length} records for model=${model}`);
+              }
+
               // Log first record of each model so we can inspect the shape
               if (pageNum === 0 && page.records.length > 0) {
                 console.log(
                   `[inngest] model=${model} first record:`,
-                  JSON.stringify(page.records[0], null, 2)
+                  JSON.stringify(page.records[0], null, 2).slice(0, 500)
                 );
               }
 
@@ -416,15 +424,16 @@ export const syncIntegrationFunction = inngest.createFunction(
               const axiosErr = modelErr as { response?: { status?: number; data?: unknown }; config?: { url?: string; headers?: Record<string, string> } };
               if (axiosErr.response) {
                 console.error(
-                  `[inngest] model=${model} fetch FAILED — status=${axiosErr.response.status}`,
+                  `[inngest] listRecords FAILED for model=${model} connectionId=${connectionId}`,
+                  `status=${axiosErr.response.status}`,
                   `response_body=${JSON.stringify(axiosErr.response.data)}`,
                   `request_url=${axiosErr.config?.url ?? "unknown"}`,
                   `connection_id_header=${axiosErr.config?.headers?.["Connection-Id"] ?? "missing"}`,
                   `provider_config_key_header=${axiosErr.config?.headers?.["Provider-Config-Key"] ?? "missing"}`
                 );
               } else {
-                console.warn(
-                  `[inngest] model=${model} fetch failed (non-HTTP error):`,
+                console.error(
+                  `[inngest] listRecords FAILED for model=${model} connectionId=${connectionId} error:`,
                   modelErr instanceof Error ? modelErr.message : String(modelErr)
                 );
               }
