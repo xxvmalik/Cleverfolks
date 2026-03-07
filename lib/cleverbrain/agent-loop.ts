@@ -21,6 +21,8 @@ export type AgentLoopParams = {
   workspaceId: string;
   adminSupabase: AdminDb;
   integrationManifest: IntegrationInfo[];
+  /** Override the default CLEVERBRAIN_TOOLS. Pass a custom tool set for other agents (e.g. Skyler). */
+  tools?: Anthropic.Tool[];
 };
 
 export type AgentLoopResult = {
@@ -356,9 +358,11 @@ export async function runAgentLoop(
     systemPrompt,
     workspaceId,
     adminSupabase,
+    tools: customTools,
   } = params;
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const activeTools = customTools ?? CLEVERBRAIN_TOOLS;
 
   // Accumulate all results across tool calls for source extraction
   const allResults: UnifiedResult[] = [];
@@ -383,7 +387,7 @@ export async function runAgentLoop(
       model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
       system: systemPrompt,
-      tools: CLEVERBRAIN_TOOLS,
+      tools: activeTools,
       messages,
     });
 

@@ -16,7 +16,7 @@ import {
   Users,
   Target,
   Settings,
-  X,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -54,6 +54,18 @@ type DashboardData = {
 type IntegrationLogo = {
   provider: string;
   logoUrl: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+type ConversationItem = {
+  id: string;
+  title: string;
+  updated_at: string;
 };
 
 // ── Stats Card ───────────────────────────────────────────────────────────────
@@ -148,27 +160,18 @@ function SkylerRightIconBar() {
   return (
     <div className="w-[76px] bg-[#1B1B1B] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
       <div className="flex flex-col items-center gap-6 rounded-2xl border border-[#2A2D35]/60 px-3 py-5" style={{ background: "#1F1F1FCC" }}>
-        {/* CleverBrain chat */}
         <Link href="/cleverbrain" title="CleverBrain" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png" alt="CleverBrain" width={36} height={36} />
         </Link>
-
-        {/* Skyler — active */}
         <Link href="/skyler" title="Skyler" className="opacity-100 ring-2 ring-[#F2903D]/40 rounded-lg transition-opacity">
           <Image src="/cleverbrain-chat-icons/skyler-icon.png" alt="Skyler" width={36} height={36} className="rounded-full" />
         </Link>
-
-        {/* Connectors */}
         <Link href="/cleverbrain" title="Connectors" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/conectors-icon.png" alt="Connectors" width={34} height={34} />
         </Link>
-
-        {/* AI Employee */}
         <Link href="/cleverbrain" title="AI Employees" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
         </Link>
-
-        {/* Organization */}
         <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">
           <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Organization" width={36} height={36} />
         </Link>
@@ -177,7 +180,7 @@ function SkylerRightIconBar() {
   );
 }
 
-// ── Workflow Nav Item ─────────────────────────────────────────────────────────
+// ── Workflow Nav Items ─────────────────────────────────────────────────────────
 
 const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "lead-qualification", label: "Lead Qualification", icon: Zap },
@@ -187,10 +190,10 @@ const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
 ];
 
 const QUICK_ACTIONS = [
-  "Draft a follow up message",
-  "Recommendation",
-  "Skyler's AI Analysis",
-  "Draft a follow up message",
+  "How's our pipeline looking?",
+  "Which deals are closing soon?",
+  "Who should I follow up with?",
+  "Prep me for my next call",
 ];
 
 // ── Main Component ───────────────────────────────────────────────────────────
@@ -215,11 +218,20 @@ export function SkylerClient({
   const [inputValue, setInputValue] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Dashboard data from API
+  // Dashboard data
   const [dashData, setDashData] = useState<DashboardData | null>(null);
   const [integrationLogos, setIntegrationLogos] = useState<IntegrationLogo[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [conversations, setConversations] = useState<ConversationItem[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [activityLabel, setActivityLabel] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
 
   // Fetch dashboard data
   const fetchDashboard = useCallback(async () => {
@@ -228,13 +240,11 @@ export function SkylerClient({
         fetch(`/api/skyler/dashboard?workspaceId=${workspaceId}`),
         fetch(`/api/integration-logos?workspaceId=${workspaceId}`),
       ]);
-
       if (dashRes.ok) {
         const data = await dashRes.json();
         setDashData(data);
         setSalesCloserEnabled(data.salesCloserEnabled);
       }
-
       if (logosRes.ok) {
         const data = await logosRes.json();
         setIntegrationLogos(data.logos ?? []);
@@ -244,15 +254,33 @@ export function SkylerClient({
     }
   }, [workspaceId]);
 
+  // Fetch conversation history
+  const fetchConversations = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/skyler/conversations?workspaceId=${workspaceId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data.conversations ?? []);
+      }
+    } catch {
+      // Silently ignore — conversations API may not exist yet
+    }
+  }, [workspaceId]);
+
   useEffect(() => {
     fetchDashboard();
-  }, [fetchDashboard]);
+    fetchConversations();
+  }, [fetchDashboard, fetchConversations]);
 
-  // Toggle sales closer and persist to DB
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, streamingContent]);
+
+  // Toggle sales closer
   async function handleSalesCloserToggle() {
     const newValue = !salesCloserEnabled;
     setSalesCloserEnabled(newValue);
-
     await fetch("/api/skyler/dashboard", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -260,22 +288,155 @@ export function SkylerClient({
     });
   }
 
+  // Send message to Skyler
+  async function handleSendMessage(messageText?: string) {
+    const trimmed = (messageText ?? inputValue).trim();
+    if (!trimmed || isStreaming) return;
+
+    setInputValue("");
+    if (textareaRef.current) {
+      textareaRef.current.style.height = "auto";
+    }
+
+    // Add user message to chat
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: trimmed,
+    };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setIsStreaming(true);
+    setActivityLabel("Thinking...");
+    setStreamingContent("");
+
+    try {
+      const res = await fetch("/api/skyler/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          workspaceId,
+          conversationId: activeConversationId ?? undefined,
+        }),
+      });
+
+      if (!res.ok || !res.body) {
+        throw new Error("Failed to connect to Skyler");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulatedText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+
+            if (event.type === "activity") {
+              setActivityLabel(event.action);
+            } else if (event.type === "text") {
+              accumulatedText += event.text;
+              setStreamingContent(accumulatedText);
+              setActivityLabel(null);
+            } else if (event.type === "metadata") {
+              if (event.conversationId && !activeConversationId) {
+                setActiveConversationId(event.conversationId);
+              }
+            } else if (event.type === "done") {
+              // Finalize the assistant message
+              const assistantMsg: ChatMessage = {
+                id: `assistant-${Date.now()}`,
+                role: "assistant",
+                content: accumulatedText,
+              };
+              setChatMessages((prev) => [...prev, assistantMsg]);
+              setStreamingContent("");
+              setActivityLabel(null);
+              // Refresh conversation list
+              fetchConversations();
+            } else if (event.type === "error") {
+              const errorMsg: ChatMessage = {
+                id: `error-${Date.now()}`,
+                role: "assistant",
+                content: `Sorry, something went wrong: ${event.error}`,
+              };
+              setChatMessages((prev) => [...prev, errorMsg]);
+              setStreamingContent("");
+              setActivityLabel(null);
+            }
+          } catch {
+            // Skip malformed SSE lines
+          }
+        }
+      }
+    } catch (err) {
+      const errorMsg: ChatMessage = {
+        id: `error-${Date.now()}`,
+        role: "assistant",
+        content: `Connection error: ${err instanceof Error ? err.message : "Unknown error"}`,
+      };
+      setChatMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setIsStreaming(false);
+      setActivityLabel(null);
+      setStreamingContent("");
+    }
+  }
+
+  // New chat
+  function handleNewChat() {
+    setActiveConversationId(null);
+    setChatMessages([]);
+    setStreamingContent("");
+    setActivityLabel(null);
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }
+
+  // Load conversation
+  async function loadConversation(convId: string) {
+    setActiveConversationId(convId);
+    setChatMessages([]);
+    setStreamingContent("");
+    try {
+      const res = await fetch(`/api/skyler/conversations/${convId}/messages`);
+      if (res.ok) {
+        const data = await res.json();
+        setChatMessages(
+          (data.messages ?? []).map((m: { id: string; role: string; content: string }) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant",
+            content: m.content,
+          }))
+        );
+      }
+    } catch {
+      // Silently ignore
+    }
+  }
+
   const leads = dashData?.leads ?? [];
   const stats = dashData?.stats ?? { qualificationRate: 0, hotLeads: 0, nurtureQueue: 0, disqualified: 0 };
 
-  // Filter leads based on selected tab
   const filteredLeads = leads.filter((lead) => {
     if (leadFilter === "all") return true;
     if (leadFilter === "hot") return lead.priority === "High";
     if (leadFilter === "nurture") return lead.priority === "Medium" || lead.priority === "Low";
-    if (leadFilter === "disqualified") return false; // Disqualified deals are Closed Lost, not in open leads
+    if (leadFilter === "disqualified") return false;
     return true;
   });
 
-  const activeLead = leads.find((l) => l.id === activeLeadId) ?? null;
-
   function handlePrompt(company: string) {
-    setInputValue(`Tell me about ${company}`);
+    setInputValue(`Tell me about the ${company} deal`);
     setTimeout(() => textareaRef.current?.focus(), 50);
   }
 
@@ -289,6 +450,15 @@ export function SkylerClient({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }
 
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleSendMessage();
+    }
+  }
+
+  const hasChatContent = chatMessages.length > 0 || streamingContent;
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-[#1B1B1B]">
       {/* ── Left Sidebar ──────────────────────────────────────────────── */}
@@ -298,7 +468,6 @@ export function SkylerClient({
           sidebarCollapsed ? "w-0" : "w-[240px]"
         )}
       >
-        {/* Collapse button */}
         <div className="flex items-center justify-end px-3 pt-3 pb-1">
           <button
             onClick={() => setSidebarCollapsed(true)}
@@ -309,7 +478,6 @@ export function SkylerClient({
           </button>
         </div>
 
-        {/* Skyler avatar */}
         <div className="flex flex-col items-center px-4 pt-2 pb-4">
           <div className="w-[140px] h-[140px] rounded-full overflow-hidden mb-3">
             <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={140} height={140} />
@@ -317,14 +485,15 @@ export function SkylerClient({
           <h2 className="text-white font-bold text-lg">Skyler</h2>
           <p className="text-[#8B8F97] text-sm mt-0.5">Sales Representative</p>
 
-          {/* New chat button */}
-          <button className="mt-4 w-full h-[38px] rounded-full flex items-center justify-center gap-2 text-white text-sm font-medium bg-[#2A2A2A] border border-[#3A3A3A] hover:bg-[#353535] transition-colors">
+          <button
+            onClick={handleNewChat}
+            className="mt-4 w-full h-[38px] rounded-full flex items-center justify-center gap-2 text-white text-sm font-medium bg-[#2A2A2A] border border-[#3A3A3A] hover:bg-[#353535] transition-colors"
+          >
             <span className="text-lg leading-none">+</span>
             Start new chat
           </button>
         </div>
 
-        {/* Workflow nav */}
         <nav className="px-2 space-y-0.5">
           {WORKFLOW_TABS.map((tab) => {
             const Icon = tab.icon;
@@ -362,9 +531,28 @@ export function SkylerClient({
           </button>
           {!historyCollapsed && (
             <div className="flex-1 overflow-y-auto px-2 pb-2">
-              <p className="px-3 py-4 text-xs text-[#555A63] text-center">
-                No conversations yet
-              </p>
+              {conversations.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-[#555A63] text-center">
+                  No conversations yet
+                </p>
+              ) : (
+                <div className="space-y-0.5">
+                  {conversations.map((conv) => (
+                    <button
+                      key={conv.id}
+                      onClick={() => loadConversation(conv.id)}
+                      className={cn(
+                        "w-full text-left px-3 py-2 rounded-lg text-xs transition-colors truncate",
+                        conv.id === activeConversationId
+                          ? "text-white bg-white/10"
+                          : "text-[#8B8F97] hover:text-white hover:bg-white/5"
+                      )}
+                    >
+                      {conv.title}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -374,7 +562,6 @@ export function SkylerClient({
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Top bar */}
         <div className="h-[60px] flex items-center justify-between px-6 flex-shrink-0 border-b border-[#2A2D35]/40 bg-[#1B1B1B]">
-          {/* Left: collapse toggle + badges */}
           <div className="flex items-center gap-4">
             {sidebarCollapsed && (
               <button
@@ -385,7 +572,6 @@ export function SkylerClient({
                 <PanelLeftOpen className="w-5 h-5" />
               </button>
             )}
-            {/* Cleverfolks logo */}
             <Image
               src="/cleverbrain-chat-icons/cleverfolks-logo.png"
               alt="Cleverfolks"
@@ -395,14 +581,10 @@ export function SkylerClient({
             />
           </div>
 
-          {/* Right: bell, user */}
           <div className="flex items-center gap-4">
-            {/* Bell */}
             <div className="relative">
               <Bell className="w-5 h-5 text-[#8B8F97]" />
             </div>
-
-            {/* User avatar */}
             <Image
               src="/cleverbrain-chat-icons/organization-dp.png"
               alt="User"
@@ -410,8 +592,6 @@ export function SkylerClient({
               height={32}
               className="rounded-full"
             />
-
-            {/* User name + dropdown */}
             <div className="relative">
               <button
                 onClick={() => setUserMenuOpen((v) => !v)}
@@ -461,7 +641,6 @@ export function SkylerClient({
                   Automatically qualifies incoming leads using sales-specific criteria and routes them appropriately
                 </p>
               </div>
-              {/* Connected integrations icons — real logos */}
               <div className="flex items-center gap-2 flex-shrink-0 ml-4">
                 {integrationLogos.length > 0 ? (
                   integrationLogos.map((logo) => (
@@ -499,7 +678,6 @@ export function SkylerClient({
           <div className="flex-1 flex px-6 pb-6 gap-5 min-h-0" style={{ height: "calc(100vh - 340px)" }}>
             {/* Left: Hot Leads */}
             <div className="w-[45%] flex flex-col min-h-0">
-              {/* Header */}
               <div className="flex items-center gap-3 mb-3">
                 <h3 className="text-white font-bold text-base">Hot Leads</h3>
                 <div className="relative flex-1 max-w-[160px]">
@@ -516,7 +694,6 @@ export function SkylerClient({
                 </button>
               </div>
 
-              {/* Tab filters */}
               <div className="flex gap-5 mb-3 border-b border-[#2A2D35]/40">
                 {([
                   ["all", "All Leads"],
@@ -539,7 +716,6 @@ export function SkylerClient({
                 ))}
               </div>
 
-              {/* Lead cards */}
               <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
                 {loading ? (
                   <p className="text-[#555A63] text-sm text-center py-8">Loading deals...</p>
@@ -568,49 +744,100 @@ export function SkylerClient({
               {/* Chat header */}
               <div className="flex items-center justify-between px-5 py-3 border-b border-[#2A2520]">
                 <h3 className="text-white font-bold text-base">Chat with Skyler</h3>
-                <div className="flex items-center gap-2">
-                  <button className="text-[#8B8F97] text-sm underline underline-offset-2 hover:text-white transition-colors">
-                    Go to chat
-                  </button>
-                </div>
               </div>
 
-              {/* Chat content — empty state */}
-              <div className="flex-1 overflow-hidden">
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center">
-                    <Image
-                      src="/skyler-icons/skyler-avatar.png"
-                      alt="Skyler"
-                      width={64}
-                      height={64}
-                      className="rounded-full mx-auto mb-4 opacity-40"
-                    />
-                    <p className="text-[#555A63] text-sm">
-                      Connect with Skyler to start managing your sales pipeline.
-                    </p>
+              {/* Chat content */}
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {!hasChatContent ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <Image
+                        src="/skyler-icons/skyler-avatar.png"
+                        alt="Skyler"
+                        width={64}
+                        height={64}
+                        className="rounded-full mx-auto mb-4 opacity-40"
+                      />
+                      <p className="text-[#555A63] text-sm">
+                        Connect with Skyler to start managing your sales pipeline.
+                      </p>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-4">
+                    {chatMessages.map((msg) => (
+                      <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "justify-end" : "")}>
+                        {msg.role === "assistant" && (
+                          <Image
+                            src="/skyler-icons/skyler-avatar.png"
+                            alt="Skyler"
+                            width={28}
+                            height={28}
+                            className="rounded-full flex-shrink-0 mt-0.5"
+                          />
+                        )}
+                        <div
+                          className={cn(
+                            "rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]",
+                            msg.role === "user"
+                              ? "bg-[#F2903D]/20 text-white"
+                              : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
+                          )}
+                        >
+                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* Streaming response */}
+                    {(streamingContent || activityLabel) && (
+                      <div className="flex gap-3">
+                        <Image
+                          src="/skyler-icons/skyler-avatar.png"
+                          alt="Skyler"
+                          width={28}
+                          height={28}
+                          className="rounded-full flex-shrink-0 mt-0.5"
+                        />
+                        <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
+                          {streamingContent ? (
+                            <div className="whitespace-pre-wrap">{streamingContent}</div>
+                          ) : (
+                            <div className="flex items-center gap-2 text-[#8B8F97]">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span className="text-xs">{activityLabel}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div ref={chatEndRef} />
+                  </div>
+                )}
               </div>
 
               {/* Quick actions */}
-              <div className="px-4 pb-2">
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {QUICK_ACTIONS.map((action, i) => (
-                    <button
-                      key={i}
-                      className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs hover:text-white hover:border-[#3A3D45] transition-colors"
-                    >
-                      {action}
-                    </button>
-                  ))}
+              {!hasChatContent && (
+                <div className="px-4 pb-2">
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {QUICK_ACTIONS.map((action, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleSendMessage(action)}
+                        className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs hover:text-white hover:border-[#3A3D45] transition-colors"
+                      >
+                        {action}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Input bar */}
               <div className="px-4 pb-4">
                 <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#F2903D]/50 transition-all">
-                  <button className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                  <button type="button" className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
                     <Image
                       src="/cleverbrain-chat-icons/add-media-icon.png"
                       alt="Attach"
@@ -619,7 +846,7 @@ export function SkylerClient({
                       className="opacity-60 hover:opacity-100"
                     />
                   </button>
-                  <button className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                  <button type="button" className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
                     <Mic className="w-5 h-5" />
                   </button>
                   <textarea
@@ -629,18 +856,25 @@ export function SkylerClient({
                       setInputValue(e.target.value);
                       resizeTextarea(e.target);
                     }}
-                    placeholder="Type a message here"
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask Skyler about your pipeline..."
                     rows={1}
-                    className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed"
+                    disabled={isStreaming}
+                    className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
                     style={{ maxHeight: "160px", overflowY: "auto" }}
                   />
-                  <button className="flex-shrink-0 pb-0.5" aria-label="Send message">
+                  <button
+                    type="button"
+                    onClick={() => { void handleSendMessage(); }}
+                    className="flex-shrink-0 pb-0.5 cursor-pointer"
+                    aria-label="Send message"
+                  >
                     <Image
                       src="/cleverbrain-chat-icons/send-prompt-icon.png"
                       alt="Send"
                       width={24}
                       height={24}
-                      className={cn("transition-opacity", inputValue.trim() ? "opacity-100" : "opacity-40")}
+                      className={cn("transition-opacity pointer-events-none", inputValue.trim() && !isStreaming ? "opacity-100" : "opacity-40")}
                     />
                   </button>
                 </div>

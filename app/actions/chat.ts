@@ -14,6 +14,7 @@ export async function getConversationsAction(workspaceId: string) {
   const { data, error } = await supabase.rpc("get_workspace_conversations", {
     p_workspace_id: workspaceId,
     p_user_id: user.id,
+    p_agent_type: "cleverbrain",
   });
 
   return {
