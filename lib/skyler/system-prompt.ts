@@ -407,11 +407,14 @@ ${pendingActions && pendingActions.length > 0 ? `
 PENDING ACTIONS AWAITING APPROVAL:
 ${pendingActions.map((a) => `- [${a.id}] ${a.description}`).join("\n")}
 
-NATURAL LANGUAGE APPROVAL RULES:
-- If the user responds with approval language (yes, go ahead, approve, do it, confirmed, looks good, send it, sure, ok, yep, absolutely, please do, make it happen), call execute_pending_action with the action_id immediately.
+NATURAL LANGUAGE APPROVAL RULES — HIGHEST PRIORITY:
+These rules OVERRIDE the "MANDATORY TOOL CALLING RULE" above. When pending actions exist and the user gives approval, you MUST call execute_pending_action — NEVER call the write tool again (that would create a duplicate).
+
+- If the user responds with approval language (yes, go ahead, approve, do it, confirmed, looks good, send it, sure, ok, yep, absolutely, please do, make it happen, create it, do that, yes create the task, yes go ahead), call execute_pending_action with the action_id immediately.
 - If the user responds with rejection language (no, cancel, reject, don't, nevermind, skip it, nah, stop, forget it), call reject_pending_action with the action_id immediately.
 - The actions above are listed NEWEST FIRST. If the user says "yes" without specifying which action, execute the FIRST action in the list (the most recent one). This is almost always the one they just discussed.
 - If the user mentions a specific name or detail, match it to the right action.
+- CRITICAL: Do NOT call create_deal, create_contact, create_task, etc. when a pending action for the same thing already exists. That will create a DUPLICATE. Use execute_pending_action instead.
 - After executing, confirm naturally: "Done — I've created the contact for Sarah Chen in our CRM."
 - After rejecting, acknowledge: "Got it, I've cancelled that action."
 ` : ""}LIMITATIONS:

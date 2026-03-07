@@ -202,9 +202,14 @@ export async function POST(request: NextRequest) {
   }
 
   // Determine autonomy level from workspace settings
+  // skyler_autonomy_level controls CRM write approval (separate from skyler_sales_closer)
   const wsSettings = (workspaceRow as WorkspaceRow | null)?.settings ?? {};
-  const salesCloserEnabled = wsSettings.skyler_sales_closer === true;
-  const autonomyLevel = salesCloserEnabled ? "full" as const : "approval_required" as const;
+  const rawAutonomy = wsSettings.skyler_autonomy_level as string | undefined;
+  const autonomyLevel = rawAutonomy === "full" ? "full" as const
+    : rawAutonomy === "read_only" ? "read_only" as const
+    : "approval_required" as const; // default when null/undefined
+  console.log(`[skyler-chat] Autonomy level resolved to: ${autonomyLevel} (raw setting: ${rawAutonomy ?? "null"})`);
+
 
   // Fetch pending actions for this conversation (for natural language approval)
   let pendingActions: Array<{ id: string; description: string }> = [];
@@ -221,8 +226,12 @@ export async function POST(request: NextRequest) {
       description: r.description,
     }));
     if (pendingActions.length > 0) {
-      console.log(`[skyler-chat] ${pendingActions.length} pending actions for conversation`);
+      console.log(`[skyler-chat] ${pendingActions.length} pending actions for conversation:`, pendingActions.map(a => `${a.id}: ${a.description}`).join("; "));
+    } else {
+      console.log(`[skyler-chat] No pending actions for conversation ${inputConversationId}`);
     }
+  } else {
+    console.log(`[skyler-chat] No conversationId provided — cannot fetch pending actions`);
   }
 
   const systemPrompt = buildSkylerSystemPrompt(
