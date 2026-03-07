@@ -304,8 +304,52 @@ export async function executeSkylerToolCall(
     };
   }
 
-  // ── APPROVAL REQUIRED: save pending action ────────────────────────────
+  // ── APPROVAL REQUIRED: save pending action (with dedup) ─────────────
   if (autonomyLevel === "approval_required") {
+    // Dedup: check for existing pending action with same tool_name and matching key inputs
+    const { data: existingActions } = await adminSupabase
+      .from("skyler_actions")
+      .select("id, description, tool_input")
+      .eq("workspace_id", workspaceId)
+      .eq("tool_name", toolName)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    const existingDup = (existingActions ?? []).find((existing: { id: string; tool_input: Record<string, unknown> }) => {
+      const ei = existing.tool_input ?? {};
+      // Match on key identifying fields based on tool type
+      switch (toolName) {
+        case "create_contact":
+          return ei.first_name === input.first_name && ei.last_name === input.last_name
+            && (ei.email === input.email || (!ei.email && !input.email));
+        case "update_contact":
+          return ei.contact_id === input.contact_id;
+        case "create_company":
+          return ei.name === input.name;
+        case "update_company":
+          return ei.company_id === input.company_id;
+        case "create_deal":
+          return ei.deal_name === input.deal_name;
+        case "update_deal":
+          return ei.deal_id === input.deal_id;
+        case "create_task":
+          return ei.subject === input.subject;
+        case "create_note":
+          return ei.body === input.body;
+        default:
+          return JSON.stringify(ei) === JSON.stringify(input);
+      }
+    });
+
+    if (existingDup) {
+      console.log(`[skyler-tools] Dedup: reusing existing pending action ${existingDup.id}`);
+      return {
+        results: [],
+        summary: `[ACTION_PENDING:${existingDup.id}] ${description}\n\nThis action is already drafted and awaiting your approval.`,
+      };
+    }
+
     const { data: actionId, error } = await adminSupabase
       .from("skyler_actions")
       .insert({

@@ -87,6 +87,8 @@ export async function GET(req: NextRequest) {
 
   const db = createAdminSupabaseClient();
 
+  const statusFilter = req.nextUrl.searchParams.get("status");
+
   let query = db
     .from("skyler_actions")
     .select("id, tool_name, tool_input, description, status, created_at")
@@ -95,6 +97,9 @@ export async function GET(req: NextRequest) {
 
   if (conversationId) {
     query = query.eq("conversation_id", conversationId);
+  }
+  if (statusFilter) {
+    query = query.eq("status", statusFilter);
   }
 
   const { data, error } = await query.limit(50);

@@ -241,10 +241,8 @@ export function SkylerClient({
   const [isStreaming, setIsStreaming] = useState(false);
   const [activityLabel, setActivityLabel] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
-  // Map of messageId -> pending actions that arrived during that message's stream
+  // Map of messageId -> pending actions to show below that message
   const [messageActions, setMessageActions] = useState<Record<string, PendingAction[]>>({});
-  // Accumulator for actions arriving during the current stream
-  const pendingActionsRef = useRef<PendingAction[]>([]);
 
   // Fetch dashboard data
   const fetchDashboard = useCallback(async () => {
@@ -321,7 +319,8 @@ export function SkylerClient({
     setIsStreaming(true);
     setActivityLabel("Thinking...");
     setStreamingContent("");
-    pendingActionsRef.current = [];
+    // Track the conversation ID for this request (may be set mid-stream)
+    let currentConversationId = activeConversationId;
 
     try {
       const res = await fetch("/api/skyler/chat", {
@@ -362,14 +361,12 @@ export function SkylerClient({
               accumulatedText += event.text;
               setStreamingContent(accumulatedText);
               setActivityLabel(null);
-            } else if (event.type === "action_pending") {
-              pendingActionsRef.current.push({
-                id: event.actionId,
-                description: event.description,
-              });
             } else if (event.type === "metadata") {
-              if (event.conversationId && !activeConversationId) {
-                setActiveConversationId(event.conversationId);
+              if (event.conversationId) {
+                currentConversationId = event.conversationId;
+                if (!activeConversationId) {
+                  setActiveConversationId(event.conversationId);
+                }
               }
             } else if (event.type === "done") {
               // Finalize the assistant message
@@ -380,16 +377,32 @@ export function SkylerClient({
                 content: accumulatedText,
               };
               setChatMessages((prev) => [...prev, assistantMsg]);
-              // Associate any pending actions with this message
-              if (pendingActionsRef.current.length > 0) {
-                setMessageActions((prev) => ({
-                  ...prev,
-                  [msgId]: [...pendingActionsRef.current],
-                }));
-                pendingActionsRef.current = [];
-              }
               setStreamingContent("");
               setActivityLabel(null);
+
+              // Fetch pending actions from API (bulletproof — DB is source of truth)
+              if (currentConversationId) {
+                try {
+                  const actionsRes = await fetch(
+                    `/api/skyler/actions?workspaceId=${workspaceId}&conversationId=${currentConversationId}&status=pending`
+                  );
+                  if (actionsRes.ok) {
+                    const actionsData = await actionsRes.json();
+                    const pending: PendingAction[] = (actionsData.actions ?? [])
+                      .filter((a: { status: string }) => a.status === "pending")
+                      .map((a: { id: string; description: string }) => ({
+                        id: a.id,
+                        description: a.description,
+                      }));
+                    if (pending.length > 0) {
+                      setMessageActions((prev) => ({ ...prev, [msgId]: pending }));
+                    }
+                  }
+                } catch {
+                  console.error("[skyler-client] Failed to fetch pending actions");
+                }
+              }
+
               // Refresh conversation list
               fetchConversations();
             } else if (event.type === "error") {

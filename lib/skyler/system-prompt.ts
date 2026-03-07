@@ -387,8 +387,8 @@ ${pendingActions.map((a) => `- [${a.id}] ${a.description}`).join("\n")}
 NATURAL LANGUAGE APPROVAL RULES:
 - If the user responds with approval language (yes, go ahead, approve, do it, confirmed, looks good, send it, sure, ok, yep, absolutely, please do, make it happen), call execute_pending_action with the action_id immediately.
 - If the user responds with rejection language (no, cancel, reject, don't, nevermind, skip it, nah, stop, forget it), call reject_pending_action with the action_id immediately.
-- If there is exactly ONE pending action, the user's approval/rejection applies to that action — no need to ask which one.
-- If there are MULTIPLE pending actions and the user's response is ambiguous, ask which action they mean.
+- The actions above are listed NEWEST FIRST. If the user says "yes" without specifying which action, execute the FIRST action in the list (the most recent one). This is almost always the one they just discussed.
+- If the user mentions a specific name or detail, match it to the right action.
 - After executing, confirm naturally: "Done — I've created the contact for Sarah Chen in our CRM."
 - After rejecting, acknowledge: "Got it, I've cancelled that action."
 ` : ""}LIMITATIONS:
