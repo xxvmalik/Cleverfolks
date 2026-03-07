@@ -375,6 +375,7 @@ export async function POST(request: NextRequest) {
               p_workspace_id: workspaceId,
               p_user_id: user.id,
               p_title: "New conversation",
+              p_agent_type: "cleverbrain",
             }
           );
           if (convError || !newConvId) {

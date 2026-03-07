@@ -29,31 +29,36 @@ const NANGO_ACTION_MAP: Record<string, string> = {
 };
 
 // ── Input → Nango payload mapping ────────────────────────────────────────────
+// IMPORTANT: Nango HubSpot uses its OWN model field names, NOT raw HubSpot API property names.
+// Deal:    name, amount, deal_stage (stage ID), close_date, deal_description, owner, pipeline
+// Contact: first_name, last_name, email, mobile_phone_number, job_title, lifecycle_stage, lead_status
+// Company: name, industry, description, country, city, website_url, domain, phone
 
 function buildNangoPayload(
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  context?: { stageId?: string; ownerId?: string }
 ): Record<string, unknown> {
   switch (toolName) {
     case "create_contact":
       return {
-        firstname: input.first_name,
-        lastname: input.last_name,
+        first_name: input.first_name,
+        last_name: input.last_name,
         email: input.email,
-        phone: input.phone,
+        mobile_phone_number: input.phone,
         company: input.company,
-        jobtitle: input.job_title,
-        hs_lead_status: "NEW",
+        job_title: input.job_title,
+        lead_status: "NEW",
       };
     case "update_contact":
       return {
         id: input.contact_id,
-        firstname: input.first_name,
-        lastname: input.last_name,
+        first_name: input.first_name,
+        last_name: input.last_name,
         email: input.email,
-        phone: input.phone,
+        mobile_phone_number: input.phone,
         company: input.company,
-        jobtitle: input.job_title,
+        job_title: input.job_title,
       };
     case "create_company":
       return {
@@ -74,26 +79,46 @@ function buildNangoPayload(
         description: input.description,
         phone: input.phone,
       };
-    case "create_deal":
+    case "create_deal": {
+      // Format close_date as midnight UTC (HubSpot expects this format)
+      let closeDate: string | undefined;
+      if (input.close_date) {
+        try {
+          const d = new Date(input.close_date as string);
+          closeDate = d.toISOString().split("T")[0]; // YYYY-MM-DD
+        } catch {
+          closeDate = input.close_date as string;
+        }
+      }
       return {
-        dealname: input.deal_name,
+        name: input.deal_name,
         amount: input.amount ? String(input.amount) : undefined,
-        dealstage: input.stage,
-        closedate: input.close_date,
-        pipeline: input.pipeline ?? "default",
-        description: input.notes,
-        // Associations handled separately by Nango action
-        ...(input.contact_id ? { associations: [{ to: { id: input.contact_id }, types: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: 3 }] }] } : {}),
+        deal_stage: context?.stageId ?? input.stage, // Resolved stage ID, falls back to raw input
+        close_date: closeDate,
+        deal_description: input.notes,
+        owner: context?.ownerId, // Auto-assigned HubSpot owner ID
       };
-    case "update_deal":
+    }
+    case "update_deal": {
+      let closeDate: string | undefined;
+      if (input.close_date) {
+        try {
+          const d = new Date(input.close_date as string);
+          closeDate = d.toISOString().split("T")[0];
+        } catch {
+          closeDate = input.close_date as string;
+        }
+      }
       return {
         id: input.deal_id,
-        dealname: input.deal_name,
+        name: input.deal_name,
         amount: input.amount ? String(input.amount) : undefined,
-        dealstage: input.stage,
-        closedate: input.close_date,
-        description: input.notes,
+        deal_stage: context?.stageId ?? input.stage,
+        close_date: closeDate,
+        deal_description: input.notes,
+        owner: context?.ownerId,
       };
+    }
     case "create_task":
       return {
         hs_task_subject: input.subject,
@@ -169,6 +194,73 @@ function describeAction(
   }
 }
 
+// ── Resolve stage label → stage ID via fetch-pipelines ───────────────────────
+
+async function resolveStageId(
+  nango: InstanceType<typeof Nango>,
+  connectionId: string,
+  stageLabel: string
+): Promise<string | undefined> {
+  if (!stageLabel) return undefined;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result: any = await nango.triggerAction("hubspot", connectionId, "fetch-pipelines", {});
+    const pipelines = result?.pipelines ?? [];
+    const lowerLabel = stageLabel.toLowerCase().trim();
+
+    for (const pipeline of pipelines) {
+      for (const stage of pipeline.stages ?? []) {
+        if (stage.label && stage.label.toLowerCase().trim() === lowerLabel) {
+          console.log(`[skyler-tools] Resolved stage "${stageLabel}" → ID "${stage.id}" (pipeline: ${pipeline.label})`);
+          return stage.id;
+        }
+      }
+    }
+    // If no exact match, try partial/fuzzy match
+    for (const pipeline of pipelines) {
+      for (const stage of pipeline.stages ?? []) {
+        if (stage.label && stage.label.toLowerCase().includes(lowerLabel)) {
+          console.log(`[skyler-tools] Fuzzy-resolved stage "${stageLabel}" → ID "${stage.id}" (${stage.label})`);
+          return stage.id;
+        }
+      }
+    }
+    console.warn(`[skyler-tools] Could not resolve stage label "${stageLabel}" — passing raw value`);
+    return undefined;
+  } catch (err) {
+    console.warn(`[skyler-tools] fetch-pipelines failed:`, err instanceof Error ? err.message : String(err));
+    return undefined;
+  }
+}
+
+// ── Get default HubSpot owner ID from synced data ────────────────────────────
+
+async function getDefaultOwnerId(
+  nango: InstanceType<typeof Nango>,
+  connectionId: string
+): Promise<string | undefined> {
+  try {
+    const page = await nango.listRecords({
+      providerConfigKey: "hubspot",
+      connectionId,
+      model: "HubspotOwner",
+    });
+    // Return the first owner (typically the account admin / primary user)
+    const firstOwner = page.records[0];
+    if (firstOwner) {
+      const id = (firstOwner as Record<string, unknown>).id as string;
+      const first = ((firstOwner as Record<string, unknown>).firstName as string) ?? "";
+      const last = ((firstOwner as Record<string, unknown>).lastName as string) ?? "";
+      console.log(`[skyler-tools] Default owner: ${first} ${last} (${id})`);
+      return id;
+    }
+    return undefined;
+  } catch (err) {
+    console.warn(`[skyler-tools] Failed to fetch HubSpot owners:`, err instanceof Error ? err.message : String(err));
+    return undefined;
+  }
+}
+
 // ── Execute a write tool via Nango ───────────────────────────────────────────
 
 async function executeViaNango(
@@ -183,12 +275,24 @@ async function executeViaNango(
 
   try {
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-    const payload = buildNangoPayload(toolName, input);
+
+    // Build context for deal tools: resolve stage label → ID and get default owner
+    let context: { stageId?: string; ownerId?: string } | undefined;
+    if (toolName === "create_deal" || toolName === "update_deal") {
+      const [stageId, ownerId] = await Promise.all([
+        input.stage ? resolveStageId(nango, connectionId, input.stage as string) : Promise.resolve(undefined),
+        getDefaultOwnerId(nango, connectionId),
+      ]);
+      context = { stageId, ownerId };
+      console.log(`[skyler-tools] Deal context: stageId=${stageId ?? "none"}, ownerId=${ownerId ?? "none"}`);
+    }
+
+    const payload = buildNangoPayload(toolName, input, context);
 
     // Strip undefined values
     const cleanPayload = JSON.parse(JSON.stringify(payload));
 
-    console.log(`[skyler-tools] Executing ${nangoAction} via Nango:`, JSON.stringify(cleanPayload).slice(0, 300));
+    console.log(`[skyler-tools] Executing ${nangoAction} via Nango — full payload:`, JSON.stringify(cleanPayload));
 
     const result = await nango.triggerAction(
       "hubspot",
@@ -197,7 +301,7 @@ async function executeViaNango(
       cleanPayload
     );
 
-    console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 200));
+    console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
     return { success: true, result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
