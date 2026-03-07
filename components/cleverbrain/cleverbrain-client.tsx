@@ -422,63 +422,59 @@ function ProfileReviewCard({
 
 function RightIconBar() {
   return (
-    <div className="w-[60px] bg-[#151515] border-l border-[#2A2D35] flex flex-col items-center py-4 gap-5 flex-shrink-0">
-      {/* CleverBrain chat */}
-      <Link href="/cleverbrain" title="CleverBrain">
-        <Image
-          src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png"
-          alt="CleverBrain"
-          width={32}
-          height={32}
-          className="opacity-70 hover:opacity-100 transition-opacity"
-        />
-      </Link>
+    <div className="w-[76px] bg-[#1E1E1E] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
+      <div className="flex flex-col items-center gap-8">
+        {/* CleverBrain chat */}
+        <Link href="/cleverbrain" title="CleverBrain" className="opacity-70 hover:opacity-100 transition-opacity">
+          <Image
+            src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png"
+            alt="CleverBrain"
+            width={44}
+            height={44}
+          />
+        </Link>
 
-      {/* Skyler */}
-      <Link href="/skyler" title="Skyler">
-        <Image
-          src="/cleverbrain-chat-icons/skyler-icon.png"
-          alt="Skyler"
-          width={32}
-          height={32}
-          className="rounded-full opacity-70 hover:opacity-100 transition-opacity"
-        />
-      </Link>
+        {/* Skyler */}
+        <Link href="/skyler" title="Skyler" className="opacity-70 hover:opacity-100 transition-opacity">
+          <Image
+            src="/cleverbrain-chat-icons/skyler-icon.png"
+            alt="Skyler"
+            width={44}
+            height={44}
+            className="rounded-full"
+          />
+        </Link>
 
-      {/* Connectors */}
-      <Link href="/integrations" title="Connectors">
-        <Image
-          src="/cleverbrain-chat-icons/conectors-icon.png"
-          alt="Connectors"
-          width={28}
-          height={28}
-          className="opacity-70 hover:opacity-100 transition-opacity"
-        />
-      </Link>
+        {/* Connectors */}
+        <Link href="/integrations" title="Connectors" className="opacity-70 hover:opacity-100 transition-opacity">
+          <Image
+            src="/cleverbrain-chat-icons/conectors-icon.png"
+            alt="Connectors"
+            width={40}
+            height={40}
+          />
+        </Link>
 
-      {/* AI Employee */}
-      <Link href="/marketplace" title="AI Employees">
-        <Image
-          src="/cleverbrain-chat-icons/hire-ai-employee-icon.png"
-          alt="AI Employees"
-          width={28}
-          height={28}
-          className="opacity-70 hover:opacity-100 transition-opacity"
-        />
-      </Link>
+        {/* AI Employee */}
+        <Link href="/marketplace" title="AI Employees" className="opacity-70 hover:opacity-100 transition-opacity">
+          <Image
+            src="/cleverbrain-chat-icons/hire-ai-employee-icon.png"
+            alt="AI Employees"
+            width={40}
+            height={40}
+          />
+        </Link>
 
-      {/* Spacer to push org icon to bottom */}
-      <div className="flex-1" />
-
-      {/* Organization */}
-      <Link href="/settings" title="Organization">
-        <Image
-          src="/cleverbrain-chat-icons/organization-icon.png"
-          alt="Organization"
-          width={36}
-          height={36}
-        />
-      </Link>
+        {/* Organization */}
+        <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">
+          <Image
+            src="/cleverbrain-chat-icons/organization-icon.png"
+            alt="Organization"
+            width={44}
+            height={44}
+          />
+        </Link>
+      </div>
     </div>
   );
 }
@@ -781,7 +777,7 @@ export function CleverBrainClient({
       <aside
         className={cn(
           "flex flex-col flex-shrink-0 transition-all duration-300 overflow-hidden",
-          sidebarCollapsed ? "w-0" : "w-[240px]"
+          sidebarCollapsed ? "w-0" : "w-[272px]"
         )}
       >
         {/* Top blue gradient section */}
@@ -890,7 +886,7 @@ export function CleverBrainClient({
       {/* ── Center Chat Area ──────────────────────────────────────────────── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Top bar */}
-        <div className="h-[56px] flex items-center justify-between px-5 flex-shrink-0 border-b border-[#2A2D35]/50">
+        <div className="h-[60px] flex items-center justify-between px-10 flex-shrink-0 border-b border-[#2A2D35]/40">
           {/* Left: sidebar toggle + search */}
           <div className="flex items-center gap-3 flex-1">
             {sidebarCollapsed && (
@@ -978,15 +974,15 @@ export function CleverBrainClient({
         </div>
 
         {/* Chat heading */}
-        <div className="px-5 pt-4 pb-2 flex-shrink-0">
-          <h1 className="text-white font-bold text-xl">Chat with CleverBrain</h1>
+        <div className="px-10 pt-5 pb-3 flex-shrink-0">
+          <h1 className="text-white font-bold text-2xl">Chat with CleverBrain</h1>
         </div>
 
         {/* ── Messages / Empty State ────────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto relative">
           {!hasMessages ? (
-            <div className="flex flex-col items-center justify-center h-full px-6 py-12">
-              <div className="flex flex-col items-center gap-4 max-w-lg w-full">
+            <div className="flex flex-col items-center justify-center h-full px-10 py-12">
+              <div className="flex flex-col items-center gap-5 max-w-xl w-full">
                 <p className="text-[#8B8F97] text-sm text-center leading-relaxed">
                   Hi! I&apos;m CleverBrain. I have access to your Slack, Gmail, and Calendar data.
                   <br />
@@ -1017,7 +1013,7 @@ export function CleverBrainClient({
               </div>
             </div>
           ) : (
-            <div className="px-5 py-6 max-w-3xl mx-auto w-full space-y-6">
+            <div className="px-10 py-8 max-w-4xl mx-auto w-full space-y-8">
               {messages.map((msg) => (
                 <MessageBubble key={msg.id} msg={msg} />
               ))}
@@ -1041,7 +1037,7 @@ export function CleverBrainClient({
                       </div>
                     )}
                     {streamingState.content && (
-                      <div className="text-[#E0E0E0] text-sm leading-relaxed">
+                      <div className="text-[#E0E0E0] text-[15px] leading-[1.75]">
                         <div
                           dangerouslySetInnerHTML={{
                             __html: renderMarkdown(streamingState.content),
@@ -1068,8 +1064,8 @@ export function CleverBrainClient({
         </div>
 
         {/* ── Input Area ─────────────────────────────────────────────────── */}
-        <div className="px-5 pb-4 pt-2 flex-shrink-0">
-          <div className="max-w-3xl mx-auto">
+        <div className="px-10 pb-5 pt-3 flex-shrink-0">
+          <div className="max-w-4xl mx-auto">
             <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#3A89FF]/50 transition-all">
               {/* Add media icon */}
               <button className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
@@ -1146,7 +1142,7 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[75%] bg-[#2B2B2B] text-white text-sm rounded-2xl rounded-br-md px-4 py-3 leading-relaxed whitespace-pre-wrap">
+        <div className="max-w-[70%] bg-[#2B2B2B] text-white text-sm rounded-2xl rounded-br-md px-5 py-3.5 leading-relaxed whitespace-pre-wrap">
           {msg.content}
         </div>
       </div>
@@ -1173,7 +1169,7 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
           </div>
         )}
 
-        <div className="text-[#E0E0E0] text-sm leading-relaxed">
+        <div className="text-[#E0E0E0] text-[15px] leading-[1.75]">
           <div
             dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
           />
