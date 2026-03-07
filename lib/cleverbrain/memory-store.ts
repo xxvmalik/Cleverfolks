@@ -148,8 +148,43 @@ export async function saveMemory(
 }
 
 /**
+ * Fetch all terminology and correction memories for a workspace.
+ * These are foundational knowledge that applies to every conversation,
+ * so they bypass similarity search entirely.
+ */
+async function fetchFoundationalMemories(
+  adminSupabase: AdminDb,
+  workspaceId: string,
+  userId?: string
+): Promise<StoredMemory[]> {
+  const { data, error } = await adminSupabase
+    .from("workspace_memories")
+    .select(
+      "id, scope, type, content, confidence, times_reinforced, last_used_at, created_at"
+    )
+    .eq("workspace_id", workspaceId)
+    .is("superseded_by", null)
+    .in("type", ["terminology", "correction"])
+    .or(
+      `scope.eq.workspace,scope.eq.agent${userId ? `,and(scope.eq.user,user_id.eq.${userId})` : ""}`
+    )
+    .order("times_reinforced", { ascending: false })
+    .limit(50);
+
+  if (error) {
+    console.error("[memory-store] Foundational fetch error:", error);
+    return [];
+  }
+
+  return (data ?? []) as StoredMemory[];
+}
+
+/**
  * Retrieve relevant memories for a given query.
  * Called before each conversation to inject context into the system prompt.
+ *
+ * Terminology and correction memories are ALWAYS included (foundational knowledge).
+ * Pattern, preference, and learning memories are ranked by similarity to the query.
  */
 export async function retrieveMemories(
   adminSupabase: AdminDb,
@@ -159,25 +194,38 @@ export async function retrieveMemories(
   limit: number = 15
 ): Promise<StoredMemory[]> {
   try {
-    const embedding = await createEmbedding(query);
-    if (!embedding.length) return [];
+    // Run both fetches in parallel
+    const [foundational, embedding] = await Promise.all([
+      fetchFoundationalMemories(adminSupabase, workspaceId, userId),
+      createEmbedding(query),
+    ]);
 
-    const { data, error } = await adminSupabase.rpc(
-      "search_workspace_memories",
-      {
-        p_workspace_id: workspaceId,
-        p_query_embedding: `[${embedding.join(",")}]`,
-        p_user_id: userId ?? null,
-        p_limit: limit,
+    // Similarity search for non-foundational types
+    let similarityMemories: StoredMemory[] = [];
+    if (embedding.length > 0) {
+      const { data, error } = await adminSupabase.rpc(
+        "search_workspace_memories",
+        {
+          p_workspace_id: workspaceId,
+          p_query_embedding: `[${embedding.join(",")}]`,
+          p_user_id: userId ?? null,
+          p_limit: limit,
+        }
+      );
+
+      if (error) {
+        console.error("[memory-store] Similarity search error:", error);
+      } else {
+        similarityMemories = (data ?? []) as StoredMemory[];
       }
-    );
-
-    if (error) {
-      console.error("[memory-store] Retrieve error:", error);
-      return [];
     }
 
-    const memories = (data ?? []) as StoredMemory[];
+    // Merge: foundational first, then similarity results (deduplicated)
+    const foundationalIds = new Set(foundational.map((m) => m.id));
+    const dedupedSimilarity = similarityMemories.filter(
+      (m) => !foundationalIds.has(m.id)
+    );
+    const memories = [...foundational, ...dedupedSimilarity];
 
     // Update last_used_at for retrieved memories (fire and forget)
     const memoryIds = memories.map((m) => m.id);
@@ -188,6 +236,12 @@ export async function retrieveMemories(
           .update({ last_used_at: new Date().toISOString() })
           .in("id", memoryIds)
       ).catch(() => {});
+    }
+
+    if (foundational.length > 0) {
+      console.log(
+        `[memory-store] ${foundational.length} foundational + ${dedupedSimilarity.length} similarity memories retrieved`
+      );
     }
 
     return memories;
