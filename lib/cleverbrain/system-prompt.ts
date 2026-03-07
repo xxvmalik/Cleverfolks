@@ -367,7 +367,7 @@ The user has explicitly corrected the following. These override ANY terminology 
 
 ${mandatoryRules.join("\n")}
 
-Apply these rules to EVERY response. Rewrite source data terminology before presenting it to the user. Do NOT echo incorrect terms from source data.\n\n`
+Always use the correct term from your VERY FIRST mention. You may reference what the source data says in quotes for transparency (e.g. 'listed as "Order #4521" in HubSpot'), but your own words must always use the corrected term from the start (e.g. "Service 4521 has an open ticket...").\n\n`
         : "";
 
     // ── Regular memory sections ─────────────────────────────────────
