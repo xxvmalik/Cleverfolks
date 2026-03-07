@@ -83,9 +83,6 @@ export async function processSyncedData(
       }
 
       // ── Step B: Upsert document ──────────────────────────────────────────
-      console.log(
-        `${label} upserting — source_type=${record.source_type} title="${record.title?.slice(0, 60)}" content=${content.length}chars`
-      );
       const { data: documentId, error: docError } = await supabase.rpc(
         "upsert_synced_document",
         {
@@ -125,8 +122,6 @@ export async function processSyncedData(
         console.error(`${label} upsert_synced_document returned null — check RPC function exists`);
         throw new Error("upsert_synced_document returned null — is the SQL migration applied?");
       }
-      console.log(`${label} upserted → document_id=${documentId}`);
-
       // ── Step C: Delete old chunks ─────────────────────────────────────────
       const { error: deleteErr } = await supabase.rpc("delete_chunks_for_document", {
         p_document_id: documentId,
@@ -142,8 +137,6 @@ export async function processSyncedData(
         external_id: record.external_id,
         ...(record.metadata ?? {}),
       });
-
-      console.log(`${label} ${chunks.length} chunk(s)`);
 
       if (chunks.length === 0) {
         skipped++;
@@ -785,7 +778,7 @@ export function normalizeHubspotCompany(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>): SyncRecord {
+export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>, ownerMap?: Record<string, string>): SyncRecord {
   // Nango returns flat fields: name, amount, deal_stage, close_date, deal_description, owner, deal_probability, returned_associations
   const dealname = raw.name ?? "Untitled Deal";
 
@@ -799,13 +792,17 @@ export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>
   const isClosed = /^closed/i.test(stageName);
   const status = isClosed ? "Closed" : "Open";
 
+  // Resolve owner ID to name
+  const ownerId = raw.owner ?? "";
+  const ownerName = ownerMap?.[ownerId] ?? ownerId;
+
   const parts: string[] = [`[HubSpot Deal] Name: ${dealname}`];
   if (stageName) parts.push(`Stage: ${stageName}`);
   parts.push(`Status: ${status}`);
   if (probPct) parts.push(`Probability: ${probPct}`);
   if (raw.amount) parts.push(`Amount: ${raw.amount}`);
   if (raw.close_date) parts.push(`Close Date: ${raw.close_date}`);
-  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (ownerName) parts.push(`Owner: ${ownerName}`);
 
   // Include associated contacts/companies in chunk_text so Claude can see them
   const assoc = raw.returned_associations;
@@ -841,16 +838,19 @@ export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotTicket(raw: any): SyncRecord {
+export function normalizeHubspotTicket(raw: any, ownerMap?: Record<string, string>): SyncRecord {
   // Nango Ticket model uses flat fields -- no sample data yet, so read from top-level with sensible fallbacks
   const subject = raw.subject ?? raw.name ?? "Untitled Ticket";
+
+  const ownerId = raw.owner ?? "";
+  const ownerName = ownerMap?.[ownerId] ?? ownerId;
 
   const parts: string[] = [`[HubSpot Ticket] Subject: ${subject}`];
   if (raw.pipeline_stage) parts.push(`Status: ${raw.pipeline_stage}`);
   if (raw.priority) parts.push(`Priority: ${raw.priority}`);
   if (raw.category) parts.push(`Category: ${raw.category}`);
   if (raw.pipeline) parts.push(`Pipeline: ${raw.pipeline}`);
-  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (ownerName) parts.push(`Owner: ${ownerName}`);
   if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
 
   const header = parts.join(" | ");
@@ -872,14 +872,17 @@ export function normalizeHubspotTicket(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotTask(raw: any): SyncRecord {
+export function normalizeHubspotTask(raw: any, ownerMap?: Record<string, string>): SyncRecord {
   // Nango returns flat fields: title, task_type, priority, assigned_to, due_date, notes, returned_associations
   const subject = raw.title ?? "Untitled Task";
+
+  const assignedId = raw.assigned_to ?? "";
+  const assignedName = ownerMap?.[assignedId] ?? assignedId;
 
   const parts: string[] = [`[HubSpot Task] Subject: ${subject}`];
   if (raw.task_type) parts.push(`Type: ${raw.task_type}`);
   if (raw.priority) parts.push(`Priority: ${raw.priority}`);
-  if (raw.assigned_to) parts.push(`Assigned To: ${raw.assigned_to}`);
+  if (assignedName) parts.push(`Assigned To: ${assignedName}`);
   if (raw.due_date) parts.push(`Due Date: ${raw.due_date}`);
 
   // Include associated contacts/deals in chunk_text
@@ -913,11 +916,14 @@ export function normalizeHubspotTask(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotNote(raw: any): SyncRecord {
+export function normalizeHubspotNote(raw: any, ownerMap?: Record<string, string>): SyncRecord {
   // Nango returns flat fields -- no sample data yet, read from top-level
+  const ownerId = raw.owner ?? "";
+  const ownerName = ownerMap?.[ownerId] ?? ownerId;
+
   const parts: string[] = ["[HubSpot Note]"];
   if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
-  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (ownerName) parts.push(`Owner: ${ownerName}`);
 
   const header = parts.join(" | ");
   const body = raw.body ?? raw.content ?? "";
@@ -1055,16 +1061,19 @@ export function normalizeHubspotKbArticle(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
+export function normalizeHubspotServiceTicket(raw: any, ownerMap?: Record<string, string>): SyncRecord {
   // Nango returns: id, subject, content, priority, ownerId, pipelineName, pipelineStage, category, createdAt, updatedAt, objectId, archived
   const subject = raw.subject ?? "Untitled Service Ticket";
+
+  const ownerId = raw.ownerId ?? "";
+  const ownerName = ownerMap?.[ownerId] ?? ownerId;
 
   const parts: string[] = [`[HubSpot Service Ticket] Subject: ${subject}`];
   if (raw.pipelineStage) parts.push(`Stage: ${raw.pipelineStage}`);
   if (raw.priority) parts.push(`Priority: ${raw.priority}`);
   if (raw.category) parts.push(`Category: ${raw.category}`);
   if (raw.pipelineName) parts.push(`Pipeline: ${raw.pipelineName}`);
-  if (raw.ownerId) parts.push(`Owner: ${raw.ownerId}`);
+  if (ownerName) parts.push(`Owner: ${ownerName}`);
   if (raw.createdAt) parts.push(`Created: ${raw.createdAt}`);
 
   const header = parts.join(" | ");

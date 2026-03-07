@@ -106,7 +106,8 @@ function normalizeRecord(
   raw: any,
   lookups?: SlackLookups,
   gmailContacts?: Record<string, string>,
-  hubspotStageMap?: Record<string, string>
+  hubspotStageMap?: Record<string, string>,
+  hubspotOwnerMap?: Record<string, string>
 ): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
@@ -135,17 +136,17 @@ function normalizeRecord(
   }
   if (provider === "hubspot") {
     switch (model) {
-      case "Deal":                        return normalizeHubspotDeal(raw, hubspotStageMap);
+      case "Deal":                        return normalizeHubspotDeal(raw, hubspotStageMap, hubspotOwnerMap);
       case "Contact":                     return normalizeHubspotContact(raw);
       case "Company":                     return normalizeHubspotCompany(raw);
-      case "Task":                        return normalizeHubspotTask(raw);
-      case "Ticket":                      return normalizeHubspotTicket(raw);
-      case "Note":                        return normalizeHubspotNote(raw);
+      case "Task":                        return normalizeHubspotTask(raw, hubspotOwnerMap);
+      case "Ticket":                      return normalizeHubspotTicket(raw, hubspotOwnerMap);
+      case "Note":                        return normalizeHubspotNote(raw, hubspotOwnerMap);
       case "HubspotOwner":                return normalizeHubspotOwner(raw);
       case "Product":                     return normalizeHubspotProduct(raw);
       case "User":                        return normalizeHubspotUser(raw);
       case "HubspotKnowledgeBaseArticle": return normalizeHubspotKbArticle(raw);
-      case "HubspotServiceTicket":         return normalizeHubspotServiceTicket(raw);
+      case "HubspotServiceTicket":         return normalizeHubspotServiceTicket(raw, hubspotOwnerMap);
       case "CurrencyCode":               return normalizeHubspotCurrency(raw);
       default:                            return null;
     }
@@ -271,7 +272,7 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1c (HubSpot only): pre-fetch pipeline stages for deal stage ID resolution ──
+      // ── Step 1c (HubSpot only): pre-fetch pipeline stages + owner names ──
       const hubspotStageMap: Record<string, string> | null =
         provider === "hubspot"
           ? await step.run("build-hubspot-stage-map", async () => {
@@ -297,7 +298,40 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1d: Fetch + normalise all records from Nango ───────────────
+      // ── Step 1d (HubSpot only): pre-fetch owner ID → name map ──
+      const hubspotOwnerMap: Record<string, string> | null =
+        provider === "hubspot"
+          ? await step.run("build-hubspot-owner-map", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              const map: Record<string, string> = {};
+              let cursor: string | undefined;
+              try {
+                for (;;) {
+                  const page = await nango.listRecords({
+                    providerConfigKey: "hubspot",
+                    connectionId,
+                    model: "HubspotOwner",
+                    cursor,
+                  });
+                  for (const raw of page.records) {
+                    const ownerId = (raw as Record<string, unknown>).id as string | undefined;
+                    const first = ((raw as Record<string, unknown>).firstName as string) ?? "";
+                    const last = ((raw as Record<string, unknown>).lastName as string) ?? "";
+                    const name = [first, last].filter(Boolean).join(" ");
+                    if (ownerId && name) map[ownerId] = name;
+                  }
+                  if (!page.next_cursor) break;
+                  cursor = page.next_cursor;
+                }
+              } catch (err) {
+                console.warn("[inngest] HubspotOwner fetch failed:", err instanceof Error ? err.message : String(err));
+              }
+              console.log(`[inngest] HubSpot owner map built — ${Object.keys(map).length} owners`);
+              return map;
+            })
+          : null;
+
+      // ── Step 1e: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {
@@ -310,7 +344,6 @@ export const syncIntegrationFunction = inngest.createFunction(
           emailCutoff.setMonth(emailCutoff.getMonth() - 6);
           let gmailDateSkipped = 0;
           let gmailTransactionalSkipped = 0;
-          let gmailSampleLogged = 0;
           let outlookDateSkipped = 0;
           let outlookTransactionalSkipped = 0;
 
@@ -326,10 +359,6 @@ export const syncIntegrationFunction = inngest.createFunction(
 
             try {
             for (;;) {
-              if (pageNum === 0) {
-                console.log(`[inngest] About to call listRecords — provider=${provider} connectionId=${connectionId} model=${model}`);
-              }
-
               const page: {
                 records: Record<string, unknown>[];
                 next_cursor: string | null;
@@ -339,18 +368,6 @@ export const syncIntegrationFunction = inngest.createFunction(
                 model,
                 cursor,
               });
-
-              if (pageNum === 0) {
-                console.log(`[inngest] listRecords returned ${page.records.length} records for model=${model}`);
-              }
-
-              // Log first record of each model so we can inspect the shape
-              if (pageNum === 0 && page.records.length > 0) {
-                console.log(
-                  `[inngest] model=${model} first record:`,
-                  JSON.stringify(page.records[0], null, 2).slice(0, 500)
-                );
-              }
 
               for (const raw of page.records) {
                 // For Slack replies, augment lookups with the parent text map so
@@ -366,25 +383,10 @@ export const syncIntegrationFunction = inngest.createFunction(
                   raw,
                   lookupsForRecord,
                   gmailContactMap ?? undefined,
-                  hubspotStageMap ?? undefined
+                  hubspotStageMap ?? undefined,
+                  hubspotOwnerMap ?? undefined
                 );
                 if (rec) {
-                  // Debug: log first 3 records from any google-mail model so we
-                  // can verify source_type, external_id, title, and content length
-                  // before the date / transactional filters run.
-                  if (provider === "google-mail" && gmailSampleLogged < 3) {
-                    gmailSampleLogged++;
-                    console.log("[inngest] gmail normalised record:", {
-                      sample: gmailSampleLogged,
-                      model,
-                      source_type: rec.source_type,
-                      external_id: rec.external_id,
-                      title: rec.title?.slice(0, 80),
-                      content_length: rec.content?.length ?? 0,
-                      ts: rec.metadata?.ts,
-                    });
-                  }
-
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {
                     const meta = rec.metadata ?? {};
 
@@ -392,11 +394,6 @@ export const syncIntegrationFunction = inngest.createFunction(
                     const tsRaw = meta.ts as string | undefined;
                     const emailDate = tsRaw ? new Date(parseFloat(tsRaw) * 1000) : null;
                     if (!emailDate || emailDate < emailCutoff) {
-                      if (!emailDate) {
-                        console.warn(
-                          `[inngest] gmail: ts=undefined for ${rec.external_id} — check _ts_source in sample log above`
-                        );
-                      }
                       gmailDateSkipped++;
                       continue;
                     }
@@ -448,28 +445,14 @@ export const syncIntegrationFunction = inngest.createFunction(
 
             console.log(`[inngest] model=${model}: fetched ${modelCount} raw → ${normalised.length} total normalised so far`);
             } catch (modelErr: unknown) {
-              // Extract Axios response details for Nango API errors
-              const axiosErr = modelErr as { response?: { status?: number; data?: unknown }; config?: { url?: string; headers?: Record<string, string> } };
-              if (axiosErr.response) {
-                console.error(
-                  `[inngest] listRecords FAILED for model=${model} connectionId=${connectionId}`,
-                  `status=${axiosErr.response.status}`,
-                  `response_body=${JSON.stringify(axiosErr.response.data)}`,
-                  `request_url=${axiosErr.config?.url ?? "unknown"}`,
-                  `connection_id_header=${axiosErr.config?.headers?.["Connection-Id"] ?? "missing"}`,
-                  `provider_config_key_header=${axiosErr.config?.headers?.["Provider-Config-Key"] ?? "missing"}`
-                );
-              } else {
-                console.error(
-                  `[inngest] listRecords FAILED for model=${model} connectionId=${connectionId} error:`,
-                  modelErr instanceof Error ? modelErr.message : String(modelErr)
-                );
-              }
+              console.error(
+                `[inngest] listRecords failed for model=${model}:`,
+                modelErr instanceof Error ? modelErr.message : String(modelErr)
+              );
               // Continue with remaining models
             }
           }
 
-          console.log(`[inngest] parentTextMap has ${Object.keys(parentTextMap).length} entries for reply context`);
           if (gmailDateSkipped > 0) {
             console.log(
               `[inngest] google-mail: skipped ${gmailDateSkipped} emails older than 6 months (cutoff=${emailCutoff.toISOString()})`
