@@ -16,6 +16,9 @@ import {
   Search,
   PanelLeftClose,
   PanelLeftOpen,
+  User,
+  Link2,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -420,61 +423,336 @@ function ProfileReviewCard({
   );
 }
 
+// ── AI Employee Marketplace Panel ─────────────────────────────────────────────
+
+const AI_EMPLOYEES = [
+  { name: "SKYLER", role: "Sales Assistant", avatar: "/cleverbrain-chat-icons/skyler-icon.png", status: "active" as const, href: "/skyler" },
+  { name: "Blake", role: "Business Consultant", avatar: null, status: "soon" as const },
+  { name: "VERA", role: "Virtual Assistant", avatar: null, status: "soon" as const },
+  { name: "Cole", role: "Copywriter & Marketer", avatar: null, status: "soon" as const },
+];
+
+function MarketplacePanel({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="w-[360px] bg-[#1B1B1B] border-l border-[#2A2D35]/60 flex flex-col flex-shrink-0"
+      style={{ animation: "slideInRight 0.3s ease-out" }}
+    >
+      <div className="flex items-start justify-between px-5 pt-5 pb-2">
+        <div>
+          <h2 className="text-white font-bold text-lg">AI Employee marketplace</h2>
+          <p className="text-[#8B8F97] text-sm mt-1">Hire AI team members to handle your work.</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-[#8B8F97] hover:text-white transition-colors mt-1"
+          aria-label="Close marketplace"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+        {AI_EMPLOYEES.map((emp) => {
+          const card = (
+            <div
+              key={emp.name}
+              className={cn(
+                "flex items-center gap-3 p-3.5 rounded-xl bg-[#252525] border transition-colors",
+                emp.status === "active"
+                  ? "border-[#22C55E]/30 hover:border-[#22C55E]/50 cursor-pointer"
+                  : "border-[#2A2D35]/60"
+              )}
+            >
+              {emp.avatar ? (
+                <Image src={emp.avatar} alt={emp.name} width={48} height={48} className="rounded-full flex-shrink-0" />
+              ) : (
+                <div className="w-12 h-12 rounded-full bg-[#3A3A3A] flex-shrink-0" />
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-white font-semibold text-sm">{emp.name}</p>
+                <p className="text-[#8B8F97] text-xs">{emp.role}</p>
+              </div>
+              {emp.status === "active" ? (
+                <span className="px-2.5 py-1 bg-[#22C55E] text-white text-xs font-medium rounded-full flex-shrink-0">Active</span>
+              ) : (
+                <span className="px-2.5 py-1 bg-[#3A3A3A] text-[#6B7280] text-xs font-medium rounded-full flex-shrink-0">Soon</span>
+              )}
+            </div>
+          );
+          if (emp.href) return <Link key={emp.name} href={emp.href}>{card}</Link>;
+          return <div key={emp.name}>{card}</div>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Connectors View ──────────────────────────────────────────────────────────
+
+type IntegrationItem = {
+  id: string;
+  name: string;
+  category: string;
+  color: string;
+  initials: string;
+  connected: boolean;
+};
+
+const INTEGRATIONS: IntegrationItem[] = [
+  { id: "hubspot", name: "HubSpot", category: "CRM System", color: "#FF7A59", initials: "HS", connected: true },
+  { id: "gmail", name: "Gmail", category: "Email Platform", color: "#EA4335", initials: "GM", connected: true },
+  { id: "slack", name: "Slack", category: "Messaging Platform", color: "#4A154B", initials: "SL", connected: true },
+  { id: "outlook", name: "Outlook", category: "Email Platform", color: "#0078D4", initials: "OL", connected: false },
+  { id: "google-calendar", name: "Google Calendar", category: "Scheduling Platform", color: "#4285F4", initials: "GC", connected: false },
+  { id: "google-drive", name: "Google Drive", category: "Cloud Storage", color: "#0F9D58", initials: "GD", connected: false },
+];
+
+function ConnectorsView({
+  sidebarCollapsed,
+  setSidebarCollapsed,
+  userName,
+  companyName,
+  userMenuOpen,
+  setUserMenuOpen,
+  onSignOut,
+}: {
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (v: boolean | ((prev: boolean) => boolean)) => void;
+  userName?: string;
+  companyName?: string;
+  userMenuOpen: boolean;
+  setUserMenuOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
+  onSignOut: () => void;
+}) {
+  const [selectedId, setSelectedId] = useState(INTEGRATIONS[0].id);
+  const selected = INTEGRATIONS.find((i) => i.id === selectedId) ?? INTEGRATIONS[0];
+
+  return (
+    <div className="flex flex-1 min-w-0 overflow-hidden">
+      {/* Left nav sidebar */}
+      <aside
+        className={cn(
+          "flex flex-col flex-shrink-0 transition-all duration-300 overflow-hidden bg-[#001022]",
+          sidebarCollapsed ? "w-0" : "w-[220px]"
+        )}
+      >
+        <div className="flex justify-center px-4 pt-6 pb-4">
+          <Image src="/cleverbrain-chat-icons/cleverfolks-logo.png" alt="Cleverfolks" width={130} height={26} className="brightness-0 invert" />
+        </div>
+        <div className="flex flex-col items-center px-4 pb-5">
+          <div className="w-[100px] h-[100px] rounded-full overflow-hidden mb-3">
+            <Image src="/cleverbrain-chat-icons/cleverbrain-icon.png" alt="CleverBrain" width={100} height={100} />
+          </div>
+          <h2 className="text-white font-bold text-base">Cleverbrain</h2>
+        </div>
+        <nav className="px-3 space-y-1">
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors">
+            <User className="w-4 h-4" />
+            Client Profile
+          </button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white bg-white/10">
+            <Link2 className="w-4 h-4" />
+            Connectors
+          </button>
+          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors">
+            <FileText className="w-4 h-4" />
+            Interaction History
+          </button>
+        </nav>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-[#001022]">
+        {/* Top bar */}
+        <div className="h-[60px] flex items-center justify-between px-8 flex-shrink-0 border-b border-[#2A2D35]/30">
+          <div className="flex items-center gap-3 flex-1">
+            <button
+              onClick={() => setSidebarCollapsed((v: boolean) => !v)}
+              className="text-[#8B8F97] hover:text-white transition-colors mr-1"
+              aria-label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+            >
+              {sidebarCollapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
+            </button>
+            <div className="relative max-w-[320px] w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#555A63]" />
+              <input
+                type="text"
+                placeholder="Search across everything"
+                className="w-full bg-[#0A1929] border border-[#1E3A5F] rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-[#555A63] outline-none focus:border-[#3A89FF]/50 transition-colors"
+              />
+            </div>
+          </div>
+          <div className="relative">
+            <button onClick={() => setUserMenuOpen((v: boolean) => !v)} className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+              <Image src="/cleverbrain-chat-icons/organization-dp.png" alt="User" width={32} height={32} className="rounded-full" />
+              <div className="text-right">
+                <p className="text-white text-sm font-medium leading-tight">{userName || "User"}</p>
+                <p className="text-[#8B8F97] text-xs leading-tight">{companyName || "Company"}</p>
+              </div>
+              <ChevronDown className="w-4 h-4 text-[#8B8F97]" />
+            </button>
+            {userMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
+                  <Link href="/settings" className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors" onClick={() => setUserMenuOpen(false)}>
+                    Settings
+                  </Link>
+                  <button onClick={onSignOut} className="w-full text-left px-4 py-2 text-sm text-[#F87171] hover:bg-white/5 transition-colors">
+                    Sign Out
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Heading */}
+        <div className="px-8 pt-5 pb-4 flex-shrink-0">
+          <h1 className="text-white font-bold text-xl">Integration Hub: {companyName || "Your Company"}</h1>
+        </div>
+
+        {/* Two-column content */}
+        <div className="flex-1 flex overflow-hidden px-8 pb-6 gap-6">
+          {/* Connected Systems */}
+          <div className="w-[380px] flex-shrink-0 flex flex-col">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-white font-semibold text-base">Connected Systems</h2>
+              <button className="text-[#3A89FF] text-sm hover:text-[#5A9FFF] transition-colors">+ Add new</button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+              {INTEGRATIONS.map((intg) => (
+                <button
+                  key={intg.id}
+                  onClick={() => setSelectedId(intg.id)}
+                  className={cn(
+                    "w-full flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
+                    intg.id === selectedId
+                      ? "border-[#3A89FF]/60 bg-[#0A1929]"
+                      : "border-[#1E3A5F]/40 bg-[#0A1929]/50 hover:border-[#1E3A5F]"
+                  )}
+                >
+                  <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ background: intg.color }}>
+                    {intg.initials}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-white text-sm font-medium">{intg.name}</p>
+                    <p className="text-[#8B8F97] text-xs">{intg.category}</p>
+                  </div>
+                  <span className={cn(
+                    "px-3 py-1 text-xs font-medium rounded-lg flex-shrink-0",
+                    intg.connected ? "bg-[#22C55E]/10 text-[#22C55E] border border-[#22C55E]/30" : "bg-[#1E3A5F]/50 text-[#8B8F97] border border-[#1E3A5F]"
+                  )}>
+                    {intg.connected ? "Connected" : "Connect"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Integration Details */}
+          <div className="flex-1 min-w-0">
+            <h2 className="text-white font-semibold text-base mb-4">Integration Details</h2>
+            <div className="bg-[#0A1929]/50 border border-[#1E3A5F]/40 rounded-xl p-5">
+              <div className="flex items-center gap-3 mb-5">
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white text-xs font-bold" style={{ background: selected.color }}>
+                  {selected.initials}
+                </div>
+                <span className="text-white font-semibold">{selected.name}</span>
+                <span className={cn(
+                  "ml-auto px-3 py-1 text-xs font-medium rounded-lg",
+                  selected.connected ? "bg-[#22C55E]/10 text-[#22C55E] border border-[#22C55E]/30" : "bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/30"
+                )}>
+                  {selected.connected ? "Connected" : "Disconnected"}
+                </span>
+              </div>
+              <div className="space-y-3 mb-6">
+                {([
+                  ["API Version", selected.connected ? "v56.0" : "\u2014"],
+                  ["Last Synced", selected.connected ? "Today, 9:15 AM" : "\u2014"],
+                  ["Auth Type", "OAuth2.0"],
+                  ["Data Access", selected.connected ? "ReadWrite" : "\u2014"],
+                ] as const).map(([label, value]) => (
+                  <div key={label} className="flex items-center justify-between text-sm">
+                    <span className="text-[#8B8F97]">{label}</span>
+                    <span className="text-white">{value}</span>
+                  </div>
+                ))}
+              </div>
+              {selected.connected && (
+                <div className="border-t border-[#1E3A5F]/40 pt-4">
+                  <p className="text-[#8B8F97] text-sm mb-3">{companyName || "Your Company"}</p>
+                  <div className="space-y-2">
+                    {["Contacts", "Deals", "Activities"].map((mapping) => (
+                      <div key={mapping} className="flex items-center gap-2 text-sm text-[#8B8F97] bg-[#0A1929] rounded-lg px-3 py-2 border border-[#1E3A5F]/30">
+                        <span className="text-white">{mapping}</span>
+                        <span className="text-[#3A89FF]">&rarr;</span>
+                        <span>CRM {mapping}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Right Icon Bar ────────────────────────────────────────────────────────────
 
-function RightIconBar() {
+type ActiveView = "chat" | "connectors";
+
+function RightIconBar({
+  activeView,
+  marketplaceOpen,
+  onNavigate,
+}: {
+  activeView: ActiveView;
+  marketplaceOpen: boolean;
+  onNavigate: (target: "chat" | "connectors" | "marketplace" | "skyler" | "settings") => void;
+}) {
   return (
     <div className="w-[76px] bg-[#151515] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
       <div className="flex flex-col items-center gap-6 rounded-2xl border border-[#2A2D35]/60 px-3 py-5" style={{ background: "#1F1F1FCC" }}>
         {/* CleverBrain chat */}
-        <Link href="/cleverbrain" title="CleverBrain" className="opacity-70 hover:opacity-100 transition-opacity">
-          <Image
-            src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png"
-            alt="CleverBrain"
-            width={36}
-            height={36}
-          />
-        </Link>
+        <button
+          onClick={() => onNavigate("chat")}
+          title="CleverBrain"
+          className={cn("transition-opacity", activeView === "chat" && !marketplaceOpen ? "opacity-100 ring-2 ring-[#3A89FF]/40 rounded-lg" : "opacity-70 hover:opacity-100")}
+        >
+          <Image src="/cleverbrain-chat-icons/cleverbrain-chat-icon.png" alt="CleverBrain" width={36} height={36} />
+        </button>
 
         {/* Skyler */}
         <Link href="/skyler" title="Skyler" className="opacity-70 hover:opacity-100 transition-opacity">
-          <Image
-            src="/cleverbrain-chat-icons/skyler-icon.png"
-            alt="Skyler"
-            width={36}
-            height={36}
-            className="rounded-full"
-          />
+          <Image src="/cleverbrain-chat-icons/skyler-icon.png" alt="Skyler" width={36} height={36} className="rounded-full" />
         </Link>
 
         {/* Connectors */}
-        <Link href="/integrations" title="Connectors" className="opacity-70 hover:opacity-100 transition-opacity">
-          <Image
-            src="/cleverbrain-chat-icons/conectors-icon.png"
-            alt="Connectors"
-            width={34}
-            height={34}
-          />
-        </Link>
+        <button
+          onClick={() => onNavigate("connectors")}
+          title="Connectors"
+          className={cn("transition-opacity", activeView === "connectors" ? "opacity-100 ring-2 ring-[#3A89FF]/40 rounded-lg" : "opacity-70 hover:opacity-100")}
+        >
+          <Image src="/cleverbrain-chat-icons/conectors-icon.png" alt="Connectors" width={34} height={34} />
+        </button>
 
-        {/* AI Employee */}
-        <Link href="/marketplace" title="AI Employees" className="opacity-70 hover:opacity-100 transition-opacity">
-          <Image
-            src="/cleverbrain-chat-icons/hire-ai-employee-icon.png"
-            alt="AI Employees"
-            width={34}
-            height={34}
-          />
-        </Link>
+        {/* AI Employee Marketplace */}
+        <button
+          onClick={() => onNavigate("marketplace")}
+          title="AI Employees"
+          className={cn("transition-opacity", marketplaceOpen ? "opacity-100 ring-2 ring-[#3A89FF]/40 rounded-lg" : "opacity-70 hover:opacity-100")}
+        >
+          <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
+        </button>
 
         {/* Organization */}
         <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">
-          <Image
-            src="/cleverbrain-chat-icons/organization-icon.png"
-            alt="Organization"
-            width={36}
-            height={36}
-          />
+          <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Organization" width={36} height={36} />
         </Link>
       </div>
     </div>
@@ -493,6 +771,8 @@ export function CleverBrainClient({
   companyName?: string;
 }) {
   const router = useRouter();
+  const [activeView, setActiveView] = useState<ActiveView>("chat");
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
@@ -505,6 +785,18 @@ export function CleverBrainClient({
 
   const [reviewMembers, setReviewMembers] = useState<TeamMemberForReview[] | null>(null);
   const [reviewDismissed, setReviewDismissed] = useState(false);
+
+  const handleNavigate = useCallback((target: "chat" | "connectors" | "marketplace" | "skyler" | "settings") => {
+    if (target === "marketplace") {
+      setMarketplaceOpen((v) => !v);
+    } else if (target === "chat") {
+      setActiveView("chat");
+      setMarketplaceOpen(false);
+    } else if (target === "connectors") {
+      setActiveView("connectors");
+      setMarketplaceOpen(false);
+    }
+  }, []);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -774,7 +1066,19 @@ export function CleverBrainClient({
 
   // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-[#151515]">
+    <div className={cn("flex h-screen w-full overflow-hidden", activeView === "connectors" ? "bg-[#001022]" : "bg-[#151515]")}>
+      {activeView === "connectors" ? (
+        <ConnectorsView
+          sidebarCollapsed={sidebarCollapsed}
+          setSidebarCollapsed={setSidebarCollapsed}
+          userName={userName}
+          companyName={companyName}
+          userMenuOpen={userMenuOpen}
+          setUserMenuOpen={setUserMenuOpen}
+          onSignOut={() => void handleSignOut()}
+        />
+      ) : (
+      <>
       {/* ── Left Sidebar ──────────────────────────────────────────────────── */}
       <aside
         className={cn(
@@ -1116,9 +1420,14 @@ export function CleverBrainClient({
           </div>
         </div>
       </div>
+      </>
+      )}
+
+      {/* ── Marketplace Panel (slide-in overlay) ──────────────────────────── */}
+      {marketplaceOpen && <MarketplacePanel onClose={() => setMarketplaceOpen(false)} />}
 
       {/* ── Right Icon Bar ────────────────────────────────────────────────── */}
-      <RightIconBar />
+      <RightIconBar activeView={activeView} marketplaceOpen={marketplaceOpen} onNavigate={handleNavigate} />
     </div>
   );
 }
