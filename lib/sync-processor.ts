@@ -693,13 +693,13 @@ export function normalizeCalendar(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspot(raw: any): SyncRecord {
-  const props = raw.properties ?? {};
+  // Nango returns flat fields, not nested under properties
+  const dealname = raw.name ?? "(No Name)";
   const content = [
-    props.dealname ? `Deal: ${props.dealname}` : "",
-    props.description ?? "",
-    props.notes_last_updated ? `Notes: ${props.notes_last_updated}` : "",
-    props.dealstage ? `Stage: ${props.dealstage}` : "",
-    props.amount ? `Amount: ${props.amount}` : "",
+    dealname ? `Deal: ${dealname}` : "",
+    raw.deal_description ?? "",
+    raw.deal_stage ? `Stage: ${raw.deal_stage}` : "",
+    raw.amount ? `Amount: ${raw.amount}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -707,296 +707,295 @@ export function normalizeHubspot(raw: any): SyncRecord {
   return {
     external_id: raw.id ?? "",
     source_type: "deal",
-    title: props.dealname ?? "(No Name)",
+    title: dealname,
     content,
     metadata: {
-      deal_stage: props.dealstage,
-      amount: props.amount,
-      close_date: props.closedate,
-      owner_id: props.hubspot_owner_id,
+      deal_stage: raw.deal_stage,
+      amount: raw.amount,
+      close_date: raw.close_date,
+      owner_id: raw.owner,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotContact(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Contact record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Contact record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const firstname = props.firstname ?? "";
-  const lastname = props.lastname ?? "";
+  // Nango returns flat fields: first_name, last_name, email, job_title, lifecycle_stage, lead_status, etc.
+  const firstname = raw.first_name ?? "";
+  const lastname = raw.last_name ?? "";
   const name = [firstname, lastname].filter(Boolean).join(" ") || "Unknown Contact";
 
   const parts: string[] = [`[HubSpot Contact] Name: ${name}`];
-  if (props.email) parts.push(`Email: ${props.email}`);
-  if (props.phone) parts.push(`Phone: ${props.phone}`);
-  if (props.company) parts.push(`Company: ${props.company}`);
-  if (props.jobtitle) parts.push(`Job Title: ${props.jobtitle}`);
-  if (props.lifecyclestage) parts.push(`Lifecycle Stage: ${props.lifecyclestage}`);
-  if (props.hs_lead_status) parts.push(`Lead Status: ${props.hs_lead_status}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (raw.email) parts.push(`Email: ${raw.email}`);
+  if (raw.mobile_phone_number) parts.push(`Phone: ${raw.mobile_phone_number}`);
+  if (raw.job_title) parts.push(`Job Title: ${raw.job_title}`);
+  if (raw.lifecycle_stage) parts.push(`Lifecycle Stage: ${raw.lifecycle_stage}`);
+  if (raw.lead_status) parts.push(`Lead Status: ${raw.lead_status}`);
+  if (raw.website_url) parts.push(`Website: ${raw.website_url}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
 
   const header = parts.join(" | ");
-  const body = props.description ?? props.notes_last_updated ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_contact",
     title: name,
-    content: body ? `${header}\n\n${body}` : header,
+    content: header,
     metadata: {
       source_type: "hubspot_contact",
       name,
-      email: props.email ?? undefined,
-      company: props.company ?? undefined,
-      lifecycle_stage: props.lifecyclestage ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      email: raw.email ?? undefined,
+      lifecycle_stage: raw.lifecycle_stage ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotCompany(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Company record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Company record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const name = props.name ?? "Unknown Company";
+  // Nango returns flat fields: name, industry, description, country, city, website_url, etc.
+  const name = raw.name ?? "Unknown Company";
 
   const parts: string[] = [`[HubSpot Company] Name: ${name}`];
-  if (props.domain) parts.push(`Domain: ${props.domain}`);
-  if (props.industry) parts.push(`Industry: ${props.industry}`);
-  if (props.city) parts.push(`City: ${props.city}`);
-  if (props.country) parts.push(`Country: ${props.country}`);
-  if (props.numberofemployees) parts.push(`Employees: ${props.numberofemployees}`);
-  if (props.annualrevenue) parts.push(`Annual Revenue: ${props.annualrevenue}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (raw.website_url) parts.push(`Website: ${raw.website_url}`);
+  if (raw.industry) parts.push(`Industry: ${raw.industry}`);
+  if (raw.city) parts.push(`City: ${raw.city}`);
+  if (raw.country) parts.push(`Country: ${raw.country}`);
+  if (raw.lifecycle_stage) parts.push(`Lifecycle Stage: ${raw.lifecycle_stage}`);
+  if (raw.lead_status) parts.push(`Lead Status: ${raw.lead_status}`);
+  if (raw.year_founded) parts.push(`Founded: ${raw.year_founded}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
 
   const header = parts.join(" | ");
-  const body = props.description ?? "";
+  const body = raw.description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_company",
     title: name,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_company",
       name,
-      domain: props.domain ?? undefined,
-      industry: props.industry ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      website: raw.website_url ?? undefined,
+      industry: raw.industry ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotDeal(raw: any): SyncRecord {
-  console.log('[hubspot-normalizer] RAW DEAL RECORD:', JSON.stringify(raw, null, 2).slice(0, 1000));
-  const props = raw.properties ?? {};
-  const dealname = props.dealname ?? "Untitled Deal";
+  // Nango returns flat fields: name, amount, deal_stage, close_date, deal_description, owner, deal_probability, returned_associations
+  const dealname = raw.name ?? "Untitled Deal";
 
   const parts: string[] = [`[HubSpot Deal] Name: ${dealname}`];
-  if (props.dealstage) parts.push(`Stage: ${props.dealstage}`);
-  if (props.pipeline) parts.push(`Pipeline: ${props.pipeline}`);
-  if (props.amount) parts.push(`Amount: ${props.amount}`);
-  if (props.closedate) parts.push(`Close Date: ${props.closedate}`);
-  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (raw.deal_stage) parts.push(`Stage: ${raw.deal_stage}`);
+  if (raw.amount) parts.push(`Amount: ${raw.amount}`);
+  if (raw.close_date) parts.push(`Close Date: ${raw.close_date}`);
+  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (raw.deal_probability) parts.push(`Probability: ${raw.deal_probability}`);
+
+  // Include associated contacts/companies in chunk_text so Claude can see them
+  const assoc = raw.returned_associations;
+  if (assoc?.contacts?.length) {
+    const names = assoc.contacts.map((c: any) => [c.first_name, c.last_name].filter(Boolean).join(" ")).join(", ");
+    parts.push(`Contacts: ${names}`);
+  }
+  if (assoc?.companies?.length) {
+    const names = assoc.companies.map((c: any) => c.name ?? c.id).join(", ");
+    parts.push(`Companies: ${names}`);
+  }
 
   const header = parts.join(" | ");
-  const body = props.description ?? props.notes_last_updated ?? "";
+  const body = raw.deal_description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_deal",
     title: dealname,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_deal",
       deal_name: dealname,
-      stage: props.dealstage ?? undefined,
-      amount: props.amount ?? undefined,
-      close_date: props.closedate ?? undefined,
-      owner_id: props.hubspot_owner_id ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      stage: raw.deal_stage ?? undefined,
+      amount: raw.amount ?? undefined,
+      close_date: raw.close_date ?? undefined,
+      owner_id: raw.owner ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotTicket(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Ticket record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Ticket record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const subject = props.subject ?? "Untitled Ticket";
+  // Nango Ticket model uses flat fields -- no sample data yet, so read from top-level with sensible fallbacks
+  const subject = raw.subject ?? raw.name ?? "Untitled Ticket";
 
   const parts: string[] = [`[HubSpot Ticket] Subject: ${subject}`];
-  if (props.hs_pipeline_stage) parts.push(`Status: ${props.hs_pipeline_stage}`);
-  if (props.hs_ticket_priority) parts.push(`Priority: ${props.hs_ticket_priority}`);
-  if (props.hs_ticket_category) parts.push(`Category: ${props.hs_ticket_category}`);
-  if (props.hs_pipeline) parts.push(`Pipeline: ${props.hs_pipeline}`);
-  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (raw.pipeline_stage) parts.push(`Status: ${raw.pipeline_stage}`);
+  if (raw.priority) parts.push(`Priority: ${raw.priority}`);
+  if (raw.category) parts.push(`Category: ${raw.category}`);
+  if (raw.pipeline) parts.push(`Pipeline: ${raw.pipeline}`);
+  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
 
   const header = parts.join(" | ");
-  const body = props.content ?? props.hs_ticket_description ?? "";
+  const body = raw.content ?? raw.description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_ticket",
     title: subject,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_ticket",
       subject,
-      status: props.hs_pipeline_stage ?? undefined,
-      priority: props.hs_ticket_priority ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      status: raw.pipeline_stage ?? undefined,
+      priority: raw.priority ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotTask(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Task record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Task record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const subject = props.hs_task_subject ?? "Untitled Task";
+  // Nango returns flat fields: title, task_type, priority, assigned_to, due_date, notes, returned_associations
+  const subject = raw.title ?? "Untitled Task";
 
   const parts: string[] = [`[HubSpot Task] Subject: ${subject}`];
-  if (props.hs_task_status) parts.push(`Status: ${props.hs_task_status}`);
-  if (props.hs_task_priority) parts.push(`Priority: ${props.hs_task_priority}`);
-  if (props.hs_task_type) parts.push(`Type: ${props.hs_task_type}`);
-  if (props.hs_timestamp) parts.push(`Due Date: ${props.hs_timestamp}`);
-  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+  if (raw.task_type) parts.push(`Type: ${raw.task_type}`);
+  if (raw.priority) parts.push(`Priority: ${raw.priority}`);
+  if (raw.assigned_to) parts.push(`Assigned To: ${raw.assigned_to}`);
+  if (raw.due_date) parts.push(`Due Date: ${raw.due_date}`);
+
+  // Include associated contacts/deals in chunk_text
+  const assoc = raw.returned_associations;
+  if (assoc?.contacts?.length) {
+    const names = assoc.contacts.map((c: any) => [c.first_name, c.last_name].filter(Boolean).join(" ")).join(", ");
+    parts.push(`Contacts: ${names}`);
+  }
+  if (assoc?.deals?.length) {
+    const names = assoc.deals.map((d: any) => d.name ?? d.id).join(", ");
+    parts.push(`Deals: ${names}`);
+  }
 
   const header = parts.join(" | ");
-  const body = props.hs_task_body ?? "";
+  const body = raw.notes ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_task",
     title: subject,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_task",
       subject,
-      status: props.hs_task_status ?? undefined,
-      due_date: props.hs_timestamp ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      task_type: raw.task_type ?? undefined,
+      priority: raw.priority ?? undefined,
+      due_date: raw.due_date ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotNote(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Note record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Note record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-
+  // Nango returns flat fields -- no sample data yet, read from top-level
   const parts: string[] = ["[HubSpot Note]"];
-  if (props.hs_timestamp) parts.push(`Created: ${props.hs_timestamp}`);
-  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
+  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
 
   const header = parts.join(" | ");
-  const body = props.hs_note_body ?? "";
+  const body = raw.body ?? raw.content ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_note",
     title: "HubSpot Note",
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_note",
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotOwner(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Owner record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Owner record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? raw;
-  const firstname = props.firstName ?? props.firstname ?? "";
-  const lastname = props.lastName ?? props.lastname ?? "";
+  // Nango returns flat fields -- no sample data yet, read from top-level
+  const firstname = raw.firstName ?? raw.first_name ?? "";
+  const lastname = raw.lastName ?? raw.last_name ?? "";
   const name = [firstname, lastname].filter(Boolean).join(" ") || "Unknown Owner";
 
   const parts: string[] = [`[HubSpot Owner] Name: ${name}`];
-  if (props.email) parts.push(`Email: ${props.email}`);
-  if (props.userId ?? props.user_id) parts.push(`User ID: ${props.userId ?? props.user_id}`);
-  if (props.teams) parts.push(`Teams: ${Array.isArray(props.teams) ? props.teams.map((t: any) => t.name ?? t).join(", ") : props.teams}`);
-  if (props.createdAt ?? props.createdate) parts.push(`Created: ${props.createdAt ?? props.createdate}`);
+  if (raw.email) parts.push(`Email: ${raw.email}`);
+  if (raw.teams) parts.push(`Teams: ${Array.isArray(raw.teams) ? raw.teams.map((t: any) => t.name ?? t).join(", ") : raw.teams}`);
 
   const header = parts.join(" | ");
 
   return {
-    external_id: raw.id ?? raw.ownerId ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_owner",
     title: name,
     content: header,
     metadata: {
       source_type: "hubspot_owner",
       name,
-      email: props.email ?? undefined,
-      external_id: raw.id ?? raw.ownerId ?? undefined,
+      email: raw.email ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotProduct(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Product record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Product record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const name = props.name ?? "Untitled Product";
+  // Nango returns flat fields -- no sample data yet, read from top-level
+  const name = raw.name ?? "Untitled Product";
 
   const parts: string[] = [`[HubSpot Product] Name: ${name}`];
-  if (props.price) parts.push(`Price: ${props.price}`);
-  if (props.hs_sku) parts.push(`SKU: ${props.hs_sku}`);
-  if (props.hs_cost_of_goods_sold) parts.push(`COGS: ${props.hs_cost_of_goods_sold}`);
-  if (props.hs_recurring_billing_period) parts.push(`Billing Period: ${props.hs_recurring_billing_period}`);
-  if (props.tax) parts.push(`Tax: ${props.tax}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
+  if (raw.price) parts.push(`Price: ${raw.price}`);
+  if (raw.sku) parts.push(`SKU: ${raw.sku}`);
+  if (raw.cost_of_goods_sold) parts.push(`COGS: ${raw.cost_of_goods_sold}`);
+  if (raw.billing_period) parts.push(`Billing Period: ${raw.billing_period}`);
+  if (raw.tax) parts.push(`Tax: ${raw.tax}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
 
   const header = parts.join(" | ");
-  const body = props.description ?? "";
+  const body = raw.description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_product",
     title: name,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_product",
       name,
-      price: props.price ?? undefined,
-      sku: props.hs_sku ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      price: raw.price ?? undefined,
+      sku: raw.sku ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotUser(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] User record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] User record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? raw;
-  const email = props.email ?? "";
-  const firstname = props.firstName ?? props.firstname ?? "";
-  const lastname = props.lastName ?? props.lastname ?? "";
+  // Nango returns flat fields: id, email, firstName, lastName, roleIds, superAdmin
+  const email = raw.email ?? "";
+  const firstname = raw.firstName ?? "";
+  const lastname = raw.lastName ?? "";
   const name = [firstname, lastname].filter(Boolean).join(" ") || email || "Unknown User";
 
   const parts: string[] = [`[HubSpot User] Name: ${name}`];
   if (email) parts.push(`Email: ${email}`);
-  if (props.roleId ?? props.role_id) parts.push(`Role ID: ${props.roleId ?? props.role_id}`);
-  if (props.superAdmin ?? props.super_admin) parts.push(`Super Admin: yes`);
-  if (props.primaryTeamId ?? props.primary_team_id) parts.push(`Team ID: ${props.primaryTeamId ?? props.primary_team_id}`);
+  if (raw.roleIds?.length) parts.push(`Role IDs: ${raw.roleIds.join(", ")}`);
+  if (raw.superAdmin) parts.push(`Super Admin: yes`);
 
   const header = parts.join(" | ");
 
   return {
-    external_id: raw.id ?? props.userId ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_user",
     title: name,
     content: header,
@@ -1004,106 +1003,98 @@ export function normalizeHubspotUser(raw: any): SyncRecord {
       source_type: "hubspot_user",
       name,
       email: email || undefined,
-      external_id: raw.id ?? props.userId ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotKbArticle(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] KbArticle record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] KbArticle record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? raw;
-  const title = props.title ?? props.name ?? "Untitled Article";
+  // Nango returns flat fields -- no sample data yet, read from top-level
+  const title = raw.title ?? raw.name ?? "Untitled Article";
 
   const parts: string[] = [`[HubSpot KB Article] Title: ${title}`];
-  if (props.language) parts.push(`Language: ${props.language}`);
-  if (props.category) parts.push(`Category: ${props.category}`);
-  if (props.subcategory) parts.push(`Subcategory: ${props.subcategory}`);
-  if (props.state ?? props.status) parts.push(`Status: ${props.state ?? props.status}`);
-  if (props.url ?? props.slug) parts.push(`URL: ${props.url ?? props.slug}`);
-  if (props.created ?? props.createdate) parts.push(`Created: ${props.created ?? props.createdate}`);
-  if (props.updated ?? props.updated_at) parts.push(`Updated: ${props.updated ?? props.updated_at}`);
+  if (raw.language) parts.push(`Language: ${raw.language}`);
+  if (raw.category) parts.push(`Category: ${raw.category}`);
+  if (raw.subcategory) parts.push(`Subcategory: ${raw.subcategory}`);
+  if (raw.state ?? raw.status) parts.push(`Status: ${raw.state ?? raw.status}`);
+  if (raw.url ?? raw.slug) parts.push(`URL: ${raw.url ?? raw.slug}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
+  if (raw.updated_date) parts.push(`Updated: ${raw.updated_date}`);
 
   const header = parts.join(" | ");
-  const body = props.body ?? props.htmlBody ?? props.description ?? "";
+  const body = raw.body ?? raw.description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_kb_article",
     title,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_kb_article",
       title,
-      category: props.category ?? undefined,
-      status: props.state ?? props.status ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      category: raw.category ?? undefined,
+      status: raw.state ?? raw.status ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotServiceTicket(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] ServiceTicket record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] ServiceTicket record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? {};
-  const subject = props.subject ?? props.hs_ticket_id ?? "Untitled Service Ticket";
+  // Nango returns flat fields -- no sample data yet, read from top-level
+  const subject = raw.subject ?? raw.name ?? "Untitled Service Ticket";
 
   const parts: string[] = [`[HubSpot Service Ticket] Subject: ${subject}`];
-  if (props.hs_pipeline_stage) parts.push(`Status: ${props.hs_pipeline_stage}`);
-  if (props.hs_ticket_priority) parts.push(`Priority: ${props.hs_ticket_priority}`);
-  if (props.hs_ticket_category) parts.push(`Category: ${props.hs_ticket_category}`);
-  if (props.hs_pipeline) parts.push(`Pipeline: ${props.hs_pipeline}`);
-  if (props.hubspot_owner_id) parts.push(`Owner: ${props.hubspot_owner_id}`);
-  if (props.source_type) parts.push(`Source: ${props.source_type}`);
-  if (props.createdate) parts.push(`Created: ${props.createdate}`);
-  if (props.closed_date) parts.push(`Closed: ${props.closed_date}`);
+  if (raw.pipeline_stage) parts.push(`Status: ${raw.pipeline_stage}`);
+  if (raw.priority) parts.push(`Priority: ${raw.priority}`);
+  if (raw.category) parts.push(`Category: ${raw.category}`);
+  if (raw.pipeline) parts.push(`Pipeline: ${raw.pipeline}`);
+  if (raw.owner) parts.push(`Owner: ${raw.owner}`);
+  if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
+  if (raw.closed_date) parts.push(`Closed: ${raw.closed_date}`);
 
   const header = parts.join(" | ");
-  const body = props.content ?? props.hs_ticket_description ?? "";
+  const body = raw.content ?? raw.description ?? "";
 
   return {
-    external_id: raw.id ?? props.hs_object_id ?? "",
+    external_id: raw.id ?? "",
     source_type: "hubspot_service_ticket",
     title: subject,
     content: body ? `${header}\n\n${body}` : header,
     metadata: {
       source_type: "hubspot_service_ticket",
       subject,
-      status: props.hs_pipeline_stage ?? undefined,
-      priority: props.hs_ticket_priority ?? undefined,
-      external_id: raw.id ?? props.hs_object_id ?? undefined,
+      status: raw.pipeline_stage ?? undefined,
+      priority: raw.priority ?? undefined,
+      external_id: raw.id ?? undefined,
     },
   };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotCurrency(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Currency record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Currency record: ${JSON.stringify(raw).slice(0, 500)}`);
-  const props = raw.properties ?? raw;
-  const code = props.currencyCode ?? props.currency_code ?? props.code ?? "Unknown";
-  const name = props.currencyName ?? props.currency_name ?? props.name ?? code;
+  // Nango returns flat fields -- no sample data yet, read from top-level
+  const code = raw.currencyCode ?? raw.code ?? "Unknown";
+  const name = raw.currencyName ?? raw.name ?? code;
 
   const parts: string[] = [`[HubSpot Currency] Code: ${code}`];
   if (name !== code) parts.push(`Name: ${name}`);
-  if (props.exchangeRate ?? props.exchange_rate) parts.push(`Exchange Rate: ${props.exchangeRate ?? props.exchange_rate}`);
-  if (props.symbol) parts.push(`Symbol: ${props.symbol}`);
-  if (props.visible) parts.push(`Visible: ${props.visible}`);
+  if (raw.exchangeRate ?? raw.exchange_rate) parts.push(`Exchange Rate: ${raw.exchangeRate ?? raw.exchange_rate}`);
+  if (raw.symbol) parts.push(`Symbol: ${raw.symbol}`);
 
   const header = parts.join(" | ");
 
   return {
     external_id: raw.id ?? code,
     source_type: "hubspot_currency",
-    title: `${code} — ${name}`,
+    title: `${code} -- ${name}`,
     content: header,
     metadata: {
       source_type: "hubspot_currency",
       code,
       name,
-      exchange_rate: props.exchangeRate ?? props.exchange_rate ?? undefined,
+      exchange_rate: raw.exchangeRate ?? raw.exchange_rate ?? undefined,
       external_id: raw.id ?? code,
     },
   };
