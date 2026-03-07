@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
+import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -480,7 +481,7 @@ export function SkylerClient({
 
         <div className="flex flex-col items-center px-4 pt-2 pb-4">
           <div className="w-[140px] h-[140px] rounded-full overflow-hidden mb-3">
-            <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={140} height={140} />
+            <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={140} height={140} className="object-cover aspect-square" />
           </div>
           <h2 className="text-white font-bold text-lg">Skyler</h2>
           <p className="text-[#8B8F97] text-sm mt-0.5">Sales Representative</p>
@@ -722,7 +723,7 @@ export function SkylerClient({
                 ) : filteredLeads.length === 0 ? (
                   <p className="text-[#555A63] text-sm text-center py-8">
                     {leads.length === 0
-                      ? "No deals found. Connect HubSpot to import your pipeline."
+                      ? "No deals found. Connect your CRM to import your pipeline."
                       : "No leads match this filter."}
                   </p>
                 ) : (
@@ -756,7 +757,7 @@ export function SkylerClient({
                         alt="Skyler"
                         width={64}
                         height={64}
-                        className="rounded-full mx-auto mb-4 opacity-40"
+                        className="rounded-full mx-auto mb-4 opacity-40 object-cover aspect-square"
                       />
                       <p className="text-[#555A63] text-sm">
                         Connect with Skyler to start managing your sales pipeline.
@@ -773,7 +774,7 @@ export function SkylerClient({
                             alt="Skyler"
                             width={28}
                             height={28}
-                            className="rounded-full flex-shrink-0 mt-0.5"
+                            className="rounded-full flex-shrink-0 mt-0.5 object-cover aspect-square"
                           />
                         )}
                         <div
@@ -784,7 +785,11 @@ export function SkylerClient({
                               : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
                           )}
                         >
-                          <div className="whitespace-pre-wrap">{msg.content}</div>
+                          {msg.role === "assistant" ? (
+                            <MarkdownRenderer content={msg.content} />
+                          ) : (
+                            <div className="whitespace-pre-wrap">{msg.content}</div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -797,11 +802,11 @@ export function SkylerClient({
                           alt="Skyler"
                           width={28}
                           height={28}
-                          className="rounded-full flex-shrink-0 mt-0.5"
+                          className="rounded-full flex-shrink-0 mt-0.5 object-cover aspect-square"
                         />
                         <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
                           {streamingContent ? (
-                            <div className="whitespace-pre-wrap">{streamingContent}</div>
+                            <MarkdownRenderer content={streamingContent} />
                           ) : (
                             <div className="flex items-center gap-2 text-[#8B8F97]">
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />

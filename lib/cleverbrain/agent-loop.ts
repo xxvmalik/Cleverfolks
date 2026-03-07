@@ -407,7 +407,7 @@ export async function runAgentLoop(
 
       // Stream the final response with tag buffering for [ROLE_UPDATE:]
       onEvent({ type: "activity", action: "Generating response..." });
-      streamTextWithTagBuffering(fullText, onEvent);
+      await streamTextWithTagBuffering(fullText, onEvent);
 
       return { fullResponse: fullText, allResults, webResults };
     }
@@ -488,7 +488,7 @@ export async function runAgentLoop(
   const fullText = textBlocks.map((b) => b.text).join("");
 
   onEvent({ type: "activity", action: "Generating response..." });
-  streamTextWithTagBuffering(fullText, onEvent);
+  await streamTextWithTagBuffering(fullText, onEvent);
 
   return { fullResponse: fullText, allResults, webResults };
 }
@@ -497,20 +497,26 @@ export async function runAgentLoop(
 
 /**
  * Streams text to the frontend, buffering to catch and suppress [ROLE_UPDATE:] tags.
- * Since the final response is already complete (non-streaming tool loop), we can
- * detect the tag and strip it before sending.
+ * Since the final response is already complete (non-streaming tool loop), we
+ * emit small chunks with micro-delays so the browser receives them progressively
+ * (token-by-token feel) rather than all at once.
  */
-function streamTextWithTagBuffering(
+async function streamTextWithTagBuffering(
   text: string,
   onEvent: (event: SSEEvent) => void
-): void {
+): Promise<void> {
   // Strip any [ROLE_UPDATE:...] tags before streaming
   const cleanText = text.replace(/\[ROLE_UPDATE:[^\]]*\]/gi, "").trimEnd();
 
-  // Send in chunks to simulate streaming (better UX than one giant block)
-  const CHUNK_SIZE = 50;
+  // Send in small chunks with micro-delays so the stream flushes progressively
+  const CHUNK_SIZE = 30;
+  const DELAY_MS = 8;
   for (let i = 0; i < cleanText.length; i += CHUNK_SIZE) {
     const chunk = cleanText.slice(i, i + CHUNK_SIZE);
     onEvent({ type: "text", text: chunk });
+    // Yield to event loop so the ReadableStream flushes each chunk to the client
+    if (i + CHUNK_SIZE < cleanText.length) {
+      await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+    }
   }
 }

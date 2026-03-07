@@ -796,11 +796,15 @@ export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>
   const ownerId = raw.owner ?? "";
   const ownerName = ownerMap?.[ownerId] ?? ownerId;
 
+  // Currency code from HubSpot deal (e.g., "USD", "GBP", "NGN")
+  const currencyCode = raw.deal_currency_code ?? raw.currency ?? "";
+
   const parts: string[] = [`[HubSpot Deal] Name: ${dealname}`];
   if (stageName) parts.push(`Stage: ${stageName}`);
   parts.push(`Status: ${status}`);
   if (probPct) parts.push(`Probability: ${probPct}`);
   if (raw.amount) parts.push(`Amount: ${raw.amount}`);
+  if (currencyCode) parts.push(`Currency: ${currencyCode}`);
   if (raw.close_date) parts.push(`Close Date: ${raw.close_date}`);
   if (ownerName) parts.push(`Owner: ${ownerName}`);
 
@@ -830,6 +834,8 @@ export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>
       stage_id: stageId || undefined,
       status,
       amount: raw.amount ?? undefined,
+      probability: probPct || undefined,
+      currency_code: currencyCode || undefined,
       close_date: raw.close_date ?? undefined,
       owner_id: raw.owner ?? undefined,
       external_id: raw.id ?? undefined,
