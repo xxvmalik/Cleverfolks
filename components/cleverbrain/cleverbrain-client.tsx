@@ -20,8 +20,14 @@ import {
   Link2,
   FileText,
 } from "lucide-react";
+import Nango from "@nangohq/frontend";
+import type { ConnectUIEvent } from "@nangohq/frontend";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
+import {
+  connectIntegrationAction,
+  disconnectIntegrationAction,
+} from "@/app/actions/integrations";
 import {
   getConversationsAction,
   getMessagesAction,
@@ -427,9 +433,8 @@ function ProfileReviewCard({
 
 const AI_EMPLOYEES = [
   { name: "SKYLER", role: "Sales Assistant", avatar: "/cleverbrain-chat-icons/skyler-icon.png", status: "active" as const, href: "/skyler" },
-  { name: "Blake", role: "Business Consultant", avatar: null, status: "soon" as const },
   { name: "VERA", role: "Virtual Assistant", avatar: null, status: "soon" as const },
-  { name: "Cole", role: "Copywriter & Marketer", avatar: null, status: "soon" as const },
+  { name: "MARTIN", role: "Marketing Manager", avatar: null, status: "soon" as const },
 ];
 
 function MarketplacePanel({ onClose }: { onClose: () => void }) {
@@ -438,6 +443,8 @@ function MarketplacePanel({ onClose }: { onClose: () => void }) {
       className="w-[360px] bg-[#1B1B1B] border-l border-[#2A2D35]/60 flex flex-col flex-shrink-0"
       style={{ animation: "slideInRight 0.3s ease-out" }}
     >
+      {/* Spacer to align below the top bar */}
+      <div className="h-[60px] flex-shrink-0 border-b border-[#2A2D35]/60" />
       <div className="flex items-start justify-between px-5 pt-5 pb-2">
         <div>
           <h2 className="text-white font-bold text-lg">AI Employee marketplace</h2>
@@ -492,21 +499,29 @@ function MarketplacePanel({ onClose }: { onClose: () => void }) {
 
 type IntegrationItem = {
   id: string;
+  provider: string;
   name: string;
   category: string;
   color: string;
-  initials: string;
-  connected: boolean;
+  letter: string;
 };
 
 const INTEGRATIONS: IntegrationItem[] = [
-  { id: "hubspot", name: "HubSpot", category: "CRM System", color: "#FF7A59", initials: "HS", connected: true },
-  { id: "gmail", name: "Gmail", category: "Email Platform", color: "#EA4335", initials: "GM", connected: true },
-  { id: "slack", name: "Slack", category: "Messaging Platform", color: "#4A154B", initials: "SL", connected: true },
-  { id: "outlook", name: "Outlook", category: "Email Platform", color: "#0078D4", initials: "OL", connected: false },
-  { id: "google-calendar", name: "Google Calendar", category: "Scheduling Platform", color: "#4285F4", initials: "GC", connected: false },
-  { id: "google-drive", name: "Google Drive", category: "Cloud Storage", color: "#0F9D58", initials: "GD", connected: false },
+  { id: "hubspot", provider: "hubspot", name: "HubSpot", category: "CRM System", color: "#FF7A59", letter: "H" },
+  { id: "gmail", provider: "google-mail", name: "Gmail", category: "Email Platform", color: "#EA4335", letter: "G" },
+  { id: "slack", provider: "slack", name: "Slack", category: "Messaging Platform", color: "#4A154B", letter: "S" },
+  { id: "outlook", provider: "outlook", name: "Outlook", category: "Email Platform", color: "#0078D4", letter: "O" },
+  { id: "google-calendar", provider: "google-calendar", name: "Google Calendar", category: "Scheduling Platform", color: "#4285F4", letter: "C" },
+  { id: "google-drive", provider: "google-drive", name: "Google Drive", category: "Cloud Storage", color: "#0F9D58", letter: "D" },
 ];
+
+type DbIntegration = {
+  id: string;
+  provider: string;
+  status: string;
+  sync_status: string | null;
+  last_synced_at: string | null;
+};
 
 function ConnectorsView({
   sidebarCollapsed,
@@ -516,6 +531,7 @@ function ConnectorsView({
   userMenuOpen,
   setUserMenuOpen,
   onSignOut,
+  workspaceId,
 }: {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (v: boolean | ((prev: boolean) => boolean)) => void;
@@ -524,9 +540,93 @@ function ConnectorsView({
   userMenuOpen: boolean;
   setUserMenuOpen: (v: boolean | ((prev: boolean) => boolean)) => void;
   onSignOut: () => void;
+  workspaceId: string;
 }) {
+  const router = useRouter();
   const [selectedId, setSelectedId] = useState(INTEGRATIONS[0].id);
+  const [dbIntegrations, setDbIntegrations] = useState<DbIntegration[]>([]);
+  const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
+
+  // Fetch integration statuses from DB
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
+        if (res.ok) {
+          const data = (await res.json()) as { integrations: DbIntegration[] };
+          setDbIntegrations(data.integrations ?? []);
+        }
+      } catch { /* ignore */ }
+    }
+    void load();
+  }, [workspaceId]);
+
+  const dbByProvider = Object.fromEntries(dbIntegrations.map((i) => [i.provider, i]));
   const selected = INTEGRATIONS.find((i) => i.id === selectedId) ?? INTEGRATIONS[0];
+  const selectedDb = dbByProvider[selected.provider];
+  const isSelectedConnected = selectedDb?.status === "connected";
+
+  // Nango OAuth connect handler
+  const handleConnect = useCallback(async (provider: string) => {
+    setConnectingProvider(provider);
+    try {
+      const tokenRes = await fetch("/api/nango-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+      if (!tokenRes.ok) throw new Error("Failed to create Nango session");
+      const { token } = (await tokenRes.json()) as { token: string };
+
+      await new Promise<void>((resolve, reject) => {
+        const nango = new Nango({ connectSessionToken: token });
+        const connectUI = nango.openConnectUI({
+          onEvent: async (event: ConnectUIEvent) => {
+            if (event.type === "connect") {
+              const { connectionId, providerConfigKey } = event.payload;
+              try {
+                const result = await connectIntegrationAction(workspaceId, providerConfigKey, connectionId);
+                if (result.error) { connectUI.close(); reject(new Error(result.error)); return; }
+                if (result.integrationId) {
+                  fetch("/api/sync", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ integrationId: result.integrationId }),
+                  }).catch(console.error);
+                }
+                connectUI.close();
+                // Refresh integration list
+                const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
+                if (res.ok) {
+                  const data = (await res.json()) as { integrations: DbIntegration[] };
+                  setDbIntegrations(data.integrations ?? []);
+                }
+                resolve();
+              } catch (err) { connectUI.close(); reject(err); }
+            } else if (event.type === "error") {
+              connectUI.close();
+              reject(new Error(event.payload.errorMessage));
+            } else if (event.type === "close") { resolve(); }
+          },
+        });
+        connectUI.open();
+      });
+    } catch (err) {
+      console.error("Connect failed:", err);
+    } finally {
+      setConnectingProvider(null);
+    }
+  }, [workspaceId]);
+
+  // Disconnect handler
+  const handleDisconnect = useCallback(async (integrationDbId: string) => {
+    await disconnectIntegrationAction(integrationDbId);
+    const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
+    if (res.ok) {
+      const data = (await res.json()) as { integrations: DbIntegration[] };
+      setDbIntegrations(data.integrations ?? []);
+    }
+  }, [workspaceId]);
 
   return (
     <div className="flex flex-1 min-w-0 overflow-hidden">
@@ -537,16 +637,21 @@ function ConnectorsView({
           sidebarCollapsed ? "w-0" : "w-[220px]"
         )}
       >
-        <div className="flex justify-center px-4 pt-6 pb-4">
+        <div className="flex justify-center px-4 pt-6 pb-3">
           <Image src="/cleverbrain-chat-icons/cleverfolks-logo.png" alt="Cleverfolks" width={130} height={26} className="brightness-0 invert" />
         </div>
-        <div className="flex flex-col items-center px-4 pb-5">
-          <div className="w-[100px] h-[100px] rounded-full overflow-hidden mb-3">
-            <Image src="/cleverbrain-chat-icons/cleverbrain-icon.png" alt="CleverBrain" width={100} height={100} />
+
+        {/* Brain avatar — pushed down with spacer */}
+        <div className="flex-shrink-0 h-4" />
+        <div className="flex flex-col items-center px-4 pb-8">
+          <div className="w-[110px] h-[110px] rounded-full overflow-hidden mb-3">
+            <Image src="/cleverbrain-chat-icons/cleverbrain-icon.png" alt="CleverBrain" width={110} height={110} />
           </div>
           <h2 className="text-white font-bold text-base">Cleverbrain</h2>
         </div>
-        <nav className="px-3 space-y-1">
+
+        {/* Nav tabs — more spacing from avatar */}
+        <nav className="px-3 space-y-1 mt-2">
           <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors">
             <User className="w-4 h-4" />
             Client Profile
@@ -616,38 +721,58 @@ function ConnectorsView({
         {/* Two-column content */}
         <div className="flex-1 flex overflow-hidden px-8 pb-6 gap-6">
           {/* Connected Systems */}
-          <div className="w-[380px] flex-shrink-0 flex flex-col">
+          <div className="w-[400px] flex-shrink-0 flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-white font-semibold text-base">Connected Systems</h2>
               <button className="text-[#3A89FF] text-sm hover:text-[#5A9FFF] transition-colors">+ Add new</button>
             </div>
-            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-              {INTEGRATIONS.map((intg) => (
-                <button
-                  key={intg.id}
-                  onClick={() => setSelectedId(intg.id)}
-                  className={cn(
-                    "w-full flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
-                    intg.id === selectedId
-                      ? "border-[#3A89FF]/60 bg-[#0A1929]"
-                      : "border-[#1E3A5F]/40 bg-[#0A1929]/50 hover:border-[#1E3A5F]"
-                  )}
-                >
-                  <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{ background: intg.color }}>
-                    {intg.initials}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+              {INTEGRATIONS.map((intg) => {
+                const db = dbByProvider[intg.provider];
+                const connected = db?.status === "connected";
+                const isConnecting = connectingProvider === intg.provider;
+                return (
+                  <div
+                    key={intg.id}
+                    onClick={() => setSelectedId(intg.id)}
+                    className={cn(
+                      "flex items-center gap-3.5 p-4 rounded-xl border transition-all cursor-pointer",
+                      intg.id === selectedId
+                        ? "border-[#3A89FF]/60 bg-[#0A1929]"
+                        : "border-[#1E3A5F]/30 bg-[#0D1B2A] hover:border-[#1E3A5F]/60"
+                    )}
+                  >
+                    {/* Logo badge */}
+                    <div
+                      className="w-11 h-11 rounded-xl flex items-center justify-center text-white text-base font-bold flex-shrink-0"
+                      style={{ background: intg.color }}
+                    >
+                      {intg.letter}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-sm font-medium">{intg.name}</p>
+                      <p className="text-[#8B8F97] text-xs mt-0.5">{intg.category}</p>
+                    </div>
+                    {connected ? (
+                      <Image
+                        src="/cleverbrain-chat-icons/connected.png"
+                        alt="Connected"
+                        width={90}
+                        height={32}
+                        className="flex-shrink-0"
+                      />
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); void handleConnect(intg.provider); }}
+                        disabled={isConnecting}
+                        className="px-4 py-1.5 text-xs font-medium rounded-full border border-[#3A4A5F] text-[#8B8F97] hover:text-white hover:border-[#5A6A7F] transition-colors flex-shrink-0 disabled:opacity-50"
+                      >
+                        {isConnecting ? "Connecting\u2026" : "Connect"}
+                      </button>
+                    )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm font-medium">{intg.name}</p>
-                    <p className="text-[#8B8F97] text-xs">{intg.category}</p>
-                  </div>
-                  <span className={cn(
-                    "px-3 py-1 text-xs font-medium rounded-lg flex-shrink-0",
-                    intg.connected ? "bg-[#22C55E]/10 text-[#22C55E] border border-[#22C55E]/30" : "bg-[#1E3A5F]/50 text-[#8B8F97] border border-[#1E3A5F]"
-                  )}>
-                    {intg.connected ? "Connected" : "Connect"}
-                  </span>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -656,23 +781,30 @@ function ConnectorsView({
             <h2 className="text-white font-semibold text-base mb-4">Integration Details</h2>
             <div className="bg-[#0A1929]/50 border border-[#1E3A5F]/40 rounded-xl p-5">
               <div className="flex items-center gap-3 mb-5">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center text-white text-xs font-bold" style={{ background: selected.color }}>
-                  {selected.initials}
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-bold" style={{ background: selected.color }}>
+                  {selected.letter}
                 </div>
                 <span className="text-white font-semibold">{selected.name}</span>
-                <span className={cn(
-                  "ml-auto px-3 py-1 text-xs font-medium rounded-lg",
-                  selected.connected ? "bg-[#22C55E]/10 text-[#22C55E] border border-[#22C55E]/30" : "bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/30"
-                )}>
-                  {selected.connected ? "Connected" : "Disconnected"}
-                </span>
+                {isSelectedConnected ? (
+                  <Image
+                    src="/cleverbrain-chat-icons/connected.png"
+                    alt="Connected"
+                    width={90}
+                    height={32}
+                    className="ml-auto flex-shrink-0"
+                  />
+                ) : (
+                  <span className="ml-auto px-3 py-1 text-xs font-medium rounded-lg bg-[#F87171]/10 text-[#F87171] border border-[#F87171]/30">
+                    Disconnected
+                  </span>
+                )}
               </div>
               <div className="space-y-3 mb-6">
                 {([
-                  ["API Version", selected.connected ? "v56.0" : "\u2014"],
-                  ["Last Synced", selected.connected ? "Today, 9:15 AM" : "\u2014"],
+                  ["API Version", isSelectedConnected ? "v56.0" : "\u2014"],
+                  ["Last Synced", isSelectedConnected && selectedDb?.last_synced_at ? new Date(selectedDb.last_synced_at).toLocaleString() : "\u2014"],
                   ["Auth Type", "OAuth2.0"],
-                  ["Data Access", selected.connected ? "ReadWrite" : "\u2014"],
+                  ["Data Access", isSelectedConnected ? "ReadWrite" : "\u2014"],
                 ] as const).map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between text-sm">
                     <span className="text-[#8B8F97]">{label}</span>
@@ -680,7 +812,7 @@ function ConnectorsView({
                   </div>
                 ))}
               </div>
-              {selected.connected && (
+              {isSelectedConnected && (
                 <div className="border-t border-[#1E3A5F]/40 pt-4">
                   <p className="text-[#8B8F97] text-sm mb-3">{companyName || "Your Company"}</p>
                   <div className="space-y-2">
@@ -692,6 +824,12 @@ function ConnectorsView({
                       </div>
                     ))}
                   </div>
+                  <button
+                    onClick={() => selectedDb && void handleDisconnect(selectedDb.id)}
+                    className="mt-4 px-4 py-1.5 rounded-lg text-xs font-medium bg-[#2A2D35] text-[#8B8F97] hover:text-white hover:bg-[#3A3D45] transition-colors"
+                  >
+                    Disconnect
+                  </button>
                 </div>
               )}
             </div>
@@ -716,7 +854,7 @@ function RightIconBar({
   onNavigate: (target: "chat" | "connectors" | "marketplace" | "skyler" | "settings") => void;
 }) {
   return (
-    <div className="w-[76px] bg-[#151515] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0">
+    <div className={cn("w-[76px] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0", activeView === "connectors" ? "bg-[#001022]" : "bg-[#151515]")}>
       <div className="flex flex-col items-center gap-6 rounded-2xl border border-[#2A2D35]/60 px-3 py-5" style={{ background: "#1F1F1FCC" }}>
         {/* CleverBrain chat */}
         <button
@@ -1076,6 +1214,7 @@ export function CleverBrainClient({
           userMenuOpen={userMenuOpen}
           setUserMenuOpen={setUserMenuOpen}
           onSignOut={() => void handleSignOut()}
+          workspaceId={workspaceId}
         />
       ) : (
       <>
