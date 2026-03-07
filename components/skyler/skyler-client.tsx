@@ -767,15 +767,17 @@ export function SkylerClient({
                 ) : (
                   <div className="space-y-4">
                     {chatMessages.map((msg) => (
-                      <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "justify-end" : "")}>
+                      <div key={msg.id} className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
                         {msg.role === "assistant" && (
-                          <Image
-                            src="/skyler-icons/skyler-avatar.png"
-                            alt="Skyler"
-                            width={28}
-                            height={28}
-                            className="rounded-full flex-shrink-0 mt-0.5 object-cover aspect-square"
-                          />
+                          <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                            <Image
+                              src="/skyler-icons/skyler-avatar.png"
+                              alt="Skyler"
+                              width={28}
+                              height={28}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
                         )}
                         <div
                           className={cn(
@@ -796,14 +798,16 @@ export function SkylerClient({
 
                     {/* Streaming response */}
                     {(streamingContent || activityLabel) && (
-                      <div className="flex gap-3">
-                        <Image
-                          src="/skyler-icons/skyler-avatar.png"
-                          alt="Skyler"
-                          width={28}
-                          height={28}
-                          className="rounded-full flex-shrink-0 mt-0.5 object-cover aspect-square"
-                        />
+                      <div className="flex gap-3 items-start">
+                        <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                          <Image
+                            src="/skyler-icons/skyler-avatar.png"
+                            alt="Skyler"
+                            width={28}
+                            height={28}
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
                         <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
                           {streamingContent ? (
                             <MarkdownRenderer content={streamingContent} />

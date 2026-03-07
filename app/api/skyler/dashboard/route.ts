@@ -47,8 +47,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // ── Fetch deals + workspace settings + workspace currency in parallel ──
-  const [{ data: chunks }, { data: workspace }, { data: currencyChunks }] = await Promise.all([
+  // ── Fetch deals + workspace settings in parallel ────────────────────────
+  const [{ data: chunks }, { data: workspace }] = await Promise.all([
     supabase
       .from("document_chunks")
       .select("id, chunk_text, metadata, document_id")
@@ -60,21 +60,14 @@ export async function GET(req: NextRequest) {
       .select("settings")
       .eq("id", workspaceId)
       .single(),
-    // Try to find workspace's HubSpot currency data
-    supabase
-      .from("document_chunks")
-      .select("metadata")
-      .eq("workspace_id", workspaceId)
-      .eq("metadata->>source_type", "hubspot_currency")
-      .limit(1),
   ]);
 
   const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
 
   // ── Resolve workspace currency ─────────────────────────────────────────
-  // Priority: deal-level currency_code → HubSpot account currency → fallback
-  const hubspotCurrency = (currencyChunks?.[0]?.metadata as Record<string, unknown>)?.code as string | undefined;
-  const workspaceFallbackCurrency = hubspotCurrency ?? "";
+  // Source of truth: workspace.settings.currency (ISO 4217 code set by workspace admin)
+  // Deal-level currency_code in metadata is used as override per-deal if available
+  const workspaceCurrency = (settings.currency as string) ?? "";
 
   // ── Scoring thresholds ─────────────────────────────────────────────────
   const customThresholds = settings.skyler_scoring_thresholds as
@@ -139,8 +132,13 @@ export async function GET(req: NextRequest) {
     const priority: "High" | "Medium" | "Low" =
       probNum >= thresholds.high ? "High" : probNum >= thresholds.medium ? "Medium" : "Low";
 
-    // Resolve currency: deal-level → workspace-level → no symbol
-    const dealCurrency = d.currency_code || workspaceFallbackCurrency;
+    // Resolve currency: deal metadata → chunk_text → workspace setting → no symbol
+    let dealCurrency = d.currency_code;
+    if (!dealCurrency && d.chunk_text) {
+      const currMatch = d.chunk_text.match(/Currency:\s*([A-Z]{3})/i);
+      if (currMatch) dealCurrency = currMatch[1].toUpperCase();
+    }
+    dealCurrency = dealCurrency || workspaceCurrency;
     const symbol = getCurrencySymbol(dealCurrency);
 
     // Format amount with currency
@@ -179,6 +177,7 @@ export async function GET(req: NextRequest) {
   const salesCloserEnabled = settings.skyler_sales_closer === true;
 
   return NextResponse.json({
+    currency: workspaceCurrency,
     stats: {
       qualificationRate,
       hotLeads,
@@ -194,7 +193,7 @@ export async function GET(req: NextRequest) {
 // ── PATCH: Update workspace settings ─────────────────────────────────────
 export async function PATCH(req: NextRequest) {
   const body = await req.json();
-  const { workspaceId, salesCloserEnabled } = body;
+  const { workspaceId, salesCloserEnabled, currency } = body;
 
   if (!workspaceId) {
     return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
@@ -217,7 +216,9 @@ export async function PATCH(req: NextRequest) {
     .single();
 
   const currentSettings = (workspace?.settings ?? {}) as Record<string, unknown>;
-  const newSettings = { ...currentSettings, skyler_sales_closer: !!salesCloserEnabled };
+  const newSettings = { ...currentSettings };
+  if (salesCloserEnabled !== undefined) newSettings.skyler_sales_closer = !!salesCloserEnabled;
+  if (currency !== undefined) newSettings.currency = currency;
 
   const { error } = await supabase
     .from("workspaces")

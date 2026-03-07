@@ -1347,13 +1347,14 @@ export function CleverBrainClient({
               ))}
 
               {streamingState && (
-                <div className="flex gap-3">
+                <div className="flex gap-3 items-start">
                   <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 mt-1">
                     <Image
                       src="/cleverbrain-chat-icons/cleverbrain-icon.png"
                       alt="CleverBrain"
                       width={32}
                       height={32}
+                      className="w-full h-full object-cover"
                     />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -1483,13 +1484,14 @@ function MessageBubble({ msg }: { msg: UIMessage }) {
   }
 
   return (
-    <div className="flex gap-3">
+    <div className="flex gap-3 items-start">
       <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 mt-1">
         <Image
           src="/cleverbrain-chat-icons/cleverbrain-icon.png"
           alt="CleverBrain"
           width={32}
           height={32}
+          className="w-full h-full object-cover"
         />
       </div>
 
