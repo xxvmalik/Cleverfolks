@@ -302,6 +302,41 @@ function formatToolResultForClaude(
       .map(([type, count]) => `  ${type}: ${count}`)
       .join("\n");
     parts.push(`\n---\nTOTAL RECORDS RETURNED: ${regularResults.length}\nBREAKDOWN BY TYPE:\n${countLines}`);
+
+    // Pre-computed deal summary so Claude never has to count open vs closed
+    const dealRecords = regularResults.filter((r) => r.source_type === "hubspot_deal");
+    if (dealRecords.length > 0) {
+      const buckets: Record<string, { count: number; amount: number }> = {};
+      for (const d of dealRecords) {
+        const text = d.chunk_text ?? "";
+        const statusMatch = text.match(/Status:\s*(\S+)/i);
+        const stageMatch = text.match(/Stage:\s*([^|]+)/i);
+        const amountMatch = text.match(/Amount:\s*([0-9.,]+)/i);
+        const amount = amountMatch ? parseFloat(amountMatch[1].replace(/,/g, "")) || 0 : 0;
+
+        let bucket = "Open";
+        if (statusMatch && /closed/i.test(statusMatch[1])) {
+          const stageName = stageMatch?.[1]?.trim().toLowerCase() ?? "";
+          if (/lost/i.test(stageName)) {
+            bucket = "Closed Lost";
+          } else {
+            bucket = "Closed Won";
+          }
+        }
+
+        if (!buckets[bucket]) buckets[bucket] = { count: 0, amount: 0 };
+        buckets[bucket].count += 1;
+        buckets[bucket].amount += amount;
+      }
+
+      const fmt = (n: number) => n.toLocaleString("en-US");
+      const summaryParts: string[] = [];
+      for (const [label, { count, amount }] of Object.entries(buckets)) {
+        const amtStr = amount > 0 ? ` (${fmt(amount)})` : "";
+        summaryParts.push(`${count} ${label.toLowerCase()}${amtStr}`);
+      }
+      parts.push(`DEAL SUMMARY: ${summaryParts.join(", ")}. Total: ${dealRecords.length} deals.`);
+    }
   }
 
   return parts.join("\n\n===\n\n");
