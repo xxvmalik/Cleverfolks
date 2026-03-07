@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 // Default scoring thresholds — overridden by workspace.settings.skyler_scoring_thresholds
 const DEFAULT_THRESHOLDS = { high: 60, medium: 30 };
@@ -48,6 +49,8 @@ export async function GET(req: NextRequest) {
   }
 
   // ── Fetch deals + workspace settings in parallel ────────────────────────
+  // Use admin client for workspace settings to bypass RLS on the settings column
+  const adminDb = createAdminSupabaseClient();
   const [{ data: chunks }, { data: workspace }] = await Promise.all([
     supabase
       .from("document_chunks")
@@ -55,7 +58,7 @@ export async function GET(req: NextRequest) {
       .eq("workspace_id", workspaceId)
       .eq("metadata->>source_type", "hubspot_deal")
       .order("created_at", { ascending: false }),
-    supabase
+    adminDb
       .from("workspaces")
       .select("settings")
       .eq("id", workspaceId)
@@ -208,8 +211,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Read current settings, merge the new value
-  const { data: workspace } = await supabase
+  // Read current settings, merge the new value (admin client to bypass RLS)
+  const adminDb = createAdminSupabaseClient();
+  const { data: workspace } = await adminDb
     .from("workspaces")
     .select("settings")
     .eq("id", workspaceId)
@@ -220,7 +224,7 @@ export async function PATCH(req: NextRequest) {
   if (salesCloserEnabled !== undefined) newSettings.skyler_sales_closer = !!salesCloserEnabled;
   if (currency !== undefined) newSettings.currency = currency;
 
-  const { error } = await supabase
+  const { error } = await adminDb
     .from("workspaces")
     .update({ settings: newSettings })
     .eq("id", workspaceId);
