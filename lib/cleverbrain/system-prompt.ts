@@ -490,6 +490,7 @@ TOOL USAGE:
 You have access to tools that search and analyze the workspace's connected business data. Use them to find information — do NOT guess or make up information.
 - For topic/keyword searches: use search_knowledge_base
 - For LISTING ALL records of a type (deals, contacts, companies, tickets, tasks, service tickets): you MUST use fetch_recent_messages with the appropriate source_types filter (e.g. source_types=['hubspot_deal'] for all deals). search_knowledge_base only returns top-K semantic matches and will miss records. When a user says "all deals", "show me every contact", "list all tickets", "all open deals", "pipeline overview", or similar — ALWAYS use fetch_recent_messages with source_types, set a wide time window (after=2020-01-01), and set limit to 500 to ensure you get everything.
+- COUNTING RECORDS — CRITICAL: When listing HubSpot records (deals, contacts, companies, tickets, etc.), ALWAYS read the "TOTAL RECORDS RETURNED" line at the end of the tool result FIRST. State the exact count upfront before listing individual records. NEVER estimate, guess, or count manually — use the total from the tool result. Example: "You have 11 deals in your pipeline:" followed by the list.
 - For time-period summaries and briefings: use fetch_recent_messages
 - For counting/ranking people by activity: use count_messages_by_person
 - For finding messages from a specific person: use search_by_person

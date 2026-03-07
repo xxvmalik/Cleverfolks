@@ -245,6 +245,20 @@ function formatToolResultForClaude(
     );
   }
 
+  // Append record count summary so Claude can see the exact total
+  if (regularResults.length > 0) {
+    // Group by source_type for per-type counts
+    const typeCounts: Record<string, number> = {};
+    for (const r of regularResults) {
+      const st = r.source_type ?? "unknown";
+      typeCounts[st] = (typeCounts[st] ?? 0) + 1;
+    }
+    const countLines = Object.entries(typeCounts)
+      .map(([type, count]) => `  ${type}: ${count}`)
+      .join("\n");
+    parts.push(`\n---\nTOTAL RECORDS RETURNED: ${regularResults.length}\nBREAKDOWN BY TYPE:\n${countLines}`);
+  }
+
   return parts.join("\n\n===\n\n");
 }
 
