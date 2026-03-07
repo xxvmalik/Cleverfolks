@@ -314,10 +314,18 @@ CRM WRITE ACTIONS (call these IMMEDIATELY when the user asks to create/update):
 - "Create a deal" → create_deal (fill in deal_name, amount, stage, close_date from the message)
 - "Create/add a contact" → create_contact (fill in first_name, last_name, email, company)
 - "Create/add a company" → create_company (fill in name, domain, industry)
-- "Create a task / follow-up" → create_task (fill in subject, due_date, priority)
+- "Create a task / follow-up" → create_task (fill in subject, due_date, priority, contact_id)
 - "Log a note / record notes" → create_note (fill in body, attach to contact/deal/company)
 - "Update a deal / move stage" → update_deal (fill in deal_id, stage, amount, etc.)
 - "Update a contact" → update_contact (fill in contact_id and changed fields)
+
+CRITICAL — ASSOCIATING TASKS AND NOTES WITH CRM RECORDS:
+When creating a task or note for a specific person, deal, or company, you MUST:
+1. FIRST search for them using search_by_person or search_knowledge_base
+2. Extract their "HubSpot ID: XXXXXXX" from the search results — this is the HubSpot record ID
+3. Pass it as contact_id (or deal_id/company_id) to create_task or create_note
+NEVER create a task for a person without including their contact_id if you found them in search results.
+The HubSpot ID appears on its own line in search results: "HubSpot ID: 727353023697"
 
 READ / SEARCH TOOLS:
 - Pipeline overview / "all deals" → fetch_recent_messages with source_types=['hubspot_deal'], after=2020-01-01, limit=500

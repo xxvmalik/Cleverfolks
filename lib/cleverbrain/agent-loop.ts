@@ -275,7 +275,14 @@ function formatUnifiedResult(r: UnifiedResult): string {
   const dt = formatSourceDate(meta);
   if (dt) srcParts.push(dt);
   if (enriched.match_type === "mentioned") srcParts.push("person_mentioned_not_author");
-  return `[Source: ${srcParts.join(" | ")}]\n${enriched.chunk_text}`;
+
+  // For HubSpot records, include the external_id so write tools can reference it
+  const externalId = (meta.external_id as string | undefined);
+  const hubspotIdLine = externalId && enriched.source_type.startsWith("hubspot_")
+    ? `\nHubSpot ID: ${externalId}`
+    : "";
+
+  return `[Source: ${srcParts.join(" | ")}]${hubspotIdLine}\n${enriched.chunk_text}`;
 }
 
 function formatToolResultForClaude(
