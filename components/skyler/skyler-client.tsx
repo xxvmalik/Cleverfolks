@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -16,7 +16,6 @@ import {
   Users,
   Target,
   Settings,
-  Mail,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -34,56 +33,28 @@ type Lead = {
   priority: LeadPriority;
   potential: string;
   detail: string;
-};
-
-type EmailMessage = {
-  id: string;
-  senderName: string;
-  senderEmail: string;
-  timestamp: string;
-  subject: string;
-  body: string;
+  stage?: string;
+  probability?: number;
 };
 
 type LeadFilter = "all" | "hot" | "nurture" | "disqualified";
 
-// ── Placeholder Data ─────────────────────────────────────────────────────────
+type DashboardData = {
+  stats: {
+    qualificationRate: number;
+    hotLeads: number;
+    nurtureQueue: number;
+    disqualified: number;
+  };
+  leads: Lead[];
+  connectedIntegrations: { id: string; provider: string }[];
+  salesCloserEnabled: boolean;
+};
 
-const PLACEHOLDER_LEADS: Lead[] = [
-  { id: "1", company: "TechStartup Inc.", priority: "High", potential: "$50K+", detail: "Decision maker identified" },
-  { id: "2", company: "GlobalTech Corp.", priority: "Medium", potential: "$35K+", detail: "Decision maker identified" },
-  { id: "3", company: "InnovateSoft Ltd.", priority: "High", potential: "$80K+", detail: "Decision maker identified" },
-  { id: "4", company: "DataFlow Systems", priority: "High", potential: "$45K+", detail: "Decision maker identified" },
-  { id: "5", company: "CloudNine Solutions", priority: "High", potential: "$60K+", detail: "Decision maker identified" },
-  { id: "6", company: "NextGen AI Corp.", priority: "High", potential: "$120K+", detail: "Decision maker identified" },
-  { id: "7", company: "Quantum Analytics", priority: "High", potential: "$55K+", detail: "Decision maker identified" },
-];
-
-const PLACEHOLDER_EMAILS: EmailMessage[] = [
-  {
-    id: "e1",
-    senderName: "You (Via Skyler)",
-    senderEmail: "your.name@yourcompany.com",
-    timestamp: "Feb 9, 2026 at 10:15 AM",
-    subject: "Re: TechCorp Enterprise Pricing - Quick Demo?",
-    body: "Hi Sarah,\n\nI noticed visited our enterprise pricing this week. Given TechCorp's use of Salesforce, I thought you'd be interested in our new native integration that just launched.\n\nOur customers in the 200-500 employee range typically see 40% faster deal cycles after implementation. Would a 15-minute demo focused specifically on the Salesforce workflow be valuable?\n\nBest regards,\n[Your Name]",
-  },
-  {
-    id: "e2",
-    senderName: "You (Via Skyler)",
-    senderEmail: "your.name@yourcompany.com",
-    timestamp: "Feb 9, 2026 at 10:15 AM",
-    subject: "Re: TechCorp Enterprise Pricing - Quick Demo?",
-    body: "Hi Sarah,\n\nJust following up on my previous message. I'd love to schedule a quick call to discuss how we can help TechCorp streamline your sales workflow.\n\nBest regards,\n[Your Name]",
-  },
-];
-
-const QUICK_ACTIONS = [
-  "Draft a follow up message",
-  "Recommendation",
-  "Skyler's AI Analysis",
-  "Draft a follow up message",
-];
+type IntegrationLogo = {
+  provider: string;
+  logoUrl: string;
+};
 
 // ── Stats Card ───────────────────────────────────────────────────────────────
 
@@ -171,65 +142,6 @@ function LeadCard({
   );
 }
 
-// ── Email Thread View ────────────────────────────────────────────────────────
-
-function EmailThreadView({ emails, lead }: { emails: EmailMessage[]; lead: Lead }) {
-  return (
-    <div className="flex flex-col h-full">
-      {/* Email thread container */}
-      <div className="flex-1 overflow-y-auto p-5">
-        <div className="bg-[#1A1714] border border-[#2A2520] rounded-xl overflow-hidden">
-          {/* Thread header */}
-          <div className="flex items-center justify-between px-5 py-3 border-b border-[#2A2520]">
-            <span className="text-[#8B8F97] text-sm font-medium">Email Thread</span>
-            <span className="text-[#8B8F97] text-sm">{emails.length} messages</span>
-          </div>
-
-          {/* Messages */}
-          <div className="divide-y divide-[#2A2520]">
-            {emails.map((email, idx) => (
-              <div key={email.id} className="px-5 py-5 relative group">
-                {/* Sender row */}
-                <div className="flex items-start gap-3 mb-3">
-                  <Image
-                    src="/skyler-icons/skyler-avatar.png"
-                    alt="Skyler"
-                    width={40}
-                    height={40}
-                    className="rounded-full flex-shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <p className="text-white font-semibold text-sm">{email.senderName}</p>
-                      <p className="text-[#8B8F97] text-xs flex-shrink-0">{email.timestamp}</p>
-                    </div>
-                    <p className="text-[#8B8F97] text-xs">{email.senderEmail}</p>
-                  </div>
-                </div>
-
-                {/* Subject */}
-                <p className="text-[#F2903D] font-semibold text-sm mb-3">{email.subject}</p>
-
-                {/* Body */}
-                <div className="text-[#E0E0E0] text-sm leading-relaxed whitespace-pre-line">
-                  {email.body}
-                </div>
-
-                {/* Draft reply button on hover / last message */}
-                {idx === emails.length - 1 && (
-                  <button className="mt-3 px-3 py-1.5 bg-[#2A2A2A] hover:bg-[#353535] border border-[#3A3A3A] rounded-lg text-[#8B8F97] text-xs transition-colors">
-                    Draft a reply
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Right Icon Bar ───────────────────────────────────────────────────────────
 
 function SkylerRightIconBar() {
@@ -274,6 +186,13 @@ const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "workflows-settings", label: "Workflows Settings", icon: Settings },
 ];
 
+const QUICK_ACTIONS = [
+  "Draft a follow up message",
+  "Recommendation",
+  "Skyler's AI Analysis",
+  "Draft a follow up message",
+];
+
 // ── Main Component ───────────────────────────────────────────────────────────
 
 export function SkylerClient({
@@ -290,14 +209,70 @@ export function SkylerClient({
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkflowTab>("lead-qualification");
   const [leadQualEnabled, setLeadQualEnabled] = useState(true);
-  const [salesCloserEnabled, setSalesCloserEnabled] = useState(true);
+  const [salesCloserEnabled, setSalesCloserEnabled] = useState(false);
   const [activeLeadId, setActiveLeadId] = useState<string | null>(null);
   const [leadFilter, setLeadFilter] = useState<LeadFilter>("all");
   const [inputValue, setInputValue] = useState("");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const activeLead = PLACEHOLDER_LEADS.find((l) => l.id === activeLeadId) ?? null;
+  // Dashboard data from API
+  const [dashData, setDashData] = useState<DashboardData | null>(null);
+  const [integrationLogos, setIntegrationLogos] = useState<IntegrationLogo[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch dashboard data
+  const fetchDashboard = useCallback(async () => {
+    try {
+      const [dashRes, logosRes] = await Promise.all([
+        fetch(`/api/skyler/dashboard?workspaceId=${workspaceId}`),
+        fetch(`/api/integration-logos?workspaceId=${workspaceId}`),
+      ]);
+
+      if (dashRes.ok) {
+        const data = await dashRes.json();
+        setDashData(data);
+        setSalesCloserEnabled(data.salesCloserEnabled);
+      }
+
+      if (logosRes.ok) {
+        const data = await logosRes.json();
+        setIntegrationLogos(data.logos ?? []);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, [workspaceId]);
+
+  useEffect(() => {
+    fetchDashboard();
+  }, [fetchDashboard]);
+
+  // Toggle sales closer and persist to DB
+  async function handleSalesCloserToggle() {
+    const newValue = !salesCloserEnabled;
+    setSalesCloserEnabled(newValue);
+
+    await fetch("/api/skyler/dashboard", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workspaceId, salesCloserEnabled: newValue }),
+    });
+  }
+
+  const leads = dashData?.leads ?? [];
+  const stats = dashData?.stats ?? { qualificationRate: 0, hotLeads: 0, nurtureQueue: 0, disqualified: 0 };
+
+  // Filter leads based on selected tab
+  const filteredLeads = leads.filter((lead) => {
+    if (leadFilter === "all") return true;
+    if (leadFilter === "hot") return lead.priority === "High";
+    if (leadFilter === "nurture") return lead.priority === "Medium" || lead.priority === "Low";
+    if (leadFilter === "disqualified") return false; // Disqualified deals are Closed Lost, not in open leads
+    return true;
+  });
+
+  const activeLead = leads.find((l) => l.id === activeLeadId) ?? null;
 
   function handlePrompt(company: string) {
     setInputValue(`Tell me about ${company}`);
@@ -420,17 +395,11 @@ export function SkylerClient({
             />
           </div>
 
-          {/* Right: 156K badge, bell, user */}
+          {/* Right: bell, user */}
           <div className="flex items-center gap-4">
-            {/* 156K badge */}
-            <div className="w-10 h-10 rounded-full border-2 border-[#4ADE80] flex items-center justify-center">
-              <span className="text-[#4ADE80] text-[10px] font-bold">156K</span>
-            </div>
-
             {/* Bell */}
             <div className="relative">
               <Bell className="w-5 h-5 text-[#8B8F97]" />
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-[#3A89FF] rounded-full text-[9px] text-white flex items-center justify-center font-bold">3</span>
             </div>
 
             {/* User avatar */}
@@ -492,27 +461,27 @@ export function SkylerClient({
                   Automatically qualifies incoming leads using sales-specific criteria and routes them appropriately
                 </p>
               </div>
-              {/* Connected integrations icons */}
+              {/* Connected integrations icons — real logos */}
               <div className="flex items-center gap-2 flex-shrink-0 ml-4">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#833AB4] via-[#FD1D1D] to-[#FCB045] flex items-center justify-center">
-                  <span className="text-white text-[10px] font-bold">IG</span>
-                </div>
-                <div className="w-8 h-8 rounded-full bg-[#0F9D58] flex items-center justify-center">
-                  <span className="text-white text-[10px] font-bold">GD</span>
-                </div>
-                <div className="w-8 h-8 rounded-full bg-[#FF7A59] flex items-center justify-center">
-                  <span className="text-white text-[10px] font-bold">HS</span>
-                </div>
+                {integrationLogos.length > 0 ? (
+                  integrationLogos.map((logo) => (
+                    <div key={logo.provider} className="w-8 h-8 rounded-full overflow-hidden bg-[#2A2D35] flex items-center justify-center">
+                      <Image src={logo.logoUrl} alt={logo.provider} width={32} height={32} />
+                    </div>
+                  ))
+                ) : (
+                  <span className="text-[#555A63] text-xs">No integrations connected</span>
+                )}
               </div>
             </div>
           </div>
 
           {/* Section 2: Stats Cards */}
           <div className="px-6 py-4 flex gap-4">
-            <StatCard label="Qualification Rate" value="35%" />
-            <StatCard label="Hot Leads" value="2" />
-            <StatCard label="Nurture Queue" value="12" />
-            <StatCard label="Disqualified" value="12" />
+            <StatCard label="Qualification Rate" value={loading ? "..." : `${stats.qualificationRate}%`} />
+            <StatCard label="Hot Leads" value={loading ? "..." : String(stats.hotLeads)} />
+            <StatCard label="Nurture Queue" value={loading ? "..." : String(stats.nurtureQueue)} />
+            <StatCard label="Disqualified" value={loading ? "..." : String(stats.disqualified)} />
           </div>
 
           {/* Section 3: Sales Closer Permission Bar */}
@@ -523,7 +492,7 @@ export function SkylerClient({
                 Skyler takes over the conversation handling questions, addressing objections, and booking demos.
               </span>
             </div>
-            <ToggleSwitch enabled={salesCloserEnabled} onToggle={() => setSalesCloserEnabled((v) => !v)} />
+            <ToggleSwitch enabled={salesCloserEnabled} onToggle={handleSalesCloserToggle} />
           </div>
 
           {/* Section 4: Two-column layout */}
@@ -572,15 +541,25 @@ export function SkylerClient({
 
               {/* Lead cards */}
               <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-                {PLACEHOLDER_LEADS.map((lead) => (
-                  <LeadCard
-                    key={lead.id}
-                    lead={lead}
-                    isActive={lead.id === activeLeadId}
-                    onClick={() => setActiveLeadId(lead.id)}
-                    onPrompt={() => handlePrompt(lead.company)}
-                  />
-                ))}
+                {loading ? (
+                  <p className="text-[#555A63] text-sm text-center py-8">Loading deals...</p>
+                ) : filteredLeads.length === 0 ? (
+                  <p className="text-[#555A63] text-sm text-center py-8">
+                    {leads.length === 0
+                      ? "No deals found. Connect HubSpot to import your pipeline."
+                      : "No leads match this filter."}
+                  </p>
+                ) : (
+                  filteredLeads.map((lead) => (
+                    <LeadCard
+                      key={lead.id}
+                      lead={lead}
+                      isActive={lead.id === activeLeadId}
+                      onClick={() => setActiveLeadId(lead.id)}
+                      onPrompt={() => handlePrompt(lead.company)}
+                    />
+                  ))
+                )}
               </div>
             </div>
 
@@ -590,27 +569,28 @@ export function SkylerClient({
               <div className="flex items-center justify-between px-5 py-3 border-b border-[#2A2520]">
                 <h3 className="text-white font-bold text-base">Chat with Skyler</h3>
                 <div className="flex items-center gap-2">
-                  {activeLead && (
-                    <button className="flex items-center gap-1.5 text-[#8B8F97] text-xs hover:text-white transition-colors">
-                      <Mail className="w-3.5 h-3.5" />
-                      Email Thread
-                    </button>
-                  )}
                   <button className="text-[#8B8F97] text-sm underline underline-offset-2 hover:text-white transition-colors">
                     Go to chat
                   </button>
                 </div>
               </div>
 
-              {/* Chat content */}
+              {/* Chat content — empty state */}
               <div className="flex-1 overflow-hidden">
-                {activeLead ? (
-                  <EmailThreadView emails={PLACEHOLDER_EMAILS} lead={activeLead} />
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <p className="text-[#555A63] text-sm">Select a lead to Prompt</p>
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <Image
+                      src="/skyler-icons/skyler-avatar.png"
+                      alt="Skyler"
+                      width={64}
+                      height={64}
+                      className="rounded-full mx-auto mb-4 opacity-40"
+                    />
+                    <p className="text-[#555A63] text-sm">
+                      Connect with Skyler to start managing your sales pipeline.
+                    </p>
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Quick actions */}

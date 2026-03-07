@@ -4,10 +4,20 @@ import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Nango from "@nangohq/frontend";
 import type { ConnectUIEvent } from "@nangohq/frontend";
+import Image from "next/image";
 import {
   connectIntegrationAction,
   disconnectIntegrationAction,
 } from "@/app/actions/integrations";
+
+const PROVIDER_LOGOS: Record<string, string> = {
+  hubspot: "/integration-logos/hubspot.svg",
+  slack: "/integration-logos/slack.svg",
+  "google-mail": "/integration-logos/gmail.svg",
+  outlook: "/integration-logos/outlook.svg",
+  "google-calendar": "/integration-logos/google-calendar.svg",
+  "google-drive": "/integration-logos/google-drive.svg",
+};
 
 type Integration = {
   id: string;
@@ -141,12 +151,16 @@ function IntegrationCard({
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0"
-            style={{ backgroundColor: config.color }}
-          >
-            {config.name[0]}
-          </div>
+          {PROVIDER_LOGOS[config.provider] ? (
+            <Image src={PROVIDER_LOGOS[config.provider]} alt={config.name} width={40} height={40} className="rounded-full flex-shrink-0" />
+          ) : (
+            <div
+              className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0"
+              style={{ backgroundColor: config.color }}
+            >
+              {config.name[0]}
+            </div>
+          )}
           <div>
             <div className="font-semibold text-white text-sm">{config.name}</div>
             <div className="text-xs text-[#8B8F97]">{config.category}</div>
@@ -206,12 +220,16 @@ function ComingSoonCard({ config }: { config: IntegrationConfig }) {
     <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl p-5 flex flex-col gap-4 opacity-50">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0"
-            style={{ backgroundColor: config.color }}
-          >
-            {config.name[0]}
-          </div>
+          {PROVIDER_LOGOS[config.provider] ? (
+            <Image src={PROVIDER_LOGOS[config.provider]} alt={config.name} width={40} height={40} className="rounded-full flex-shrink-0" />
+          ) : (
+            <div
+              className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-semibold flex-shrink-0"
+              style={{ backgroundColor: config.color }}
+            >
+              {config.name[0]}
+            </div>
+          )}
           <div>
             <div className="font-semibold text-white text-sm">{config.name}</div>
             <div className="text-xs text-[#8B8F97]">{config.category}</div>
