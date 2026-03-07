@@ -94,7 +94,7 @@ const PROVIDER_MODELS_MAP: Record<string, string[]> = {
   // build lookup maps, then fetched again here to store as searchable documents.
   slack:             ["SlackMessage", "SlackMessageReply", "SlackMessageReaction", "SlackChannel", "SlackUser"],
   "google-calendar": ["GoogleCalendarEvent"],
-  hubspot:           ["Company", "Contact", "CurrencyCode", "Deal", "HubspotKnowledgeBaseArticle", "HubspotOwner", "Product", "HubSpotServiceTicket", "Task", "User"],
+  hubspot:           ["Company", "Contact", "CurrencyCode", "Deal", "HubspotKnowledgeBaseArticle", "HubspotOwner", "Note", "Product", "HubSpotServiceTicket", "Task", "Ticket", "User"],
   "google-drive":    ["GoogleDriveFile"],
   outlook:           ["OutlookEmail", "OutlookCalendarEvent", "OutlookContact"],
 };
@@ -138,13 +138,15 @@ function normalizeRecord(
       case "Contact":                     return normalizeHubspotContact(raw);
       case "Company":                     return normalizeHubspotCompany(raw);
       case "Task":                        return normalizeHubspotTask(raw);
+      case "Ticket":                      return normalizeHubspotTicket(raw);
+      case "Note":                        return normalizeHubspotNote(raw);
       case "HubspotOwner":                return normalizeHubspotOwner(raw);
       case "Product":                     return normalizeHubspotProduct(raw);
       case "User":                        return normalizeHubspotUser(raw);
       case "HubspotKnowledgeBaseArticle": return normalizeHubspotKbArticle(raw);
       case "HubSpotServiceTicket":        return normalizeHubspotServiceTicket(raw);
       case "CurrencyCode":               return normalizeHubspotCurrency(raw);
-      default:                            return normalizeHubspot(raw);
+      default:                            return null;
     }
   }
   switch (provider) {

@@ -923,14 +923,15 @@ export function normalizeHubspotNote(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotOwner(raw: any): SyncRecord {
-  // Nango returns flat fields -- no sample data yet, read from top-level
-  const firstname = raw.firstName ?? raw.first_name ?? "";
-  const lastname = raw.lastName ?? raw.last_name ?? "";
+  // Nango returns: id, email, firstName, lastName, userId, createdAt, updatedAt, archived
+  const firstname = raw.firstName ?? "";
+  const lastname = raw.lastName ?? "";
   const name = [firstname, lastname].filter(Boolean).join(" ") || "Unknown Owner";
 
   const parts: string[] = [`[HubSpot Owner] Name: ${name}`];
   if (raw.email) parts.push(`Email: ${raw.email}`);
-  if (raw.teams) parts.push(`Teams: ${Array.isArray(raw.teams) ? raw.teams.map((t: any) => t.name ?? t).join(", ") : raw.teams}`);
+  if (raw.userId) parts.push(`User ID: ${raw.userId}`);
+  if (raw.createdAt) parts.push(`Created: ${raw.createdAt}`);
 
   const header = parts.join(" | ");
 
