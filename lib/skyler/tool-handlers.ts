@@ -251,6 +251,96 @@ async function getDefaultOwnerId(
   }
 }
 
+// ── HubSpot association type IDs ──────────────────────────────────────────────
+// Verified via /crm/v4/associations/{from}/{to}/labels
+
+const ASSOCIATION_TYPES = {
+  task_to_contact: 204,
+  task_to_company: 192,
+  task_to_deal: 216,
+  deal_to_contact: 3,
+  note_to_contact: 202,
+  note_to_deal: 214,
+  note_to_company: 190,
+} as const;
+
+// ── Create associations via Nango proxy (HubSpot v4 API) ─────────────────────
+
+async function createAssociations(
+  nango: InstanceType<typeof Nango>,
+  connectionId: string,
+  objectType: string,
+  objectId: string,
+  associations: Array<{ targetType: string; targetId: string; typeId: number }>
+): Promise<void> {
+  for (const assoc of associations) {
+    try {
+      await nango.proxy({
+        method: "PUT",
+        endpoint: `/crm/v4/objects/${objectType}/${objectId}/associations/${assoc.targetType}/${assoc.targetId}`,
+        providerConfigKey: "hubspot",
+        connectionId,
+        data: [{ associationCategory: "HUBSPOT_DEFINED", associationTypeId: assoc.typeId }],
+      });
+      console.log(`[skyler-tools] Associated ${objectType}/${objectId} → ${assoc.targetType}/${assoc.targetId} (type ${assoc.typeId})`);
+    } catch (err) {
+      console.error(`[skyler-tools] Association failed ${objectType}/${objectId} → ${assoc.targetType}/${assoc.targetId}:`,
+        err instanceof Error ? err.message : String(err));
+    }
+  }
+}
+
+// ── Build association list from tool input ────────────────────────────────────
+
+function buildAssociationsForTool(
+  toolName: string,
+  input: Record<string, unknown>
+): Array<{ targetType: string; targetId: string; typeId: number }> {
+  const assocs: Array<{ targetType: string; targetId: string; typeId: number }> = [];
+
+  if (toolName === "create_task" || toolName === "create_note") {
+    const prefix = toolName === "create_task" ? "task" : "note";
+    if (input.contact_id) {
+      assocs.push({
+        targetType: "contacts",
+        targetId: input.contact_id as string,
+        typeId: ASSOCIATION_TYPES[`${prefix}_to_contact` as keyof typeof ASSOCIATION_TYPES],
+      });
+    }
+    if (input.deal_id) {
+      assocs.push({
+        targetType: "deals",
+        targetId: input.deal_id as string,
+        typeId: ASSOCIATION_TYPES[`${prefix}_to_deal` as keyof typeof ASSOCIATION_TYPES],
+      });
+    }
+    if (toolName === "create_task" && input.company_id) {
+      assocs.push({
+        targetType: "companies",
+        targetId: input.company_id as string,
+        typeId: ASSOCIATION_TYPES.task_to_company,
+      });
+    }
+    if (toolName === "create_note" && input.company_id) {
+      assocs.push({
+        targetType: "companies",
+        targetId: input.company_id as string,
+        typeId: ASSOCIATION_TYPES.note_to_company,
+      });
+    }
+  } else if (toolName === "create_deal") {
+    if (input.contact_id) {
+      assocs.push({
+        targetType: "contacts",
+        targetId: input.contact_id as string,
+        typeId: ASSOCIATION_TYPES.deal_to_contact,
+      });
+    }
+  }
+
+  return assocs;
+}
+
 // ── Execute a write tool via Nango ───────────────────────────────────────────
 
 async function executeViaNango(
@@ -266,7 +356,6 @@ async function executeViaNango(
   try {
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-    // Build context for deal tools: resolve stage label → ID and get default owner
     // Build context: resolve stage IDs and owner for deals and tasks
     let context: { stageId?: string; ownerId?: string } | undefined;
     if (toolName === "create_deal" || toolName === "update_deal") {
@@ -297,6 +386,22 @@ async function executeViaNango(
     );
 
     console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
+
+    // Post-creation: associate with contacts/companies/deals via HubSpot v4 API
+    const createdId = (result as Record<string, unknown>)?.id as string | undefined;
+    if (createdId) {
+      const associations = buildAssociationsForTool(toolName, input);
+      if (associations.length > 0) {
+        const objectType = toolName.includes("task") ? "tasks"
+          : toolName.includes("note") ? "notes"
+          : toolName.includes("deal") ? "deals"
+          : null;
+        if (objectType) {
+          await createAssociations(nango, connectionId, objectType, createdId, associations);
+        }
+      }
+    }
+
     return { success: true, result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
