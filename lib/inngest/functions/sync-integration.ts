@@ -331,7 +331,38 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1e: Fetch + normalise all records from Nango ───────────────
+      // ── Step 1e (HubSpot only): fetch account currency and save to workspace settings ──
+      if (provider === "hubspot") {
+        await step.run("fetch-hubspot-account-currency", async () => {
+          const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+          try {
+            const accountInfo = await nango.triggerAction("hubspot", connectionId, "fetch-account-information", {});
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const companyCurrency = (accountInfo as any)?.companyCurrency as string | undefined;
+            if (companyCurrency) {
+              const supabase = createAdminSupabaseClient();
+              const { data: ws } = await supabase
+                .from("workspaces")
+                .select("settings")
+                .eq("id", workspaceId)
+                .single();
+              const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+              // Only set if no currency is configured yet (don't override manual setting)
+              if (!settings.currency) {
+                settings.currency = companyCurrency;
+                await supabase.from("workspaces").update({ settings }).eq("id", workspaceId);
+                console.log(`[inngest] Saved HubSpot account currency ${companyCurrency} to workspace settings`);
+              } else {
+                console.log(`[inngest] Workspace already has currency=${settings.currency}, keeping it`);
+              }
+            }
+          } catch (err) {
+            console.warn("[inngest] fetch-account-information failed:", err instanceof Error ? err.message : String(err));
+          }
+        });
+      }
+
+      // ── Step 1f: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {

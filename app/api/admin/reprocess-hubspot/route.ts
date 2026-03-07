@@ -93,7 +93,7 @@ export async function POST(req: Request) {
     }
     log(`Owner map: ${Object.keys(ownerMap).length} owners`);
 
-    // Step 2: Build stage map
+    // Step 2: Build stage map + fetch account currency
     const stageMap: Record<string, string> = {};
     try {
       const result = await nango.triggerAction("hubspot", connectionId, "fetch-pipelines", {});
@@ -108,6 +108,33 @@ export async function POST(req: Request) {
       log("fetch-pipelines failed — stages will use IDs");
     }
     log(`Stage map: ${Object.keys(stageMap).length} stages`);
+
+    // Fetch HubSpot account info to get companyCurrency and save to workspace settings
+    try {
+      const accountInfo = await nango.triggerAction("hubspot", connectionId, "fetch-account-information", {});
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const companyCurrency = (accountInfo as any)?.companyCurrency as string | undefined;
+      if (companyCurrency) {
+        log(`HubSpot account currency: ${companyCurrency}`);
+        // Read current workspace settings, set currency if not already manually overridden
+        const { data: ws } = await supabase
+          .from("workspaces")
+          .select("settings")
+          .eq("id", WORKSPACE_ID)
+          .single();
+        const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+        // Only set if no currency is configured yet (don't override manual setting)
+        if (!settings.currency) {
+          settings.currency = companyCurrency;
+          await supabase.from("workspaces").update({ settings }).eq("id", WORKSPACE_ID);
+          log(`Saved currency ${companyCurrency} to workspace settings`);
+        } else {
+          log(`Workspace already has currency=${settings.currency}, keeping it`);
+        }
+      }
+    } catch (err) {
+      log(`fetch-account-information failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     // Step 3: Fetch all records from Nango, normalize, and update
     let totalProcessed = 0;

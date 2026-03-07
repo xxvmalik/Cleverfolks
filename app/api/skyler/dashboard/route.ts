@@ -92,7 +92,6 @@ export async function GET(req: NextRequest) {
       status: (m.status as string) ?? "",
       amount: (m.amount as string) ?? "",
       probability: (m.probability as string) ?? "",
-      currency_code: (m.currency_code as string) ?? "",
       close_date: (m.close_date as string) ?? "",
       owner: (m.owner as string) ?? "",
       chunk_text: c.chunk_text,
@@ -135,14 +134,8 @@ export async function GET(req: NextRequest) {
     const priority: "High" | "Medium" | "Low" =
       probNum >= thresholds.high ? "High" : probNum >= thresholds.medium ? "Medium" : "Low";
 
-    // Resolve currency: deal metadata → chunk_text → workspace setting → no symbol
-    let dealCurrency = d.currency_code;
-    if (!dealCurrency && d.chunk_text) {
-      const currMatch = d.chunk_text.match(/Currency:\s*([A-Z]{3})/i);
-      if (currMatch) dealCurrency = currMatch[1].toUpperCase();
-    }
-    dealCurrency = dealCurrency || workspaceCurrency;
-    const symbol = getCurrencySymbol(dealCurrency);
+    // Currency comes from workspace settings (set automatically from HubSpot account info during sync)
+    const symbol = getCurrencySymbol(workspaceCurrency);
 
     // Format amount with currency
     const amountNum = parseFloat(d.amount) || 0;
