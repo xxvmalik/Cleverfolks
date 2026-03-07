@@ -206,13 +206,33 @@ export async function POST(request: NextRequest) {
   const salesCloserEnabled = wsSettings.skyler_sales_closer === true;
   const autonomyLevel = salesCloserEnabled ? "full" as const : "approval_required" as const;
 
+  // Fetch pending actions for this conversation (for natural language approval)
+  let pendingActions: Array<{ id: string; description: string }> = [];
+  if (inputConversationId) {
+    const { data: pendingRows } = await db
+      .from("skyler_actions")
+      .select("id, description")
+      .eq("conversation_id", inputConversationId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(10);
+    pendingActions = (pendingRows ?? []).map((r: { id: string; description: string }) => ({
+      id: r.id,
+      description: r.description,
+    }));
+    if (pendingActions.length > 0) {
+      console.log(`[skyler-chat] ${pendingActions.length} pending actions for conversation`);
+    }
+  }
+
   const systemPrompt = buildSkylerSystemPrompt(
     workspaceRow as WorkspaceRow | null,
     onboardingRow as OnboardingRow | null,
     profileRow as KnowledgeProfileRow | null,
     integrationManifest,
     memories,
-    autonomyLevel
+    autonomyLevel,
+    pendingActions
   );
 
   let conversationId: string | null = inputConversationId ?? null;

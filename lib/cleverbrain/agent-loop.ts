@@ -12,7 +12,9 @@ type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
 
 export type SSEEvent =
   | { type: "activity"; action: string }
-  | { type: "text"; text: string };
+  | { type: "text"; text: string }
+  | { type: "action_pending"; actionId: string; description: string }
+  | { type: "action_executed"; actionId: string; description: string };
 
 export type AgentLoopParams = {
   message: string;
@@ -126,6 +128,10 @@ function generateActivityLabel(
       return "Creating task in CRM...";
     case "create_note":
       return "Creating note in CRM...";
+    case "execute_pending_action":
+      return "Executing approved action...";
+    case "reject_pending_action":
+      return "Cancelling action...";
     default:
       return "Processing...";
   }
@@ -472,6 +478,16 @@ export async function runAgentLoop(
         toolUse.name,
         handlerResult
       );
+
+      // Emit SSE events for pending/executed actions so the client can render approval UI
+      const pendingMatch = handlerResult.summary.match(/\[ACTION_PENDING:([0-9a-f-]+)\]\s*(.+)/);
+      if (pendingMatch) {
+        onEvent({ type: "action_pending", actionId: pendingMatch[1], description: pendingMatch[2].split("\n")[0].trim() });
+      }
+      const executedMatch = handlerResult.summary.match(/\[ACTION_EXECUTED\]\s*(.+)/);
+      if (executedMatch) {
+        onEvent({ type: "action_executed", actionId: toolUse.id, description: executedMatch[1].split("\n")[0].trim() });
+      }
 
       toolResults.push({
         type: "tool_result",

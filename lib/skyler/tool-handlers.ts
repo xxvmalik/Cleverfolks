@@ -8,7 +8,7 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
@@ -222,6 +222,47 @@ async function getHubSpotConnectionId(
   return data?.nango_connection_id ?? null;
 }
 
+// ── Handle execute/reject pending action tools ───────────────────────────
+
+async function handleActionTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const actionId = input.action_id as string;
+  if (!actionId) {
+    return { results: [], summary: "Missing action_id parameter." };
+  }
+
+  if (toolName === "execute_pending_action") {
+    const result = await executeApprovedAction(actionId, adminSupabase);
+    if (!result.success) {
+      return { results: [], summary: `Failed to execute action: ${result.error}` };
+    }
+    // Fetch the action description for the confirmation message
+    const { data: action } = await adminSupabase
+      .from("skyler_actions")
+      .select("description")
+      .eq("id", actionId)
+      .single();
+    const desc = action?.description ?? "action";
+    return {
+      results: [],
+      summary: `[ACTION_EXECUTED] ${desc}\n\nAction executed successfully.`,
+    };
+  }
+
+  if (toolName === "reject_pending_action") {
+    const result = await rejectAction(actionId, adminSupabase);
+    if (!result.success) {
+      return { results: [], summary: `Failed to reject action: ${result.error}` };
+    }
+    return { results: [], summary: "Action rejected and cancelled." };
+  }
+
+  return { results: [], summary: `Unknown action tool: ${toolName}` };
+}
+
 // ── Main dispatcher with autonomy enforcement ────────────────────────────────
 
 export async function executeSkylerToolCall(
@@ -233,6 +274,11 @@ export async function executeSkylerToolCall(
   conversationId?: string,
   userId?: string
 ): Promise<ToolHandlerResult> {
+  // ── Action management tools: execute/reject pending actions ──────────
+  if (SKYLER_ACTION_TOOL_NAMES.has(toolName)) {
+    return handleActionTool(toolName, input, adminSupabase);
+  }
+
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──
   if (!SKYLER_WRITE_TOOL_NAMES.has(toolName)) {
     return executeReadToolCall(toolName, input, workspaceId, adminSupabase);

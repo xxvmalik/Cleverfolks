@@ -191,31 +191,12 @@ const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "workflows-settings", label: "Workflows Settings", icon: Settings },
 ];
 
-// ── Action tag parser ─────────────────────────────────────────────────────────
+// ── Action types ──────────────────────────────────────────────────────────────
 
-const ACTION_PENDING_RE = /\[ACTION_PENDING:([0-9a-f-]+)\]\s*/gi;
-const ACTION_EXECUTED_RE = /\[ACTION_EXECUTED\]\s*/gi;
-
-function parseActionTags(content: string): { cleanContent: string; pendingActions: Array<{ id: string; description: string }> } {
-  const pendingActions: Array<{ id: string; description: string }> = [];
-  let clean = content;
-
-  // Extract pending action IDs and descriptions
-  let match: RegExpExecArray | null;
-  ACTION_PENDING_RE.lastIndex = 0;
-  while ((match = ACTION_PENDING_RE.exec(content)) !== null) {
-    const actionId = match[1];
-    // The description follows the tag until the next newline
-    const afterTag = content.slice(match.index + match[0].length);
-    const descLine = afterTag.split("\n")[0]?.trim() ?? "";
-    pendingActions.push({ id: actionId, description: descLine });
-  }
-
-  // Strip tags from display text
-  clean = clean.replace(ACTION_PENDING_RE, "");
-  clean = clean.replace(ACTION_EXECUTED_RE, "");
-  return { cleanContent: clean.trim(), pendingActions };
-}
+type PendingAction = {
+  id: string;
+  description: string;
+};
 
 const QUICK_ACTIONS = [
   "How's our pipeline looking?",
@@ -260,6 +241,10 @@ export function SkylerClient({
   const [isStreaming, setIsStreaming] = useState(false);
   const [activityLabel, setActivityLabel] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
+  // Map of messageId -> pending actions that arrived during that message's stream
+  const [messageActions, setMessageActions] = useState<Record<string, PendingAction[]>>({});
+  // Accumulator for actions arriving during the current stream
+  const pendingActionsRef = useRef<PendingAction[]>([]);
 
   // Fetch dashboard data
   const fetchDashboard = useCallback(async () => {
@@ -336,6 +321,7 @@ export function SkylerClient({
     setIsStreaming(true);
     setActivityLabel("Thinking...");
     setStreamingContent("");
+    pendingActionsRef.current = [];
 
     try {
       const res = await fetch("/api/skyler/chat", {
@@ -376,18 +362,32 @@ export function SkylerClient({
               accumulatedText += event.text;
               setStreamingContent(accumulatedText);
               setActivityLabel(null);
+            } else if (event.type === "action_pending") {
+              pendingActionsRef.current.push({
+                id: event.actionId,
+                description: event.description,
+              });
             } else if (event.type === "metadata") {
               if (event.conversationId && !activeConversationId) {
                 setActiveConversationId(event.conversationId);
               }
             } else if (event.type === "done") {
               // Finalize the assistant message
+              const msgId = `assistant-${Date.now()}`;
               const assistantMsg: ChatMessage = {
-                id: `assistant-${Date.now()}`,
+                id: msgId,
                 role: "assistant",
                 content: accumulatedText,
               };
               setChatMessages((prev) => [...prev, assistantMsg]);
+              // Associate any pending actions with this message
+              if (pendingActionsRef.current.length > 0) {
+                setMessageActions((prev) => ({
+                  ...prev,
+                  [msgId]: [...pendingActionsRef.current],
+                }));
+                pendingActionsRef.current = [];
+              }
               setStreamingContent("");
               setActivityLabel(null);
               // Refresh conversation list
@@ -427,6 +427,7 @@ export function SkylerClient({
     setChatMessages([]);
     setStreamingContent("");
     setActivityLabel(null);
+    setMessageActions({});
     setTimeout(() => textareaRef.current?.focus(), 50);
   }
 
@@ -435,6 +436,7 @@ export function SkylerClient({
     setActiveConversationId(convId);
     setChatMessages([]);
     setStreamingContent("");
+    setMessageActions({});
     try {
       const res = await fetch(`/api/skyler/conversations/${convId}/messages`);
       if (res.ok) {
@@ -794,10 +796,7 @@ export function SkylerClient({
                 ) : (
                   <div className="space-y-4">
                     {chatMessages.map((msg) => {
-                      const { cleanContent, pendingActions } =
-                        msg.role === "assistant"
-                          ? parseActionTags(msg.content)
-                          : { cleanContent: msg.content, pendingActions: [] };
+                      const actions = messageActions[msg.id] ?? [];
 
                       return (
                         <div key={msg.id}>
@@ -822,15 +821,15 @@ export function SkylerClient({
                               )}
                             >
                               {msg.role === "assistant" ? (
-                                <MarkdownRenderer content={cleanContent} />
+                                <MarkdownRenderer content={msg.content} />
                               ) : (
                                 <div className="whitespace-pre-wrap">{msg.content}</div>
                               )}
                             </div>
                           </div>
-                          {pendingActions.length > 0 && (
+                          {actions.length > 0 && (
                             <div className="ml-10 mt-2 space-y-2">
-                              {pendingActions.map((pa) => (
+                              {actions.map((pa) => (
                                 <ActionApproval
                                   key={pa.id}
                                   actionId={pa.id}

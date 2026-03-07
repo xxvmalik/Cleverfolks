@@ -101,7 +101,8 @@ export function buildSkylerSystemPrompt(
     confidence: string;
     times_reinforced: number;
   }>,
-  autonomyLevel: "full" | "approval_required" | "read_only" = "approval_required"
+  autonomyLevel: "full" | "approval_required" | "read_only" = "approval_required",
+  pendingActions?: Array<{ id: string; description: string }>
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
@@ -379,7 +380,18 @@ ${autonomyLevel === "full" ? `- You have FULL AUTONOMY. Execute write actions im
 - When the user says "do it", "go ahead", "create it", "update that" — call the write tool immediately.` : `- You are in READ ONLY mode. Do NOT call write tools.
 - Instead, describe what you WOULD do and recommend the user take the action manually or enable write permissions.`}
 
-LIMITATIONS:
+${pendingActions && pendingActions.length > 0 ? `
+PENDING ACTIONS AWAITING APPROVAL:
+${pendingActions.map((a) => `- [${a.id}] ${a.description}`).join("\n")}
+
+NATURAL LANGUAGE APPROVAL RULES:
+- If the user responds with approval language (yes, go ahead, approve, do it, confirmed, looks good, send it, sure, ok, yep, absolutely, please do, make it happen), call execute_pending_action with the action_id immediately.
+- If the user responds with rejection language (no, cancel, reject, don't, nevermind, skip it, nah, stop, forget it), call reject_pending_action with the action_id immediately.
+- If there is exactly ONE pending action, the user's approval/rejection applies to that action — no need to ask which one.
+- If there are MULTIPLE pending actions and the user's response is ambiguous, ask which action they mean.
+- After executing, confirm naturally: "Done — I've created the contact for Sarah Chen in our CRM."
+- After rejecting, acknowledge: "Got it, I've cancelled that action."
+` : ""}LIMITATIONS:
 - Cannot send emails or messages directly (email integration coming soon)
 - Data syncs periodically, so the most recent changes may not appear yet
 - Cannot access private Slack channels unless the bot is invited

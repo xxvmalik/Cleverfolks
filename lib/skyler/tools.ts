@@ -164,13 +164,47 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── Action management tools (approve/reject pending actions via natural language) ──
+
+const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "execute_pending_action",
+    description:
+      "Execute a previously drafted action that is awaiting user approval. Call this when the user approves a pending action with phrases like 'yes', 'go ahead', 'approve', 'do it', 'confirmed', 'looks good', 'send it', etc.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action_id: { type: "string", description: "The UUID of the pending action to execute" },
+      },
+      required: ["action_id"],
+    },
+  },
+  {
+    name: "reject_pending_action",
+    description:
+      "Reject/cancel a previously drafted action. Call this when the user rejects a pending action with phrases like 'no', 'cancel', 'reject', 'don't', 'nevermind', 'skip it', etc.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        action_id: { type: "string", description: "The UUID of the pending action to reject" },
+      },
+      required: ["action_id"],
+    },
+  },
+];
+
 // ── Export combined set ──────────────────────────────────────────────────────
 
 export const SKYLER_WRITE_TOOL_NAMES = new Set(
   SKYLER_WRITE_TOOLS.map((t) => t.name)
 );
 
+export const SKYLER_ACTION_TOOL_NAMES = new Set(
+  SKYLER_ACTION_TOOLS.map((t) => t.name)
+);
+
 export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_READ_TOOLS,
   ...SKYLER_WRITE_TOOLS,
+  ...SKYLER_ACTION_TOOLS,
 ];
