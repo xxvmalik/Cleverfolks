@@ -791,8 +791,7 @@ export function normalizeHubspotCompany(raw: any): SyncRecord {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function normalizeHubspotDeal(raw: any): SyncRecord {
-  console.log(`[hubspot-normalizer] Deal record keys: ${Object.keys(raw).join(', ')}`);
-  console.log(`[hubspot-normalizer] Deal record: ${JSON.stringify(raw).slice(0, 500)}`);
+  console.log('[hubspot-normalizer] RAW DEAL RECORD:', JSON.stringify(raw, null, 2).slice(0, 1000));
   const props = raw.properties ?? {};
   const dealname = props.dealname ?? "Untitled Deal";
 
