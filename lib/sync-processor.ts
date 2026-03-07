@@ -785,16 +785,27 @@ export function normalizeHubspotCompany(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotDeal(raw: any): SyncRecord {
+export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>): SyncRecord {
   // Nango returns flat fields: name, amount, deal_stage, close_date, deal_description, owner, deal_probability, returned_associations
   const dealname = raw.name ?? "Untitled Deal";
 
+  // Resolve numeric stage ID to human-readable label
+  const stageId = raw.deal_stage ?? "";
+  const stageName = stageMap?.[stageId] ?? stageId;
+  const prob = parseFloat(raw.deal_probability ?? "");
+  const probPct = !isNaN(prob) ? `${Math.round(prob * 100)}%` : "";
+
+  // Determine open/closed status from stage name or probability
+  const isClosed = /^closed/i.test(stageName);
+  const status = isClosed ? "Closed" : "Open";
+
   const parts: string[] = [`[HubSpot Deal] Name: ${dealname}`];
-  if (raw.deal_stage) parts.push(`Stage: ${raw.deal_stage}`);
+  if (stageName) parts.push(`Stage: ${stageName}`);
+  parts.push(`Status: ${status}`);
+  if (probPct) parts.push(`Probability: ${probPct}`);
   if (raw.amount) parts.push(`Amount: ${raw.amount}`);
   if (raw.close_date) parts.push(`Close Date: ${raw.close_date}`);
   if (raw.owner) parts.push(`Owner: ${raw.owner}`);
-  if (raw.deal_probability) parts.push(`Probability: ${raw.deal_probability}`);
 
   // Include associated contacts/companies in chunk_text so Claude can see them
   const assoc = raw.returned_associations;
@@ -818,7 +829,9 @@ export function normalizeHubspotDeal(raw: any): SyncRecord {
     metadata: {
       source_type: "hubspot_deal",
       deal_name: dealname,
-      stage: raw.deal_stage ?? undefined,
+      stage: stageName || undefined,
+      stage_id: stageId || undefined,
+      status,
       amount: raw.amount ?? undefined,
       close_date: raw.close_date ?? undefined,
       owner_id: raw.owner ?? undefined,

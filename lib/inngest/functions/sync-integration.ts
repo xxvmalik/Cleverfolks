@@ -105,7 +105,8 @@ function normalizeRecord(
   model: string,
   raw: any,
   lookups?: SlackLookups,
-  gmailContacts?: Record<string, string>
+  gmailContacts?: Record<string, string>,
+  hubspotStageMap?: Record<string, string>
 ): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
@@ -134,7 +135,7 @@ function normalizeRecord(
   }
   if (provider === "hubspot") {
     switch (model) {
-      case "Deal":                        return normalizeHubspotDeal(raw);
+      case "Deal":                        return normalizeHubspotDeal(raw, hubspotStageMap);
       case "Contact":                     return normalizeHubspotContact(raw);
       case "Company":                     return normalizeHubspotCompany(raw);
       case "Task":                        return normalizeHubspotTask(raw);
@@ -270,7 +271,33 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1c: Fetch + normalise all records from Nango ───────────────
+      // ── Step 1c (HubSpot only): pre-fetch pipeline stages for deal stage ID resolution ──
+      const hubspotStageMap: Record<string, string> | null =
+        provider === "hubspot"
+          ? await step.run("build-hubspot-stage-map", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              try {
+                const result = await nango.triggerAction("hubspot", connectionId, "fetch-pipelines", {});
+                const map: Record<string, string> = {};
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                for (const pipeline of (result as any)?.pipelines ?? []) {
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  for (const stage of pipeline.stages ?? []) {
+                    if (stage.id && stage.label) {
+                      map[stage.id] = stage.label;
+                    }
+                  }
+                }
+                console.log(`[inngest] HubSpot stage map built — ${Object.keys(map).length} stages`);
+                return map;
+              } catch (err) {
+                console.warn("[inngest] fetch-pipelines failed, deal stages will use IDs:", err instanceof Error ? err.message : String(err));
+                return {};
+              }
+            })
+          : null;
+
+      // ── Step 1d: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {
@@ -338,7 +365,8 @@ export const syncIntegrationFunction = inngest.createFunction(
                   model,
                   raw,
                   lookupsForRecord,
-                  gmailContactMap ?? undefined
+                  gmailContactMap ?? undefined,
+                  hubspotStageMap ?? undefined
                 );
                 if (rec) {
                   // Debug: log first 3 records from any google-mail model so we
