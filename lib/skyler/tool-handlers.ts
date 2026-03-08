@@ -79,6 +79,8 @@ function buildNangoPayload(
         website_url: input.domain,
         industry: typeof input.industry === "string" && input.industry.includes("_") ? input.industry : undefined,
         description: input.description,
+        city: input.city,
+        country: input.country,
       };
     case "create_deal": {
       // Format close_date as midnight UTC (HubSpot expects this format)
@@ -159,29 +161,109 @@ function buildNangoPayload(
 
 // ── Human-readable action summary ────────────────────────────────────────────
 
+/** Convert SCREAMING_SNAKE_CASE to Title Case */
+function humanizeEnum(value: string): string {
+  return value
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
+const FIELD_LABELS: Record<string, string> = {
+  first_name: "First Name",
+  last_name: "Last Name",
+  email: "Email",
+  phone: "Phone",
+  company: "Company",
+  job_title: "Job Title",
+  domain: "Website",
+  industry: "Industry",
+  description: "Description",
+  city: "City",
+  country: "Country",
+  deal_name: "Deal Name",
+  amount: "Amount",
+  stage: "Stage",
+  close_date: "Close Date",
+  notes: "Notes",
+  subject: "Subject",
+  body: "Details",
+  due_date: "Due Date",
+  priority: "Priority",
+  name: "Name",
+};
+
+/** IDs and internal fields to exclude from descriptions */
+const HIDDEN_FIELDS = new Set([
+  "contact_id", "company_id", "deal_id", "pipeline",
+]);
+
+function formatFieldsHuman(input: Record<string, unknown>, excludeKeys: string[] = []): string {
+  const exclude = new Set([...excludeKeys, ...HIDDEN_FIELDS]);
+  return Object.entries(input)
+    .filter(([k, v]) => !exclude.has(k) && v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => {
+      const label = FIELD_LABELS[k] ?? humanizeEnum(k);
+      let val = String(v);
+      // Humanize enum values (SCREAMING_SNAKE)
+      if (typeof v === "string" && v.includes("_") && v === v.toUpperCase()) {
+        val = humanizeEnum(v);
+      }
+      return `${label}: ${val}`;
+    })
+    .join(", ");
+}
+
 function describeAction(
   toolName: string,
   input: Record<string, unknown>
 ): string {
   switch (toolName) {
-    case "create_contact":
-      return `Create contact: ${input.first_name} ${input.last_name}${input.email ? ` (${input.email})` : ""}${input.company ? ` at ${input.company}` : ""}`;
-    case "update_contact":
-      return `Update contact ${input.contact_id}: ${Object.entries(input).filter(([k]) => k !== "contact_id").map(([k, v]) => `${k}=${v}`).join(", ")}`;
-    case "create_company":
-      return `Create company: ${input.name}${input.domain ? ` (${input.domain})` : ""}`;
-    case "update_company":
-      return `Update company ${input.company_id}: ${Object.entries(input).filter(([k]) => k !== "company_id").map(([k, v]) => `${k}=${v}`).join(", ")}`;
-    case "create_deal":
-      return `Create deal: ${input.deal_name}${input.amount ? ` — ${input.amount}` : ""}${input.stage ? ` in ${input.stage}` : ""}`;
-    case "update_deal":
-      return `Update deal ${input.deal_id}: ${Object.entries(input).filter(([k]) => k !== "deal_id").map(([k, v]) => `${k}=${v}`).join(", ")}`;
-    case "create_task":
-      return `Create task: ${input.subject}${input.due_date ? ` (due ${input.due_date})` : ""}`;
+    case "create_contact": {
+      const name = [input.first_name, input.last_name].filter(Boolean).join(" ");
+      const extras: string[] = [];
+      if (input.email) extras.push(String(input.email));
+      if (input.company) extras.push(`at ${input.company}`);
+      return `Create contact: ${name}${extras.length ? ` (${extras.join(", ")})` : ""}`;
+    }
+    case "update_contact": {
+      const name = [input.first_name, input.last_name].filter(Boolean).join(" ");
+      const label = name || `Contact #${input.contact_id}`;
+      const fields = formatFieldsHuman(input, ["first_name", "last_name"]);
+      return `Update ${label}${fields ? ` — ${fields}` : ""}`;
+    }
+    case "create_company": {
+      const extras: string[] = [];
+      if (input.domain) extras.push(String(input.domain));
+      if (input.city) extras.push(String(input.city));
+      return `Create company: ${input.name}${extras.length ? ` (${extras.join(", ")})` : ""}`;
+    }
+    case "update_company": {
+      const label = input.name ? String(input.name) : `Company #${input.company_id}`;
+      const fields = formatFieldsHuman(input, ["name"]);
+      return `Update ${label}${fields ? ` — ${fields}` : ""}`;
+    }
+    case "create_deal": {
+      const extras: string[] = [];
+      if (input.amount) extras.push(`$${input.amount}`);
+      if (input.stage) extras.push(String(input.stage));
+      return `Create deal: ${input.deal_name}${extras.length ? ` (${extras.join(", ")})` : ""}`;
+    }
+    case "update_deal": {
+      const label = input.deal_name ? String(input.deal_name) : `Deal #${input.deal_id}`;
+      const fields = formatFieldsHuman(input, ["deal_name"]);
+      return `Update ${label}${fields ? ` — ${fields}` : ""}`;
+    }
+    case "create_task": {
+      const extras: string[] = [];
+      if (input.due_date) extras.push(`due ${input.due_date}`);
+      if (input.priority) extras.push(String(input.priority));
+      return `Create task: ${input.subject}${extras.length ? ` (${extras.join(", ")})` : ""}`;
+    }
     case "create_note":
-      return `Create note: ${(input.body as string)?.slice(0, 80)}...`;
+      return `Create note: ${(input.body as string)?.slice(0, 100)}`;
     default:
-      return `${toolName}: ${JSON.stringify(input).slice(0, 120)}`;
+      return `${humanizeEnum(toolName.replace(/_/g, " "))}: ${formatFieldsHuman(input)}`;
   }
 }
 

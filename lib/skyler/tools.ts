@@ -79,16 +79,17 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
   {
     name: "update_company",
     description:
-      "Update an existing company in HubSpot CRM. Use when the user wants to change company details.",
+      "Update an existing company in HubSpot CRM. Use when the user wants to change company details. Search for the company first to get its HubSpot ID.",
     input_schema: {
       type: "object" as const,
       properties: {
-        company_id: { type: "string", description: "HubSpot company ID to update" },
+        company_id: { type: "string", description: "HubSpot company ID to update (from search results 'HubSpot ID:')" },
         name: { type: "string", description: "Updated company name" },
         domain: { type: "string", description: "Updated website domain" },
-        industry: { type: "string", description: "Updated industry" },
+        industry: { type: "string", description: "HubSpot industry enum (SCREAMING_SNAKE_CASE). Omit if unsure." },
         description: { type: "string", description: "Updated description" },
-        phone: { type: "string", description: "Updated phone number" },
+        city: { type: "string", description: "Updated city" },
+        country: { type: "string", description: "Updated country" },
       },
       required: ["company_id"],
     },
