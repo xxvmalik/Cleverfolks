@@ -478,15 +478,24 @@ async function executeViaNango(
       try {
         await nango.proxy({
           method: "PATCH",
+          baseUrlOverride: "https://api.hubapi.com",
           endpoint: `/crm/v3/objects/companies/${companyId}`,
           providerConfigKey: "hubspot",
           connectionId,
+          headers: { "Content-Type": "application/json" },
           data: { properties: { phone: input.phone as string } },
+          retries: 3,
         });
         console.log(`[skyler-tools] Set phone on company ${companyId} via proxy`);
-      } catch (err) {
+      } catch (err: unknown) {
+        // Log full error details for debugging
+        const errObj = err as { response?: { status?: number; data?: unknown }; message?: string };
         console.error(`[skyler-tools] Failed to set phone on company ${companyId}:`,
-          err instanceof Error ? err.message : String(err));
+          JSON.stringify({
+            status: errObj?.response?.status,
+            data: errObj?.response?.data,
+            message: errObj?.message ?? String(err),
+          }).slice(0, 500));
       }
     }
 
