@@ -6,18 +6,40 @@ import {
   DEFAULT_SCORING_THRESHOLDS,
 } from "@/lib/skyler/lead-scoring";
 
-export async function GET(req: NextRequest) {
-  const workspaceId = req.nextUrl.searchParams.get("workspaceId");
-  if (!workspaceId) {
-    return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
-  }
+async function resolveWorkspaceId(
+  req: NextRequest,
+  supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
+  userId: string,
+  source: "query" | "body",
+  body?: Record<string, unknown>
+): Promise<string | null> {
+  const fromParam =
+    source === "query"
+      ? req.nextUrl.searchParams.get("workspaceId")
+      : (body?.workspaceId as string | undefined) ?? null;
+  if (fromParam) return fromParam;
 
+  const { data: membership } = await supabase
+    .from("workspace_memberships")
+    .select("workspace_id")
+    .eq("user_id", userId)
+    .limit(1)
+    .single();
+  return membership?.workspace_id ?? null;
+}
+
+export async function GET(req: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const workspaceId = await resolveWorkspaceId(req, supabase, user.id, "query");
+  if (!workspaceId) {
+    return NextResponse.json({ error: "No workspace found" }, { status: 400 });
   }
 
   const adminDb = createAdminSupabaseClient();
@@ -41,11 +63,7 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   const body = await req.json();
-  const { workspaceId, dimensions, thresholds } = body;
-
-  if (!workspaceId) {
-    return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
-  }
+  const { dimensions, thresholds } = body;
 
   const supabase = await createServerSupabaseClient();
   const {
@@ -53,6 +71,11 @@ export async function PUT(req: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const workspaceId = await resolveWorkspaceId(req, supabase, user.id, "body", body);
+  if (!workspaceId) {
+    return NextResponse.json({ error: "No workspace found" }, { status: 400 });
   }
 
   const adminDb = createAdminSupabaseClient();

@@ -3,17 +3,27 @@ import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 export async function GET(req: NextRequest) {
-  const workspaceId = req.nextUrl.searchParams.get("workspaceId");
-  if (!workspaceId) {
-    return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
-  }
-
   const supabase = await createServerSupabaseClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Resolve workspace: optional query param, otherwise from user's membership
+  let workspaceId = req.nextUrl.searchParams.get("workspaceId");
+  if (!workspaceId) {
+    const { data: membership } = await supabase
+      .from("workspace_memberships")
+      .select("workspace_id")
+      .eq("user_id", user.id)
+      .limit(1)
+      .single();
+    workspaceId = membership?.workspace_id ?? null;
+  }
+  if (!workspaceId) {
+    return NextResponse.json({ error: "No workspace found" }, { status: 400 });
   }
 
   const classification = req.nextUrl.searchParams.get("classification") ?? "all";
