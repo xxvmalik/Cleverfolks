@@ -56,7 +56,7 @@ export async function GET(req: NextRequest) {
   const nurture = nurtureRes.count ?? 0;
   const disqualified = disqualifiedRes.count ?? 0;
   const total = totalRes.count ?? 0;
-  const qualificationRate = total > 0 ? Math.round((hot / total) * 100) : 0;
+  const qualificationRate = total > 0 ? Math.round(((hot + nurture) / total) * 100) : 0;
 
   return NextResponse.json({
     stats: {
