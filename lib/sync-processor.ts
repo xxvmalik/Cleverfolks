@@ -4,6 +4,7 @@ import { extractText } from "@/lib/file-processor";
 import { chunkText } from "@/lib/chunking";
 import { createEmbeddings } from "@/lib/embeddings";
 import { resolveSlackMentions } from "@/lib/slack-user-resolver";
+import { detectReferral } from "@/lib/sync/referral-detector";
 
 export type SyncRecord = {
   external_id: string;
@@ -80,6 +81,20 @@ export async function processSyncedData(
         console.log(`${label} skipped — empty content`);
         skipped++;
         continue;
+      }
+
+      // ── Step A2: Referral detection (emails only) ─────────────────────────
+      const isEmailType = record.source_type === "gmail_message" || record.source_type === "outlook_email";
+      if (isEmailType) {
+        const referral = await detectReferral(content);
+        if (referral.is_referral) {
+          record.metadata = {
+            ...(record.metadata ?? {}),
+            referral_detected: true,
+            referrer_name: referral.referrer_name ?? null,
+            referrer_company: referral.referrer_company ?? null,
+          };
+        }
       }
 
       // ── Step B: Upsert document ──────────────────────────────────────────

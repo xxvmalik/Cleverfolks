@@ -166,6 +166,50 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── Lead scoring tools ──────────────────────────────────────────────────────
+
+const SKYLER_LEAD_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "score_lead",
+    description:
+      "Score a contact/lead using the BANT framework (Budget, Authority, Need, Timeline). Analyses all synced data (emails, deals, company info) to produce a 0-100 score and classification (hot/nurture/disqualified). Use when the user asks to qualify, score, or assess a lead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: {
+          type: "string",
+          description: "HubSpot contact ID to score (from search results 'HubSpot ID:')",
+        },
+        force_rescore: {
+          type: "boolean",
+          description: "Force rescoring even if already scored. Default false.",
+        },
+      },
+      required: ["contact_id"],
+    },
+  },
+  {
+    name: "get_lead_scores",
+    description:
+      "Retrieve scored leads for the workspace. Returns lead scores with classification and dimension breakdowns. Use when the user asks about lead pipeline, hot leads, lead scores, or qualification status.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        classification: {
+          type: "string",
+          enum: ["hot", "nurture", "disqualified", "all"],
+          description: "Filter by classification. Default 'all'.",
+        },
+        limit: {
+          type: "number",
+          description: "Max number of leads to return. Default 20.",
+        },
+      },
+      required: [],
+    },
+  },
+];
+
 // ── Action management tools (approve/reject pending actions via natural language) ──
 
 const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
@@ -201,6 +245,10 @@ export const SKYLER_WRITE_TOOL_NAMES = new Set(
   SKYLER_WRITE_TOOLS.map((t) => t.name)
 );
 
+export const SKYLER_LEAD_TOOL_NAMES = new Set(
+  SKYLER_LEAD_TOOLS.map((t) => t.name)
+);
+
 export const SKYLER_ACTION_TOOL_NAMES = new Set(
   SKYLER_ACTION_TOOLS.map((t) => t.name)
 );
@@ -208,5 +256,6 @@ export const SKYLER_ACTION_TOOL_NAMES = new Set(
 export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_READ_TOOLS,
   ...SKYLER_WRITE_TOOLS,
+  ...SKYLER_LEAD_TOOLS,
   ...SKYLER_ACTION_TOOLS,
 ];

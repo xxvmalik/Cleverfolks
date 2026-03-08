@@ -8,7 +8,8 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
+import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
@@ -590,6 +591,106 @@ async function handleActionTool(
   return { results: [], summary: `Unknown action tool: ${toolName}` };
 }
 
+// ── Handle lead scoring tools ─────────────────────────────────────────────────
+
+async function handleLeadTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  if (toolName === "score_lead") {
+    const contactId = input.contact_id as string;
+    if (!contactId) {
+      return { results: [], summary: "Missing contact_id parameter." };
+    }
+    try {
+      const result = await scoreLead(adminSupabase, workspaceId, contactId, {
+        forceRescore: (input.force_rescore as boolean) ?? false,
+      });
+      if (!result) {
+        return {
+          results: [],
+          summary: `Contact ${contactId} has already been scored. Use force_rescore: true to rescore.`,
+        };
+      }
+      return {
+        results: [],
+        summary: formatLeadScoreResult(result),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[skyler-tools] score_lead failed:", msg);
+      return { results: [], summary: `Failed to score lead: ${msg}` };
+    }
+  }
+
+  if (toolName === "get_lead_scores") {
+    const classification = (input.classification as string) ?? "all";
+    const limit = (input.limit as number) ?? 20;
+
+    try {
+      let query = adminSupabase
+        .from("lead_scores")
+        .select("*")
+        .eq("workspace_id", workspaceId)
+        .order("total_score", { ascending: false })
+        .limit(limit);
+
+      if (classification !== "all") {
+        query = query.eq("classification", classification);
+      }
+
+      const { data: leads, error } = await query;
+      if (error) throw error;
+      if (!leads || leads.length === 0) {
+        return {
+          results: [],
+          summary: classification === "all"
+            ? "No leads have been scored yet. Use score_lead to score individual contacts, or they will be auto-scored when synced."
+            : `No leads with classification "${classification}" found.`,
+        };
+      }
+
+      const lines = leads.map((l: Record<string, unknown>) => {
+        const dims = l.dimension_scores as Record<string, { score: number }> | null;
+        const dimSummary = dims
+          ? Object.entries(dims).map(([k, v]) => `${k}: ${v.score}`).join(", ")
+          : "no dimensions";
+        const referral = l.is_referral ? ` | Referral from ${l.referrer_name ?? "unknown"}` : "";
+        return `- ${l.contact_name ?? "Unknown"} (${l.contact_email ?? "no email"}) | ${l.company_name ?? "no company"} | Score: ${l.total_score}/100 [${(l.classification as string).toUpperCase()}] | ${dimSummary}${referral}`;
+      });
+
+      const header = classification === "all"
+        ? `Found ${leads.length} scored leads:`
+        : `Found ${leads.length} "${classification}" leads:`;
+
+      return { results: [], summary: `${header}\n${lines.join("\n")}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[skyler-tools] get_lead_scores failed:", msg);
+      return { results: [], summary: `Failed to retrieve lead scores: ${msg}` };
+    }
+  }
+
+  return { results: [], summary: `Unknown lead tool: ${toolName}` };
+}
+
+function formatLeadScoreResult(r: LeadScoreResult): string {
+  const dims = Object.entries(r.dimension_scores)
+    .map(([k, v]) => `  ${k}: ${v.score}/25 — ${v.reasoning}`)
+    .join("\n");
+  const referral = r.is_referral
+    ? `\nReferral: Yes (from ${r.referrer_name ?? "unknown"}${r.referrer_company ? ` at ${r.referrer_company}` : ""})`
+    : "";
+  return `Lead Score for ${r.contact_name} (${r.contact_email}):
+Company: ${r.company_name}
+Total Score: ${r.total_score}/100
+Classification: ${r.classification.toUpperCase()}
+${dims}${referral}
+${r.scoring_reasoning}`;
+}
+
 // ── Main dispatcher with autonomy enforcement ────────────────────────────────
 
 export async function executeSkylerToolCall(
@@ -604,6 +705,11 @@ export async function executeSkylerToolCall(
   // ── Action management tools: execute/reject pending actions ──────────
   if (SKYLER_ACTION_TOOL_NAMES.has(toolName)) {
     return handleActionTool(toolName, input, adminSupabase);
+  }
+
+  // ── Lead scoring tools: no autonomy check needed (read-like) ──────────
+  if (SKYLER_LEAD_TOOL_NAMES.has(toolName)) {
+    return handleLeadTool(toolName, input, workspaceId, adminSupabase);
   }
 
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──

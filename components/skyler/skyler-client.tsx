@@ -31,10 +31,18 @@ type LeadPriority = "High" | "Medium" | "Low";
 
 type Lead = {
   id: string;
+  contact_id?: string;
   company: string;
+  contact_name?: string;
+  contact_email?: string;
   priority: LeadPriority;
   potential: string;
   detail: string;
+  total_score?: number;
+  classification?: string;
+  dimension_scores?: Record<string, { score: number; reasoning: string }>;
+  is_referral?: boolean;
+  referrer_name?: string;
   stage?: string;
   probability?: number;
 };
@@ -244,18 +252,48 @@ export function SkylerClient({
   // Map of messageId -> pending actions to show below that message
   const [messageActions, setMessageActions] = useState<Record<string, PendingAction[]>>({});
 
-  // Fetch dashboard data
+  // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
     try {
-      const [dashRes, logosRes] = await Promise.all([
+      const [leadStatsRes, leadsRes, dashRes, logosRes] = await Promise.all([
+        fetch(`/api/skyler/lead-stats?workspaceId=${workspaceId}`),
+        fetch(`/api/skyler/leads?workspaceId=${workspaceId}`),
         fetch(`/api/skyler/dashboard?workspaceId=${workspaceId}`),
         fetch(`/api/integration-logos?workspaceId=${workspaceId}`),
       ]);
-      if (dashRes.ok) {
+
+      // Try lead_scores first (Piece 3+5 data)
+      let usedLeadScores = false;
+      if (leadStatsRes.ok && leadsRes.ok) {
+        const statsData = await leadStatsRes.json();
+        const leadsData = await leadsRes.json();
+        if (statsData.stats?.totalScored > 0) {
+          usedLeadScores = true;
+          // Also get sales closer + integrations from old dashboard
+          let salesCloser = false;
+          let integrations: { id: string; provider: string }[] = [];
+          if (dashRes.ok) {
+            const oldData = await dashRes.json();
+            salesCloser = oldData.salesCloserEnabled ?? false;
+            integrations = oldData.connectedIntegrations ?? [];
+          }
+          setDashData({
+            stats: statsData.stats,
+            leads: leadsData.leads ?? [],
+            connectedIntegrations: integrations,
+            salesCloserEnabled: salesCloser,
+          });
+          setSalesCloserEnabled(salesCloser);
+        }
+      }
+
+      // Fallback to old deal-based dashboard if no lead scores exist yet
+      if (!usedLeadScores && dashRes.ok) {
         const data = await dashRes.json();
         setDashData(data);
         setSalesCloserEnabled(data.salesCloserEnabled);
       }
+
       if (logosRes.ok) {
         const data = await logosRes.json();
         setIntegrationLogos(data.logos ?? []);
@@ -542,6 +580,10 @@ export function SkylerClient({
 
   const filteredLeads = leads.filter((lead) => {
     if (leadFilter === "all") return true;
+    // Use classification if available (from lead_scores), fall back to priority
+    if (lead.classification) {
+      return lead.classification === leadFilter;
+    }
     if (leadFilter === "hot") return lead.priority === "High";
     if (leadFilter === "nurture") return lead.priority === "Medium" || lead.priority === "Low";
     if (leadFilter === "disqualified") return false;

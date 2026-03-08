@@ -2,6 +2,7 @@ import { Nango } from "@nangohq/node";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { buildUserMap } from "@/lib/slack-user-resolver";
+import { scoreAllContacts } from "@/lib/skyler/lead-scoring";
 import {
   processSyncedData,
   normalizeGmail,
@@ -656,6 +657,20 @@ export const syncIntegrationFunction = inngest.createFunction(
         name: "knowledge/profile.build",
         data: { workspaceId },
       });
+
+      // ── Step 5: Auto-score all contacts (lead qualification) ──────────────
+      // Only runs for HubSpot syncs — scores contacts that haven't been scored yet
+      if (provider === "hubspot") {
+        await step.run("auto-score-contacts", async () => {
+          const supabase = createAdminSupabaseClient();
+          try {
+            const scored = await scoreAllContacts(supabase, workspaceId);
+            console.log(`[inngest] Auto-scored ${scored} contacts`);
+          } catch (err) {
+            console.warn("[inngest] Auto-scoring failed (non-fatal):", err instanceof Error ? err.message : String(err));
+          }
+        });
+      }
 
       console.log(`[inngest] sync-integration complete — processed=${totalProcessed} skipped=${totalSkipped}`);
       return { processed: totalProcessed, skipped: totalSkipped };
