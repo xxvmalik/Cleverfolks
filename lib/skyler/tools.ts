@@ -210,6 +210,68 @@ const SKYLER_LEAD_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── Sales Closer tools ──────────────────────────────────────────────────────
+
+const SKYLER_SALES_CLOSER_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "get_sales_pipeline",
+    description:
+      "View the sales pipeline records. Shows leads being actively worked by Sales Closer with stage, email stats, and conversation state. Use when the user asks about the sales pipeline, outreach progress, or active campaigns.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        stage: {
+          type: "string",
+          enum: ["all", "initial_outreach", "follow_up_1", "follow_up_2", "follow_up_3", "negotiation", "demo_booked", "payment_secured", "closed_won", "disqualified", "stalled"],
+          description: "Filter by pipeline stage. Default 'all'.",
+        },
+        limit: { type: "number", description: "Max records to return. Default 20." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_performance_metrics",
+    description:
+      "Get Skyler's sales performance metrics: emails sent, open rate, reply rate, meetings booked, demos, payments, conversion rate. Use when the user asks 'how am I performing?', 'show me metrics', or 'success rate'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "move_to_sales_closer",
+    description:
+      "Manually move a qualified lead into the Sales Closer pipeline for active outreach. Use when the user says 'start outreach to [contact]', 'add [contact] to sales closer', or 'work this lead'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_id: { type: "string", description: "HubSpot contact ID" },
+        contact_email: { type: "string", description: "Contact's email address (required for outreach)" },
+        contact_name: { type: "string", description: "Contact's full name" },
+        company_name: { type: "string", description: "Contact's company name" },
+      },
+      required: ["contact_email"],
+    },
+  },
+  {
+    name: "pickup_conversation",
+    description:
+      "Take over an existing email conversation with a contact. Skyler reads previous emails to understand context before continuing. Use when the user says 'take over my conversation with [contact]' or 'pick up where I left off with [person]'.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        contact_email: { type: "string", description: "Contact's email address" },
+        contact_name: { type: "string", description: "Contact's name (helps find email threads)" },
+        contact_id: { type: "string", description: "HubSpot contact ID (optional)" },
+        company_name: { type: "string", description: "Company name (optional)" },
+      },
+      required: ["contact_email"],
+    },
+  },
+];
+
 // ── Action management tools (approve/reject pending actions via natural language) ──
 
 const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
@@ -249,6 +311,10 @@ export const SKYLER_LEAD_TOOL_NAMES = new Set(
   SKYLER_LEAD_TOOLS.map((t) => t.name)
 );
 
+export const SKYLER_SALES_CLOSER_TOOL_NAMES = new Set(
+  SKYLER_SALES_CLOSER_TOOLS.map((t) => t.name)
+);
+
 export const SKYLER_ACTION_TOOL_NAMES = new Set(
   SKYLER_ACTION_TOOLS.map((t) => t.name)
 );
@@ -257,5 +323,6 @@ export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_READ_TOOLS,
   ...SKYLER_WRITE_TOOLS,
   ...SKYLER_LEAD_TOOLS,
+  ...SKYLER_SALES_CLOSER_TOOLS,
   ...SKYLER_ACTION_TOOLS,
 ];

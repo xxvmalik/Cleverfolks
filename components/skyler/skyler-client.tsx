@@ -206,6 +206,52 @@ type PendingAction = {
   description: string;
 };
 
+// ── Sales Closer types ───────────────────────────────────────────────────────
+
+type PipelineRecord = {
+  id: string;
+  contact_name: string;
+  contact_email: string;
+  company_name: string;
+  stage: string;
+  emails_sent: number;
+  emails_opened: number;
+  emails_replied: number;
+  cadence_step: number;
+  resolution: string | null;
+  updated_at: string;
+  pending_actions: Array<{ id: string; description: string }>;
+};
+
+type PerformanceMetrics = {
+  totalLeads: number;
+  emailsSent: number;
+  openRate: number;
+  replyRate: number;
+  meetingsBooked: number;
+  demosBooked: number;
+  paymentsSecured: number;
+  dealsWon: number;
+  conversionRate: number;
+};
+
+const STAGE_COLORS: Record<string, string> = {
+  initial_outreach: "#3A89FF",
+  follow_up_1: "#FB923C",
+  follow_up_2: "#FB923C",
+  follow_up_3: "#FB923C",
+  negotiation: "#F2903D",
+  demo_booked: "#7C3AED",
+  payment_secured: "#4ADE80",
+  closed_won: "#4ADE80",
+  disqualified: "#F87171",
+  stalled: "#8B8F97",
+};
+
+function formatStage(stage: string): string {
+  return stage.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 const QUICK_ACTIONS = [
   "How's our pipeline looking?",
   "Which deals are closing soon?",
@@ -251,6 +297,11 @@ export function SkylerClient({
   const [streamingContent, setStreamingContent] = useState("");
   // Map of messageId -> pending actions to show below that message
   const [messageActions, setMessageActions] = useState<Record<string, PendingAction[]>>({});
+
+  // Sales Closer state
+  const [pipelineRecords, setPipelineRecords] = useState<PipelineRecord[]>([]);
+  const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
+  const [pipelineLoading, setPipelineLoading] = useState(false);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -303,6 +354,27 @@ export function SkylerClient({
     }
   }, [workspaceId]);
 
+  // Fetch Sales Closer data
+  const fetchSalesCloserData = useCallback(async () => {
+    setPipelineLoading(true);
+    try {
+      const [pipelineRes, perfRes] = await Promise.all([
+        fetch(`/api/skyler/sales-pipeline?workspaceId=${workspaceId}`),
+        fetch(`/api/skyler/performance?workspaceId=${workspaceId}`),
+      ]);
+      if (pipelineRes.ok) {
+        const data = await pipelineRes.json();
+        setPipelineRecords(data.records ?? []);
+      }
+      if (perfRes.ok) {
+        const data = await perfRes.json();
+        setPerformanceMetrics(data.metrics ?? null);
+      }
+    } finally {
+      setPipelineLoading(false);
+    }
+  }, [workspaceId]);
+
   // Fetch conversation history
   const fetchConversations = useCallback(async () => {
     try {
@@ -320,6 +392,13 @@ export function SkylerClient({
     fetchDashboard();
     fetchConversations();
   }, [fetchDashboard, fetchConversations]);
+
+  // Fetch sales closer data when tab is active
+  useEffect(() => {
+    if (activeTab === "sales-closer") {
+      fetchSalesCloserData();
+    }
+  }, [activeTab, fetchSalesCloserData]);
 
   // Auto-scroll chat
   useEffect(() => {
@@ -590,6 +669,35 @@ export function SkylerClient({
     return true;
   });
 
+  // Sales Closer: approve/reject email draft
+  async function handleApproveDraft(pipelineId: string, actionId: string) {
+    try {
+      const res = await fetch(`/api/skyler/sales-pipeline/${pipelineId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId }),
+      });
+      if (res.ok) {
+        fetchSalesCloserData(); // Refresh
+      }
+    } catch {
+      // Silently handle
+    }
+  }
+
+  async function handleRejectDraft(pipelineId: string, actionId: string, feedback?: string) {
+    try {
+      await fetch(`/api/skyler/sales-pipeline/${pipelineId}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId, feedback }),
+      });
+      fetchSalesCloserData();
+    } catch {
+      // Silently handle
+    }
+  }
+
   function handlePrompt(company: string) {
     setInputValue(`Tell me about the ${company} deal`);
     setTimeout(() => textareaRef.current?.focus(), 50);
@@ -784,6 +892,188 @@ export function SkylerClient({
 
         {/* Scrollable content */}
         <div className="flex-1 overflow-y-auto">
+
+          {/* ── Sales Closer Tab ─────────────────────────────────────── */}
+          {activeTab === "sales-closer" && (
+            <>
+              {/* Header */}
+              <div className="bg-[#111111] px-6 py-5 border-b border-[#2A2D35]/30">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-3 mb-1.5">
+                      <h2 className="text-white font-bold text-lg">Sales Closer</h2>
+                      <ToggleSwitch enabled={salesCloserEnabled} onToggle={handleSalesCloserToggle} />
+                    </div>
+                    <p className="text-[#8B8F97] text-sm">
+                      Skyler manages outreach, follow-ups, and conversations with qualified leads. All emails require your approval.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Performance Metrics */}
+              <div className="px-6 py-4 flex gap-4">
+                <StatCard label="Emails Sent" value={pipelineLoading ? "..." : String(performanceMetrics?.emailsSent ?? 0)} />
+                <StatCard label="Open Rate" value={pipelineLoading ? "..." : `${performanceMetrics?.openRate ?? 0}%`} />
+                <StatCard label="Reply Rate" value={pipelineLoading ? "..." : `${performanceMetrics?.replyRate ?? 0}%`} />
+                <StatCard label="Meetings Booked" value={pipelineLoading ? "..." : String(performanceMetrics?.meetingsBooked ?? 0)} />
+                <StatCard label="Demos Booked" value={pipelineLoading ? "..." : String(performanceMetrics?.demosBooked ?? 0)} />
+                <StatCard label="Conversion" value={pipelineLoading ? "..." : `${performanceMetrics?.conversionRate ?? 0}%`} />
+              </div>
+
+              {/* Pipeline + Chat layout */}
+              <div className="flex-1 flex px-6 pb-6 gap-5 min-h-0" style={{ height: "calc(100vh - 340px)" }}>
+                {/* Left: Pipeline Records */}
+                <div className="w-[45%] flex flex-col min-h-0">
+                  <div className="flex items-center gap-3 mb-3">
+                    <h3 className="text-white font-bold text-base">Active Pipeline</h3>
+                    <span className="text-[#8B8F97] text-xs">{pipelineRecords.length} leads</span>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+                    {pipelineLoading ? (
+                      <p className="text-[#555A63] text-sm text-center py-8">Loading pipeline...</p>
+                    ) : pipelineRecords.length === 0 ? (
+                      <p className="text-[#555A63] text-sm text-center py-8">
+                        No leads in the pipeline yet. Enable Sales Closer and score leads as hot (70+) to start.
+                      </p>
+                    ) : (
+                      pipelineRecords.map((rec) => (
+                        <div
+                          key={rec.id}
+                          className="w-full text-left p-4 rounded-xl border bg-[#211F1E] border-[#473E38]"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-white font-semibold text-sm">{rec.contact_name}</span>
+                                <span
+                                  className="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                                  style={{ background: `${STAGE_COLORS[rec.stage] ?? "#8B8F97"}20`, color: STAGE_COLORS[rec.stage] ?? "#8B8F97" }}
+                                >
+                                  {formatStage(rec.stage)}
+                                </span>
+                              </div>
+                              <p className="text-[#8B8F97] text-xs">
+                                {rec.company_name ?? "No company"} &bull; {rec.emails_sent} sent, {rec.emails_opened} opened, {rec.emails_replied} replied
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Pending email drafts */}
+                          {rec.pending_actions.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              {rec.pending_actions.map((pa) => (
+                                <div key={pa.id} className="bg-[#1A1A1A] border border-[#2A2D35] rounded-lg p-3">
+                                  <p className="text-[#E0E0E0] text-xs mb-2">{pa.description}</p>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={() => handleApproveDraft(rec.id, pa.id)}
+                                      className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
+                                    >
+                                      Approve and Send
+                                    </button>
+                                    <button
+                                      onClick={() => handleRejectDraft(rec.id, pa.id)}
+                                      className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                    >
+                                      Reject
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                {/* Right: Chat with Skyler (same as Lead Qual) */}
+                <div className="flex-1 flex flex-col min-h-0 bg-black rounded-xl overflow-hidden">
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-[#2A2520]">
+                    <h3 className="text-white font-bold text-base">Chat with Skyler</h3>
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-5 py-4">
+                    {!hasChatContent ? (
+                      <div className="flex items-center justify-center h-full">
+                        <div className="text-center">
+                          <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={64} height={64} className="rounded-full mx-auto mb-4 opacity-40 object-cover aspect-square" />
+                          <p className="text-[#555A63] text-sm">Ask Skyler about outreach, pipeline progress, or performance.</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {chatMessages.map((msg) => {
+                          const actions = messageActions[msg.id] ?? [];
+                          return (
+                            <div key={msg.id}>
+                              <div className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
+                                {msg.role === "assistant" && (
+                                  <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                                    <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+                                  </div>
+                                )}
+                                <div className={cn("rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]", msg.role === "user" ? "bg-[#F2903D]/20 text-white" : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]")}>
+                                  {msg.role === "assistant" ? <MarkdownRenderer content={msg.content} /> : <div className="whitespace-pre-wrap">{msg.content}</div>}
+                                </div>
+                              </div>
+                              {actions.length > 0 && (
+                                <div className="ml-10 mt-2 space-y-2">
+                                  {actions.map((pa) => (
+                                    <ActionApproval key={pa.id} actionId={pa.id} description={pa.description} workspaceId={workspaceId} />
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {(streamingContent || activityLabel) && (
+                          <div className="flex gap-3 items-start">
+                            <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                              <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+                            </div>
+                            <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
+                              {streamingContent ? <MarkdownRenderer content={streamingContent} /> : (
+                                <div className="flex items-center gap-2 text-[#8B8F97]">
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  <span className="text-xs">{activityLabel}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                        <div ref={chatEndRef} />
+                      </div>
+                    )}
+                  </div>
+                  {/* Input bar */}
+                  <div className="px-4 pb-4">
+                    <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#F2903D]/50 transition-all">
+                      <textarea
+                        value={inputValue}
+                        onChange={(e) => { setInputValue(e.target.value); resizeTextarea(e.target); }}
+                        onKeyDown={handleKeyDown}
+                        placeholder="Ask Skyler about outreach..."
+                        rows={1}
+                        disabled={isStreaming}
+                        className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
+                        style={{ maxHeight: "160px", overflowY: "auto" }}
+                      />
+                      <button type="button" onClick={() => { void handleSendMessage(); }} className="flex-shrink-0 pb-0.5 cursor-pointer" aria-label="Send message">
+                        <Image src="/cleverbrain-chat-icons/send-prompt-icon.png" alt="Send" width={24} height={24} className={cn("transition-opacity pointer-events-none", inputValue.trim() && !isStreaming ? "opacity-100" : "opacity-40")} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ── Lead Qualification Tab (default) ─────────────────────── */}
+          {activeTab !== "sales-closer" && (
+          <>
           {/* Section 1: Lead Qualification Header */}
           <div className="bg-[#111111] px-6 py-5 border-b border-[#2A2D35]/30">
             <div className="flex items-start justify-between">
@@ -1062,6 +1352,8 @@ export function SkylerClient({
               </div>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
 

@@ -8,8 +8,9 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
+import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
@@ -676,6 +677,143 @@ async function handleLeadTool(
   return { results: [], summary: `Unknown lead tool: ${toolName}` };
 }
 
+// ── Handle Sales Closer tools ─────────────────────────────────────────────────
+
+async function handleSalesCloserTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  if (toolName === "get_sales_pipeline") {
+    const stage = (input.stage as string) ?? "all";
+    const limit = (input.limit as number) ?? 20;
+
+    let query = adminSupabase
+      .from("skyler_sales_pipeline")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .order("updated_at", { ascending: false })
+      .limit(limit);
+
+    if (stage !== "all") query = query.eq("stage", stage);
+
+    const { data, error } = await query;
+    if (error) return { results: [], summary: `Failed to fetch pipeline: ${error.message}` };
+    if (!data || data.length === 0) {
+      return { results: [], summary: "No leads in the sales pipeline yet. Use move_to_sales_closer to add leads, or enable Sales Closer to automatically work hot leads." };
+    }
+
+    const lines = data.map((r: Record<string, unknown>) => {
+      const emails = `${r.emails_sent ?? 0} sent, ${r.emails_opened ?? 0} opened, ${r.emails_replied ?? 0} replied`;
+      return `- ${r.contact_name} (${r.contact_email}) | ${r.company_name ?? "no company"} | Stage: ${r.stage} | ${emails}${r.resolution ? ` | Resolution: ${r.resolution}` : ""}`;
+    });
+
+    return { results: [], summary: `Sales Pipeline (${data.length} records):\n${lines.join("\n")}` };
+  }
+
+  if (toolName === "get_performance_metrics") {
+    const { data } = await adminSupabase
+      .from("skyler_sales_pipeline")
+      .select("emails_sent, emails_opened, emails_replied, resolution, stage")
+      .eq("workspace_id", workspaceId);
+
+    const all = data ?? [];
+    if (all.length === 0) {
+      return { results: [], summary: "No performance data yet. The sales pipeline is empty." };
+    }
+
+    const totalLeads = all.length;
+    const sent = all.reduce((s, r) => s + ((r.emails_sent as number) ?? 0), 0);
+    const opened = all.reduce((s, r) => s + ((r.emails_opened as number) ?? 0), 0);
+    const replied = all.reduce((s, r) => s + ((r.emails_replied as number) ?? 0), 0);
+    const meetings = all.filter((r) => r.resolution === "meeting_booked").length;
+    const demos = all.filter((r) => r.resolution === "demo_booked").length;
+    const payments = all.filter((r) => r.resolution === "payment_secured").length;
+    const won = all.filter((r) => r.stage === "closed_won").length;
+
+    const openRate = sent > 0 ? Math.round((opened / sent) * 100) : 0;
+    const replyRate = sent > 0 ? Math.round((replied / sent) * 100) : 0;
+
+    return {
+      results: [],
+      summary: `Sales Performance:\n- Leads in pipeline: ${totalLeads}\n- Emails sent: ${sent}\n- Open rate: ${openRate}%\n- Reply rate: ${replyRate}%\n- Meetings booked: ${meetings}\n- Demos booked: ${demos}\n- Payments secured: ${payments}\n- Deals won: ${won}`,
+    };
+  }
+
+  if (toolName === "move_to_sales_closer") {
+    const contactEmail = input.contact_email as string;
+    if (!contactEmail) return { results: [], summary: "Missing contact_email parameter." };
+
+    // Check if already in pipeline
+    const { data: existing } = await adminSupabase
+      .from("skyler_sales_pipeline")
+      .select("id, stage")
+      .eq("workspace_id", workspaceId)
+      .eq("contact_email", contactEmail)
+      .single();
+
+    if (existing) {
+      return { results: [], summary: `${contactEmail} is already in the sales pipeline at stage: ${existing.stage}` };
+    }
+
+    const { data, error } = await adminSupabase
+      .from("skyler_sales_pipeline")
+      .insert({
+        workspace_id: workspaceId,
+        contact_id: (input.contact_id as string) ?? contactEmail,
+        contact_name: (input.contact_name as string) ?? contactEmail,
+        contact_email: contactEmail,
+        company_name: (input.company_name as string) ?? null,
+        stage: "initial_outreach",
+      })
+      .select("id")
+      .single();
+
+    if (error) return { results: [], summary: `Failed to add to pipeline: ${error.message}` };
+
+    return {
+      results: [],
+      summary: `Added ${input.contact_name ?? contactEmail} to the Sales Closer pipeline. I will research their company and draft an outreach email for your approval.`,
+    };
+  }
+
+  if (toolName === "pickup_conversation") {
+    const contactEmail = input.contact_email as string;
+    if (!contactEmail) return { results: [], summary: "Missing contact_email parameter." };
+
+    try {
+      const context = await pickupExistingConversation({
+        workspaceId,
+        contactEmail,
+        contactName: input.contact_name as string | undefined,
+        contactId: input.contact_id as string | undefined,
+        companyName: input.company_name as string | undefined,
+        db: adminSupabase,
+        createPipelineRecord: true,
+      });
+
+      const lines = [
+        `Conversation Pickup for ${input.contact_name ?? contactEmail}:`,
+        `Summary: ${context.summary}`,
+        `Emails found: ${context.email_count}`,
+        `Last message from: ${context.last_message_from}`,
+        `Awaiting our response: ${context.awaiting_response ? "YES" : "No"}`,
+        `Tone: ${context.tone_of_conversation}`,
+      ];
+      if (context.key_topics.length > 0) lines.push(`Topics: ${context.key_topics.join(", ")}`);
+      if (context.open_questions.length > 0) lines.push(`Open questions: ${context.open_questions.join("; ")}`);
+      lines.push(`Suggested next action: ${context.suggested_next_action}`);
+
+      return { results: [], summary: lines.join("\n") };
+    } catch (err) {
+      return { results: [], summary: `Failed to pick up conversation: ${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
+
+  return { results: [], summary: `Unknown sales closer tool: ${toolName}` };
+}
+
 function formatLeadScoreResult(r: LeadScoreResult): string {
   const dims = Object.entries(r.dimension_scores)
     .map(([k, v]) => `  ${k}: ${v.score}/25 — ${v.reasoning}`)
@@ -710,6 +848,11 @@ export async function executeSkylerToolCall(
   // ── Lead scoring tools: no autonomy check needed (read-like) ──────────
   if (SKYLER_LEAD_TOOL_NAMES.has(toolName)) {
     return handleLeadTool(toolName, input, workspaceId, adminSupabase);
+  }
+
+  // ── Sales Closer tools: no autonomy check (read-like + pipeline management) ──
+  if (SKYLER_SALES_CLOSER_TOOL_NAMES.has(toolName)) {
+    return handleSalesCloserTool(toolName, input, workspaceId, adminSupabase);
   }
 
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──
