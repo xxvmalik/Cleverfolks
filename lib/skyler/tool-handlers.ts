@@ -456,47 +456,58 @@ async function executeViaNango(
       console.log(`[skyler-tools] ${toolName} context: ownerId=${ownerId ?? "none"}`);
     }
 
-    const payload = buildNangoPayload(toolName, input, context);
+    // ── update_company: separate phone (proxy-only) from other fields (Nango) ──
+    let result: unknown;
+    if (toolName === "update_company") {
+      const hasPhone = !!input.phone;
+      const hasOtherFields = Object.keys(input).some(
+        (k) => k !== "company_id" && k !== "phone" && input[k] !== undefined && input[k] !== null && input[k] !== ""
+      );
 
-    // Strip undefined values
-    const cleanPayload = JSON.parse(JSON.stringify(payload));
-
-    console.log(`[skyler-tools] Executing ${nangoAction} via Nango — full payload:`, JSON.stringify(cleanPayload));
-
-    const result = await nango.triggerAction(
-      "hubspot",
-      connectionId,
-      nangoAction,
-      cleanPayload
-    );
-
-    console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
-
-    // Post-update: set company phone via proxy (Nango Company model has no phone field)
-    if (toolName === "update_company" && input.phone) {
-      const companyId = input.company_id as string;
-      try {
-        await nango.proxy({
-          method: "PATCH",
-          baseUrlOverride: "https://api.hubapi.com",
-          endpoint: `/crm/v3/objects/companies/${companyId}`,
-          providerConfigKey: "hubspot",
-          connectionId,
-          headers: { "Content-Type": "application/json" },
-          data: { properties: { phone: input.phone as string } },
-          retries: 3,
-        });
-        console.log(`[skyler-tools] Set phone on company ${companyId} via proxy`);
-      } catch (err: unknown) {
-        // Log full error details for debugging
-        const errObj = err as { response?: { status?: number; data?: unknown }; message?: string };
-        console.error(`[skyler-tools] Failed to set phone on company ${companyId}:`,
-          JSON.stringify({
-            status: errObj?.response?.status,
-            data: errObj?.response?.data,
-            message: errObj?.message ?? String(err),
-          }).slice(0, 500));
+      // 1. Nango update for non-phone fields (skip if phone is the only field)
+      if (hasOtherFields) {
+        const payload = buildNangoPayload(toolName, input, context);
+        const cleanPayload = JSON.parse(JSON.stringify(payload));
+        console.log(`[skyler-tools] Executing ${nangoAction} via Nango — full payload:`, JSON.stringify(cleanPayload));
+        result = await nango.triggerAction("hubspot", connectionId, nangoAction, cleanPayload);
+        console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
+      } else {
+        console.log(`[skyler-tools] update_company: only phone field — skipping Nango action`);
+        result = { id: input.company_id };
       }
+
+      // 2. Phone via direct HubSpot proxy (Nango Company model has no phone field)
+      if (hasPhone) {
+        const companyId = input.company_id as string;
+        try {
+          await nango.proxy({
+            method: "PATCH",
+            baseUrlOverride: "https://api.hubapi.com",
+            endpoint: `/crm/v3/objects/companies/${companyId}`,
+            providerConfigKey: "hubspot",
+            connectionId,
+            headers: { "Content-Type": "application/json" },
+            data: { properties: { phone: input.phone as string } },
+            retries: 3,
+          });
+          console.log(`[skyler-tools] Set phone on company ${companyId} via proxy`);
+        } catch (err: unknown) {
+          const errObj = err as { response?: { status?: number; data?: unknown }; message?: string };
+          console.error(`[skyler-tools] Failed to set phone on company ${companyId}:`,
+            JSON.stringify({
+              status: errObj?.response?.status,
+              data: errObj?.response?.data,
+              message: errObj?.message ?? String(err),
+            }).slice(0, 500));
+        }
+      }
+    } else {
+      // ── All other tools: normal Nango action ──
+      const payload = buildNangoPayload(toolName, input, context);
+      const cleanPayload = JSON.parse(JSON.stringify(payload));
+      console.log(`[skyler-tools] Executing ${nangoAction} via Nango — full payload:`, JSON.stringify(cleanPayload));
+      result = await nango.triggerAction("hubspot", connectionId, nangoAction, cleanPayload);
+      console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
     }
 
     // Post-creation: associate with contacts/companies/deals via HubSpot v4 API
