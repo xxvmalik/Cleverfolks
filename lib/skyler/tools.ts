@@ -133,7 +133,7 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
   {
     name: "create_task",
     description:
-      "Create a new task in HubSpot CRM. Use for follow-ups, reminders, or action items. IMPORTANT: When creating a task for a specific person, FIRST use search_by_person to find their HubSpot contact ID, then pass it as contact_id so the task is properly associated.",
+      "Create a new task in HubSpot CRM. Use for follow-ups, reminders, or action items. IMPORTANT: When creating a task for a specific person, FIRST search for them to get their HubSpot contact ID AND their company's HubSpot ID, then pass both as contact_id and company_id.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -141,7 +141,8 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
         body: { type: "string", description: "Task description or notes" },
         due_date: { type: "string", description: "Due date (ISO 8601)" },
         priority: { type: "string", enum: ["LOW", "MEDIUM", "HIGH"], description: "Task priority" },
-        contact_id: { type: "string", description: "Associated HubSpot contact ID" },
+        contact_id: { type: "string", description: "Associated HubSpot contact ID (from search results 'HubSpot ID:')" },
+        company_id: { type: "string", description: "Associated HubSpot company ID (from search results 'HubSpot ID:')" },
         deal_id: { type: "string", description: "Associated HubSpot deal ID" },
       },
       required: ["subject"],

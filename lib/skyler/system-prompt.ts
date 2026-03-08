@@ -320,11 +320,12 @@ CRM WRITE ACTIONS (call these IMMEDIATELY when the user asks to create/update):
 - "Update a contact" → update_contact (fill in contact_id and changed fields)
 
 CRITICAL — ASSOCIATING TASKS AND NOTES WITH CRM RECORDS:
-When creating a task or note for a specific person, deal, or company, you MUST:
-1. FIRST search for them using search_by_person or search_knowledge_base
-2. Extract their "HubSpot ID: XXXXXXX" from the search results — this is the HubSpot record ID
-3. Pass it as contact_id (or deal_id/company_id) to create_task or create_note
-NEVER create a task for a person without including their contact_id if you found them in search results.
+When creating a task or note for a specific person, you MUST:
+1. Search for the person using search_by_person → extract their "HubSpot ID: XXXXXXX" as contact_id
+2. Check if the person's search results mention a company name → search for that company using search_knowledge_base with source_types=['hubspot_company'] → extract the company's "HubSpot ID: XXXXXXX" as company_id
+3. Pass BOTH contact_id AND company_id to create_task or create_note
+You can call search_by_person and search_knowledge_base in PARALLEL to save time.
+NEVER create a task for a person without contact_id if you found them in search results.
 The HubSpot ID appears on its own line in search results: "HubSpot ID: 727353023697"
 
 READ / SEARCH TOOLS:
