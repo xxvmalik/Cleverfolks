@@ -63,10 +63,10 @@ function buildNangoPayload(
     case "create_company":
       return {
         name: input.name,
-        domain: input.domain,
-        industry: input.industry,
+        website_url: input.domain,
+        // industry must be a HubSpot enum (e.g. INFORMATION_TECHNOLOGY_AND_SERVICES) — omit freeform text
+        industry: typeof input.industry === "string" && input.industry.includes("_") ? input.industry : undefined,
         description: input.description,
-        phone: input.phone,
         city: input.city,
         country: input.country,
       };
@@ -74,10 +74,9 @@ function buildNangoPayload(
       return {
         id: input.company_id,
         name: input.name,
-        domain: input.domain,
-        industry: input.industry,
+        website_url: input.domain,
+        industry: typeof input.industry === "string" && input.industry.includes("_") ? input.industry : undefined,
         description: input.description,
-        phone: input.phone,
       };
     case "create_deal": {
       // Format close_date as midnight UTC (HubSpot expects this format)

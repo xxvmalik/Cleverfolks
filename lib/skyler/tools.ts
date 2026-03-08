@@ -68,9 +68,8 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
       properties: {
         name: { type: "string", description: "Company name" },
         domain: { type: "string", description: "Company website domain (e.g. acme.com)" },
-        industry: { type: "string", description: "Company industry" },
+        industry: { type: "string", description: "HubSpot industry enum value (e.g. MARKETING_AND_ADVERTISING, INFORMATION_TECHNOLOGY_AND_SERVICES, FINANCIAL_SERVICES, BANKING). Use SCREAMING_SNAKE_CASE. Omit if unsure." },
         description: { type: "string", description: "Company description" },
-        phone: { type: "string", description: "Company phone number" },
         city: { type: "string", description: "Company city" },
         country: { type: "string", description: "Company country" },
       },
