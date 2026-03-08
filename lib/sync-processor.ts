@@ -712,7 +712,10 @@ export function normalizeHubspot(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotContact(raw: any): SyncRecord {
+export function normalizeHubspotContact(
+  raw: any,
+  enrichment?: { companyName?: string; dealNames?: string[] }
+): SyncRecord {
   // Nango returns flat fields: first_name, last_name, email, job_title, lifecycle_stage, lead_status, etc.
   const firstname = raw.first_name ?? "";
   const lastname = raw.last_name ?? "";
@@ -726,6 +729,14 @@ export function normalizeHubspotContact(raw: any): SyncRecord {
   if (raw.lead_status) parts.push(`Lead Status: ${raw.lead_status}`);
   if (raw.website_url) parts.push(`Website: ${raw.website_url}`);
   if (raw.created_date) parts.push(`Created: ${raw.created_date}`);
+
+  // Enrichment: associated company and deals (for bidirectional searchability)
+  const companyName = enrichment?.companyName
+    ?? (raw.returned_associations?.companies?.[0]?.name as string | undefined);
+  if (companyName) parts.push(`Company: ${companyName}`);
+  const dealNames = enrichment?.dealNames
+    ?? (raw.returned_associations?.deals as Array<{ name?: string }> | undefined)?.map((d) => d.name).filter(Boolean);
+  if (dealNames && dealNames.length > 0) parts.push(`Deals: ${dealNames.join(", ")}`);
 
   const header = parts.join(" | ");
 
@@ -778,7 +789,12 @@ export function normalizeHubspotCompany(raw: any): SyncRecord {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>, ownerMap?: Record<string, string>): SyncRecord {
+export function normalizeHubspotDeal(
+  raw: any,
+  stageMap?: Record<string, string>,
+  ownerMap?: Record<string, string>,
+  contactCompanyMap?: Record<string, string>,
+): SyncRecord {
   // Nango returns flat fields: name, amount, deal_stage, close_date, deal_description, owner, deal_probability, returned_associations
   const dealname = raw.name ?? "Untitled Deal";
 
@@ -806,14 +822,32 @@ export function normalizeHubspotDeal(raw: any, stageMap?: Record<string, string>
 
   // Include associated contacts/companies in chunk_text so Claude can see them
   const assoc = raw.returned_associations;
+  const contactNames: string[] = [];
   if (assoc?.contacts?.length) {
-    const names = assoc.contacts.map((c: any) => [c.first_name, c.last_name].filter(Boolean).join(" ")).join(", ");
-    parts.push(`Contacts: ${names}`);
+    for (const c of assoc.contacts) {
+      contactNames.push([c.first_name, c.last_name].filter(Boolean).join(" "));
+    }
+    parts.push(`Contacts: ${contactNames.join(", ")}`);
   }
+
+  // Companies: use returned_associations if available, otherwise look up via contactCompanyMap
+  const companyNames: string[] = [];
   if (assoc?.companies?.length) {
-    const names = assoc.companies.map((c: any) => c.name ?? c.id).join(", ");
-    parts.push(`Companies: ${names}`);
+    for (const c of assoc.companies) {
+      const name = c.name ?? c.id;
+      if (name) companyNames.push(name);
+    }
   }
+  // Fallback: derive company names from associated contacts' companies
+  if (companyNames.length === 0 && contactCompanyMap && assoc?.contacts?.length) {
+    for (const c of assoc.contacts) {
+      const cId = c.id as string | undefined;
+      if (cId && contactCompanyMap[cId] && !companyNames.includes(contactCompanyMap[cId])) {
+        companyNames.push(contactCompanyMap[cId]);
+      }
+    }
+  }
+  if (companyNames.length > 0) parts.push(`Companies: ${companyNames.join(", ")}`);
 
   const header = parts.join(" | ");
   const body = raw.deal_description ?? "";

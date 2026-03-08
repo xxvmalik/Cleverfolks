@@ -21,18 +21,33 @@ import {
 
 const WORKSPACE_ID = "ab25098b-45fd-40ba-ba6f-d67032dcdbbc";
 
-const HUBSPOT_MODELS: Record<string, (raw: any, ownerMap?: Record<string, string>, stageMap?: Record<string, string>) => SyncRecord | null> = {
-  Deal:                        (raw, ownerMap, stageMap) => normalizeHubspotDeal(raw, stageMap, ownerMap),
-  Contact:                     (raw) => normalizeHubspotContact(raw),
+type EnrichmentMaps = {
+  ownerMap: Record<string, string>;
+  stageMap: Record<string, string>;
+  contactCompanyMap: Record<string, string>;   // contactId → company name
+  contactDealMap: Record<string, string[]>;    // contactId → deal names
+  companyContactMap: Record<string, string[]>; // companyId → contact IDs
+};
+
+const HUBSPOT_MODELS: Record<string, (raw: any, maps: EnrichmentMaps) => SyncRecord | null> = {
+  Deal:                        (raw, maps) => normalizeHubspotDeal(raw, maps.stageMap, maps.ownerMap, maps.contactCompanyMap),
+  Contact:                     (raw, maps) => {
+    const contactId = raw.id as string | undefined;
+    const enrichment = contactId ? {
+      companyName: maps.contactCompanyMap[contactId],
+      dealNames: maps.contactDealMap[contactId],
+    } : undefined;
+    return normalizeHubspotContact(raw, enrichment);
+  },
   Company:                     (raw) => normalizeHubspotCompany(raw),
-  Ticket:                      (raw, ownerMap) => normalizeHubspotTicket(raw, ownerMap),
-  Task:                        (raw, ownerMap) => normalizeHubspotTask(raw, ownerMap),
-  Note:                        (raw, ownerMap) => normalizeHubspotNote(raw, ownerMap),
+  Ticket:                      (raw, maps) => normalizeHubspotTicket(raw, maps.ownerMap),
+  Task:                        (raw, maps) => normalizeHubspotTask(raw, maps.ownerMap),
+  Note:                        (raw, maps) => normalizeHubspotNote(raw, maps.ownerMap),
   HubspotOwner:                (raw) => normalizeHubspotOwner(raw),
   Product:                     (raw) => normalizeHubspotProduct(raw),
   User:                        (raw) => normalizeHubspotUser(raw),
   HubspotKnowledgeBaseArticle: (raw) => normalizeHubspotKbArticle(raw),
-  HubspotServiceTicket:        (raw, ownerMap) => normalizeHubspotServiceTicket(raw, ownerMap),
+  HubspotServiceTicket:        (raw, maps) => normalizeHubspotServiceTicket(raw, maps.ownerMap),
   CurrencyCode:                (raw) => normalizeHubspotCurrency(raw),
 };
 
@@ -136,7 +151,66 @@ export async function POST(req: Request) {
       log(`fetch-account-information failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    // Step 3: Fetch all records from Nango, normalize, and update
+    // Step 3: Build enrichment maps (contact→company, contact→deals) by pre-fetching associations
+    const contactCompanyMap: Record<string, string> = {};   // contactId → company name
+    const contactDealMap: Record<string, string[]> = {};    // contactId → deal names
+    const companyContactMap: Record<string, string[]> = {}; // companyId → contact IDs
+
+    // Pre-fetch all contacts to build contactId→companyName map
+    {
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Contact", cursor });
+        for (const raw of page.records) {
+          const r = raw as Record<string, unknown>;
+          const contactId = r.id as string | undefined;
+          if (!contactId) continue;
+          // Check returned_associations for company
+          const assoc = r.returned_associations as { companies?: Array<{ id?: string; name?: string }> } | undefined;
+          if (assoc?.companies?.[0]) {
+            const compId = assoc.companies[0].id as string | undefined;
+            const compName = assoc.companies[0].name as string | undefined;
+            if (compName) contactCompanyMap[contactId] = compName;
+            if (compId) {
+              if (!companyContactMap[compId]) companyContactMap[compId] = [];
+              companyContactMap[compId].push(contactId);
+            }
+          }
+        }
+        if (!page.next_cursor) break;
+        cursor = page.next_cursor;
+      }
+      log(`Contact→Company map: ${Object.keys(contactCompanyMap).length} contacts with companies`);
+    }
+
+    // Pre-fetch all deals to build contactId→dealNames map
+    {
+      let cursor: string | undefined;
+      for (;;) {
+        const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Deal", cursor });
+        for (const raw of page.records) {
+          const r = raw as Record<string, unknown>;
+          const dealName = (r.name as string) ?? "Untitled Deal";
+          const assoc = r.returned_associations as { contacts?: Array<{ id?: string }> } | undefined;
+          if (assoc?.contacts?.length) {
+            for (const c of assoc.contacts) {
+              const cId = c.id as string | undefined;
+              if (cId) {
+                if (!contactDealMap[cId]) contactDealMap[cId] = [];
+                if (!contactDealMap[cId].includes(dealName)) contactDealMap[cId].push(dealName);
+              }
+            }
+          }
+        }
+        if (!page.next_cursor) break;
+        cursor = page.next_cursor;
+      }
+      log(`Contact→Deal map: ${Object.keys(contactDealMap).length} contacts with deals`);
+    }
+
+    const enrichmentMaps: EnrichmentMaps = { ownerMap, stageMap, contactCompanyMap, contactDealMap, companyContactMap };
+
+    // Step 4: Fetch all records from Nango, normalize, and update
     let totalProcessed = 0;
     let totalSkipped = 0;
     let totalChunks = 0;
@@ -155,7 +229,7 @@ export async function POST(req: Request) {
           });
 
           for (const raw of page.records) {
-            const rec = normalizeFn(raw as any, ownerMap, stageMap);
+            const rec = normalizeFn(raw as any, enrichmentMaps);
             if (!rec || !rec.content?.trim()) {
               totalSkipped++;
               continue;

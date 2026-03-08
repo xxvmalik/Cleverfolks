@@ -107,7 +107,9 @@ function normalizeRecord(
   lookups?: SlackLookups,
   gmailContacts?: Record<string, string>,
   hubspotStageMap?: Record<string, string>,
-  hubspotOwnerMap?: Record<string, string>
+  hubspotOwnerMap?: Record<string, string>,
+  hubspotContactCompanyMap?: Record<string, string>,
+  hubspotContactDealMap?: Record<string, string[]>,
 ): SyncRecord | null {
   if (provider === "slack") {
     switch (model) {
@@ -136,8 +138,15 @@ function normalizeRecord(
   }
   if (provider === "hubspot") {
     switch (model) {
-      case "Deal":                        return normalizeHubspotDeal(raw, hubspotStageMap, hubspotOwnerMap);
-      case "Contact":                     return normalizeHubspotContact(raw);
+      case "Deal":                        return normalizeHubspotDeal(raw, hubspotStageMap, hubspotOwnerMap, hubspotContactCompanyMap);
+      case "Contact": {
+        const contactId = raw.id as string | undefined;
+        const enrichment = contactId ? {
+          companyName: hubspotContactCompanyMap?.[contactId],
+          dealNames: hubspotContactDealMap?.[contactId],
+        } : undefined;
+        return normalizeHubspotContact(raw, enrichment);
+      }
       case "Company":                     return normalizeHubspotCompany(raw);
       case "Task":                        return normalizeHubspotTask(raw, hubspotOwnerMap);
       case "Ticket":                      return normalizeHubspotTicket(raw, hubspotOwnerMap);
@@ -331,7 +340,70 @@ export const syncIntegrationFunction = inngest.createFunction(
             })
           : null;
 
-      // ── Step 1e (HubSpot only): fetch account currency and save to workspace settings ──
+      // ── Step 1e (HubSpot only): build contact→company and contact→deal enrichment maps ──
+      const hubspotContactCompanyMap: Record<string, string> | null =
+        provider === "hubspot"
+          ? await step.run("build-hubspot-contact-company-map", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              const map: Record<string, string> = {};
+              let cursor: string | undefined;
+              try {
+                for (;;) {
+                  const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Contact", cursor });
+                  for (const raw of page.records) {
+                    const r = raw as Record<string, unknown>;
+                    const contactId = r.id as string | undefined;
+                    if (!contactId) continue;
+                    const assoc = r.returned_associations as { companies?: Array<{ name?: string }> } | undefined;
+                    const compName = assoc?.companies?.[0]?.name as string | undefined;
+                    if (compName) map[contactId] = compName;
+                  }
+                  if (!page.next_cursor) break;
+                  cursor = page.next_cursor;
+                }
+              } catch (err) {
+                console.warn("[inngest] Contact→Company map failed:", err instanceof Error ? err.message : String(err));
+              }
+              console.log(`[inngest] Contact→Company map: ${Object.keys(map).length} entries`);
+              return map;
+            })
+          : null;
+
+      const hubspotContactDealMap: Record<string, string[]> | null =
+        provider === "hubspot"
+          ? await step.run("build-hubspot-contact-deal-map", async () => {
+              const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+              const map: Record<string, string[]> = {};
+              let cursor: string | undefined;
+              try {
+                for (;;) {
+                  const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Deal", cursor });
+                  for (const raw of page.records) {
+                    const r = raw as Record<string, unknown>;
+                    const dealName = (r.name as string) ?? "Untitled Deal";
+                    const assoc = r.returned_associations as { contacts?: Array<{ id?: string }> } | undefined;
+                    if (assoc?.contacts?.length) {
+                      for (const c of assoc.contacts) {
+                        const cId = c.id as string | undefined;
+                        if (cId) {
+                          if (!map[cId]) map[cId] = [];
+                          if (!map[cId].includes(dealName)) map[cId].push(dealName);
+                        }
+                      }
+                    }
+                  }
+                  if (!page.next_cursor) break;
+                  cursor = page.next_cursor;
+                }
+              } catch (err) {
+                console.warn("[inngest] Contact→Deal map failed:", err instanceof Error ? err.message : String(err));
+              }
+              console.log(`[inngest] Contact→Deal map: ${Object.keys(map).length} entries`);
+              return map;
+            })
+          : null;
+
+      // ── Step 1f (HubSpot only): fetch account currency and save to workspace settings ──
       if (provider === "hubspot") {
         await step.run("fetch-hubspot-account-currency", async () => {
           const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
@@ -362,7 +434,7 @@ export const syncIntegrationFunction = inngest.createFunction(
         });
       }
 
-      // ── Step 1f: Fetch + normalise all records from Nango ───────────────
+      // ── Step 1g: Fetch + normalise all records from Nango ───────────────
       const records: SerialisableSyncRecord[] = await step.run(
         "fetch-nango-records",
         async () => {
@@ -415,7 +487,9 @@ export const syncIntegrationFunction = inngest.createFunction(
                   lookupsForRecord,
                   gmailContactMap ?? undefined,
                   hubspotStageMap ?? undefined,
-                  hubspotOwnerMap ?? undefined
+                  hubspotOwnerMap ?? undefined,
+                  hubspotContactCompanyMap ?? undefined,
+                  hubspotContactDealMap ?? undefined,
                 );
                 if (rec) {
                   if (provider === "google-mail" && rec.source_type === "gmail_message") {

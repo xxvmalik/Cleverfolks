@@ -328,6 +328,15 @@ You can call search_by_person and search_knowledge_base in PARALLEL to save time
 NEVER create a task for a person without contact_id if you found them in search results.
 The HubSpot ID appears on its own line in search results: "HubSpot ID: 727353023697"
 
+CROSS-REFERENCING RULE — ALWAYS BUILD THE FULL PICTURE:
+When researching a company, ALWAYS cross-reference:
+1. Search for the company directly (search_knowledge_base with source_types=['hubspot_company'])
+2. Search for contacts at that company (search_knowledge_base with the company name, source_types=['hubspot_contact'])
+3. For each contact found, search for their associated deals (search_knowledge_base with contact name, source_types=['hubspot_deal'])
+Build the full Company → Contacts → Deals picture before responding.
+When the user says "their deal" or "update their deal stage", find the deal associated with that company's contacts — don't ask which deal if there's only one match.
+You can run multiple searches in PARALLEL to save time.
+
 READ / SEARCH TOOLS:
 - Pipeline overview / "all deals" → fetch_recent_messages with source_types=['hubspot_deal'], after=2020-01-01, limit=500
 - Specific deal/topic search → search_knowledge_base
