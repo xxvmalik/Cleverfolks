@@ -88,6 +88,7 @@ const SKYLER_WRITE_TOOLS: Anthropic.Tool[] = [
         domain: { type: "string", description: "Updated website domain" },
         industry: { type: "string", description: "HubSpot industry enum (SCREAMING_SNAKE_CASE). Omit if unsure." },
         description: { type: "string", description: "Updated description" },
+        phone: { type: "string", description: "Updated phone number" },
         city: { type: "string", description: "Updated city" },
         country: { type: "string", description: "Updated country" },
       },

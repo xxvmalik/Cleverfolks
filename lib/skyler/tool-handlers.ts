@@ -472,6 +472,24 @@ async function executeViaNango(
 
     console.log(`[skyler-tools] ${nangoAction} succeeded:`, JSON.stringify(result).slice(0, 300));
 
+    // Post-update: set company phone via proxy (Nango Company model has no phone field)
+    if (toolName === "update_company" && input.phone) {
+      const companyId = input.company_id as string;
+      try {
+        await nango.proxy({
+          method: "PATCH",
+          endpoint: `/crm/v3/objects/companies/${companyId}`,
+          providerConfigKey: "hubspot",
+          connectionId,
+          data: { properties: { phone: input.phone as string } },
+        });
+        console.log(`[skyler-tools] Set phone on company ${companyId} via proxy`);
+      } catch (err) {
+        console.error(`[skyler-tools] Failed to set phone on company ${companyId}:`,
+          err instanceof Error ? err.message : String(err));
+      }
+    }
+
     // Post-creation: associate with contacts/companies/deals via HubSpot v4 API
     const createdId = (result as Record<string, unknown>)?.id as string | undefined;
     if (createdId) {
