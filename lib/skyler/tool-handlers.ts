@@ -49,6 +49,7 @@ function buildNangoPayload(
         company: input.company,
         job_title: input.job_title,
         lead_status: "NEW",
+        owner: context?.ownerId,
       };
     case "update_contact":
       return {
@@ -69,6 +70,7 @@ function buildNangoPayload(
         description: input.description,
         city: input.city,
         country: input.country,
+        owner: context?.ownerId,
       };
     case "update_company":
       return {
@@ -355,8 +357,9 @@ async function executeViaNango(
   try {
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-    // Build context: resolve stage IDs and owner for deals and tasks
+    // Build context: resolve stage IDs and auto-assign owner for all create tools
     let context: { stageId?: string; ownerId?: string } | undefined;
+    const isCreateTool = toolName.startsWith("create_");
     if (toolName === "create_deal" || toolName === "update_deal") {
       const [stageId, ownerId] = await Promise.all([
         input.stage ? resolveStageId(nango, connectionId, input.stage as string) : Promise.resolve(undefined),
@@ -364,10 +367,11 @@ async function executeViaNango(
       ]);
       context = { stageId, ownerId };
       console.log(`[skyler-tools] Deal context: stageId=${stageId ?? "none"}, ownerId=${ownerId ?? "none"}`);
-    } else if (toolName === "create_task") {
+    } else if (isCreateTool) {
+      // Auto-assign owner for all created records (contacts, companies, tasks, notes)
       const ownerId = await getDefaultOwnerId(nango, connectionId);
       context = { ownerId };
-      console.log(`[skyler-tools] Task context: ownerId=${ownerId ?? "none"}, contact_id=${input.contact_id ?? "none"}`);
+      console.log(`[skyler-tools] ${toolName} context: ownerId=${ownerId ?? "none"}`);
     }
 
     const payload = buildNangoPayload(toolName, input, context);
