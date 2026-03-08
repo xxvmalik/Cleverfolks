@@ -345,27 +345,49 @@ export const syncIntegrationFunction = inngest.createFunction(
         provider === "hubspot"
           ? await step.run("build-hubspot-contact-company-map", async () => {
               const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-              const map: Record<string, string> = {};
-              let cursor: string | undefined;
+              const contactToCompany: Record<string, string> = {};
               try {
+                // Build companyId→name map
+                const companyNames: Record<string, string> = {};
+                let compCursor: string | undefined;
                 for (;;) {
-                  const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Contact", cursor });
+                  const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Company", cursor: compCursor });
                   for (const raw of page.records) {
                     const r = raw as Record<string, unknown>;
-                    const contactId = r.id as string | undefined;
-                    if (!contactId) continue;
-                    const assoc = r.returned_associations as { companies?: Array<{ name?: string }> } | undefined;
-                    const compName = assoc?.companies?.[0]?.name as string | undefined;
-                    if (compName) map[contactId] = compName;
+                    if (r.id && r.name) companyNames[r.id as string] = r.name as string;
                   }
                   if (!page.next_cursor) break;
-                  cursor = page.next_cursor;
+                  compCursor = page.next_cursor;
+                }
+                // Fetch contacts via HubSpot proxy to get associatedcompanyid
+                let after: string | undefined;
+                for (;;) {
+                  const params = new URLSearchParams({ limit: "100", properties: "associatedcompanyid" });
+                  if (after) params.set("after", after);
+                  const resp = await nango.proxy({
+                    method: "GET",
+                    baseUrlOverride: "https://api.hubapi.com",
+                    endpoint: `/crm/v3/objects/contacts?${params.toString()}`,
+                    providerConfigKey: "hubspot",
+                    connectionId,
+                  });
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const body = resp.data as any;
+                  for (const contact of body?.results ?? []) {
+                    const cId = contact.id as string;
+                    const assocCompId = contact.properties?.associatedcompanyid as string | undefined;
+                    if (cId && assocCompId && companyNames[assocCompId]) {
+                      contactToCompany[cId] = companyNames[assocCompId];
+                    }
+                  }
+                  after = body?.paging?.next?.after as string | undefined;
+                  if (!after) break;
                 }
               } catch (err) {
                 console.warn("[inngest] Contact→Company map failed:", err instanceof Error ? err.message : String(err));
               }
-              console.log(`[inngest] Contact→Company map: ${Object.keys(map).length} entries`);
-              return map;
+              console.log(`[inngest] Contact→Company map: ${Object.keys(contactToCompany).length} entries`);
+              return contactToCompany;
             })
           : null;
 

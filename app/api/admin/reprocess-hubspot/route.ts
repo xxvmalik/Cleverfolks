@@ -156,34 +156,56 @@ export async function POST(req: Request) {
     const contactDealMap: Record<string, string[]> = {};    // contactId → deal names
     const companyContactMap: Record<string, string[]> = {}; // companyId → contact IDs
 
-    // Pre-fetch all contacts to build contactId→companyName map
+    // 3a: Build companyId→companyName map from all companies
+    const companyNameMap: Record<string, string> = {};
     {
       let cursor: string | undefined;
       for (;;) {
-        const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Contact", cursor });
+        const page = await nango.listRecords({ providerConfigKey: "hubspot", connectionId, model: "Company", cursor });
         for (const raw of page.records) {
           const r = raw as Record<string, unknown>;
-          const contactId = r.id as string | undefined;
-          if (!contactId) continue;
-          // Check returned_associations for company
-          const assoc = r.returned_associations as { companies?: Array<{ id?: string; name?: string }> } | undefined;
-          if (assoc?.companies?.[0]) {
-            const compId = assoc.companies[0].id as string | undefined;
-            const compName = assoc.companies[0].name as string | undefined;
-            if (compName) contactCompanyMap[contactId] = compName;
-            if (compId) {
-              if (!companyContactMap[compId]) companyContactMap[compId] = [];
-              companyContactMap[compId].push(contactId);
-            }
-          }
+          const compId = r.id as string | undefined;
+          const compName = r.name as string | undefined;
+          if (compId && compName) companyNameMap[compId] = compName;
         }
         if (!page.next_cursor) break;
         cursor = page.next_cursor;
       }
+      log(`Company name map: ${Object.keys(companyNameMap).length} companies`);
+    }
+
+    // 3b: Fetch all contacts via HubSpot proxy to get associatedcompanyid
+    // (Nango Contact model does NOT expose returned_associations for companies)
+    {
+      let after: string | undefined;
+      for (;;) {
+        const params = new URLSearchParams({ limit: "100", properties: "associatedcompanyid,firstname,lastname" });
+        if (after) params.set("after", after);
+        const resp = await nango.proxy({
+          method: "GET",
+          baseUrlOverride: "https://api.hubapi.com",
+          endpoint: `/crm/v3/objects/contacts?${params.toString()}`,
+          providerConfigKey: "hubspot",
+          connectionId,
+        });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const body = resp.data as any;
+        for (const contact of body?.results ?? []) {
+          const contactId = contact.id as string;
+          const assocCompanyId = contact.properties?.associatedcompanyid as string | undefined;
+          if (contactId && assocCompanyId && companyNameMap[assocCompanyId]) {
+            contactCompanyMap[contactId] = companyNameMap[assocCompanyId];
+            if (!companyContactMap[assocCompanyId]) companyContactMap[assocCompanyId] = [];
+            companyContactMap[assocCompanyId].push(contactId);
+          }
+        }
+        after = body?.paging?.next?.after as string | undefined;
+        if (!after) break;
+      }
       log(`Contact→Company map: ${Object.keys(contactCompanyMap).length} contacts with companies`);
     }
 
-    // Pre-fetch all deals to build contactId→dealNames map
+    // 3c: Pre-fetch all deals to build contactId→dealNames map
     {
       let cursor: string | undefined;
       for (;;) {
