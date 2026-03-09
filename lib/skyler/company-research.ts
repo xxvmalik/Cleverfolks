@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { searchWeb } from "@/lib/web-search";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SALES_CLOSER_DEFAULTS } from "@/lib/email/resend-client";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type CompanyResearch = {
   summary: string;
@@ -41,7 +42,7 @@ Produce a structured JSON response with these fields:
 
 CRITICAL: The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve. Do NOT describe what the PROSPECT sells as if we are selling it.
 
-Respond with ONLY valid JSON, no other text.
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.
 If information is not available for a field, use an empty string or empty array.
 
 PROSPECT Company: {company_name}
@@ -145,7 +146,7 @@ export async function researchCompany(params: {
       .join("")
       .trim();
 
-    const parsed = JSON.parse(text) as CompanyResearch;
+    const parsed = parseAIJson<CompanyResearch>(text);
     parsed.researched_at = new Date().toISOString();
     if (!parsed.service_alignment_points) parsed.service_alignment_points = [];
 

@@ -7,6 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CompanyResearch } from "@/lib/skyler/company-research";
 import type { SalesVoice } from "@/lib/skyler/voice-learner";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type ConversationEntry = {
   role: string;
@@ -161,7 +162,7 @@ BAD email example (generic, no actual services):
 "We help businesses streamline their operations and scale efficiently. I think there could be synergies between our teams."
 The bad example mentions NO actual services. NEVER write like this.
 
-Respond with ONLY valid JSON:
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.
 {
   "subject": "...",
   "textBody": "...",
@@ -227,7 +228,7 @@ export async function draftEmail(params: {
     .trim();
 
   try {
-    const parsed = JSON.parse(text) as DraftedEmail;
+    const parsed = parseAIJson<DraftedEmail>(text);
     console.log(`[email-drafter] Drafted step ${cadenceStep} email for ${pipelineRecord.contact_name}: "${parsed.subject}"`);
     return parsed;
   } catch {

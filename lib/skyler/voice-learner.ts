@@ -6,6 +6,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type SalesVoice = {
   greeting_style: string;
@@ -33,7 +34,7 @@ Produce a structured JSON response with these fields:
 - avoid_patterns: array of things they never do in emails
 - example_phrases: array of 5-10 characteristic phrases from their emails
 
-Respond with ONLY valid JSON, no other text.
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.
 
 Emails to analyse:
 `;
@@ -102,7 +103,7 @@ export async function learnSalesVoice(
       .join("")
       .trim();
 
-    const voice = JSON.parse(text) as SalesVoice;
+    const voice = parseAIJson<SalesVoice>(text);
     voice.learned_at = new Date().toISOString();
 
     // Store as a workspace memory for persistence

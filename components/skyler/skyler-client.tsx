@@ -87,6 +87,16 @@ type ConversationItem = {
   custom_title?: string | null;
 };
 
+/** Unescape HTML entities that may be double-escaped in JSONB storage */
+function unescapeHtml(html: string): string {
+  return html
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 // ── Conversation Item (with star / rename / delete) ──────────────────────────
 
 function SkylerConvItem({
@@ -1227,7 +1237,7 @@ export function SkylerClient({
                                           {(emailData.htmlBody || emailData.textBody) ? (
                                             <div
                                               className="text-[#E0E0E0] text-sm leading-relaxed [&_a]:text-[#3A89FF] [&_a]:underline [&_p]:mb-2 [&_br]:mb-1"
-                                              dangerouslySetInnerHTML={{ __html: emailData.htmlBody || emailData.textBody || "" }}
+                                              dangerouslySetInnerHTML={{ __html: unescapeHtml(emailData.htmlBody || emailData.textBody || "") }}
                                             />
                                           ) : (
                                             <p className="text-[#555A63] text-sm italic">No email body</p>

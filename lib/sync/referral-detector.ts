@@ -5,6 +5,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type ReferralResult = {
   is_referral: boolean;
@@ -25,7 +26,7 @@ Look for patterns like:
 - "passed your details"
 - Any variation indicating one person directed another to make contact
 
-Respond with ONLY valid JSON, no other text:
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers:
 - If NOT a referral: {"is_referral": false}
 - If a referral: {"is_referral": true, "referrer_name": "Full Name", "referrer_company": "Company Name"}
 
@@ -68,7 +69,7 @@ export async function detectReferral(chunkText: string): Promise<ReferralResult>
       .join("")
       .trim();
 
-    const parsed = JSON.parse(text) as ReferralResult;
+    const parsed = parseAIJson<ReferralResult>(text);
 
     if (parsed.is_referral && parsed.referrer_name) {
       console.log(

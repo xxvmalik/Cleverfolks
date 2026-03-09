@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export interface ExtractedMemory {
   type: "correction" | "preference" | "terminology" | "pattern" | "learning";
@@ -73,14 +74,7 @@ export async function extractMemories(
     const textBlock = response.content.find((b) => b.type === "text");
     if (!textBlock || textBlock.type !== "text") return [];
 
-    // Parse JSON response, handling potential markdown fences
-    let jsonStr = textBlock.text.trim();
-    jsonStr = jsonStr
-      .replace(/^```json?\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
-
-    const parsed = JSON.parse(jsonStr);
+    const parsed = parseAIJson(textBlock.text);
     if (!Array.isArray(parsed)) return [];
 
     // Normalize and validate each memory
