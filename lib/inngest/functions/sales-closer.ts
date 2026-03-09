@@ -9,7 +9,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { researchCompany } from "@/lib/skyler/company-research";
 import { learnSalesVoice, getSalesVoice } from "@/lib/skyler/voice-learner";
 import { draftEmail } from "@/lib/skyler/email-drafter";
-import { draftOutreachEmail } from "@/lib/email/resend-client";
+import { draftOutreachEmail } from "@/lib/email/email-sender";
 
 // ── Sales Closer Workflow ─────────────────────────────────────────────────────
 // Triggered when a lead scores hot (70+). Manages the full outreach lifecycle.

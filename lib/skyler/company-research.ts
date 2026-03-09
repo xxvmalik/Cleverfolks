@@ -7,7 +7,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { searchWeb } from "@/lib/web-search";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { SALES_CLOSER_DEFAULTS } from "@/lib/email/resend-client";
+import { SALES_CLOSER_DEFAULTS } from "@/lib/email/email-sender";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type CompanyResearch = {

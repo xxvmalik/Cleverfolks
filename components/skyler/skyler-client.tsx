@@ -879,9 +879,12 @@ export function SkylerClient({
         fetchSalesCloserData(); // Refresh
       } else {
         const data = await res.json().catch(() => ({}));
-        const friendlyError = data.error === "ai_unavailable"
+        const errMsg = data.error ?? "";
+        const friendlyError = errMsg === "ai_unavailable"
           ? "Skyler can't process this right now. Your draft is saved — you can retry shortly."
-          : (data.error ?? "Send failed — your draft is saved, try again.");
+          : errMsg.includes("No email provider connected")
+          ? "Connect your Gmail or Outlook in Integrations to send emails."
+          : (errMsg || "Send failed — your draft is saved, try again.");
         setSendError((prev) => ({ ...prev, [actionId]: friendlyError }));
       }
     } catch {

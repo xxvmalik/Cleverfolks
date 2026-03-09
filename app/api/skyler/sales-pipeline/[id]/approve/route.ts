@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import { executeEmailSend } from "@/lib/email/resend-client";
+import { executeEmailSend } from "@/lib/email/email-sender";
 import { inngest } from "@/lib/inngest/client";
 
 export async function POST(
@@ -49,19 +49,19 @@ export async function POST(
   }
 
   try {
-    const { resendId } = await executeEmailSend(db, targetActionId);
+    const { messageId } = await executeEmailSend(db, targetActionId);
 
     // Send Inngest event so the workflow can continue (non-blocking)
     try {
       await inngest.send({
         name: "skyler/email.approved",
-        data: { pipelineId, actionId: targetActionId, resendId },
+        data: { pipelineId, actionId: targetActionId, messageId },
       });
     } catch (inngestErr) {
       console.error("[approve] Inngest event failed (email still sent):", inngestErr);
     }
 
-    return NextResponse.json({ ok: true, resendId });
+    return NextResponse.json({ ok: true, messageId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Action stays as 'pending' so user can retry
