@@ -17,6 +17,9 @@ import {
   Target,
   Settings,
   Loader2,
+  Eye,
+  X,
+  Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -220,7 +223,17 @@ type PipelineRecord = {
   cadence_step: number;
   resolution: string | null;
   updated_at: string;
-  pending_actions: Array<{ id: string; description: string }>;
+  pending_actions: Array<{
+    id: string;
+    description: string;
+    tool_input?: {
+      to?: string;
+      subject?: string;
+      htmlBody?: string;
+      textBody?: string;
+      pipelineId?: string;
+    };
+  }>;
 };
 
 type PerformanceMetrics = {
@@ -302,6 +315,8 @@ export function SkylerClient({
   const [pipelineRecords, setPipelineRecords] = useState<PipelineRecord[]>([]);
   const [performanceMetrics, setPerformanceMetrics] = useState<PerformanceMetrics | null>(null);
   const [pipelineLoading, setPipelineLoading] = useState(false);
+  const [previewActionId, setPreviewActionId] = useState<string | null>(null);
+  const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -963,25 +978,104 @@ export function SkylerClient({
                           {/* Pending email drafts */}
                           {rec.pending_actions.length > 0 && (
                             <div className="mt-3 space-y-2">
-                              {rec.pending_actions.map((pa) => (
-                                <div key={pa.id} className="bg-[#1A1A1A] border border-[#2A2D35] rounded-lg p-3">
-                                  <p className="text-[#E0E0E0] text-xs mb-2">{pa.description}</p>
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={() => handleApproveDraft(rec.id, pa.id)}
-                                      className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
-                                    >
-                                      Approve and Send
-                                    </button>
-                                    <button
-                                      onClick={() => handleRejectDraft(rec.id, pa.id)}
-                                      className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
-                                    >
-                                      Reject
-                                    </button>
+                              {rec.pending_actions.map((pa) => {
+                                const isOpen = previewActionId === pa.id;
+                                const emailData = pa.tool_input;
+                                return (
+                                  <div key={pa.id} className="bg-[#1A1A1A] border border-[#2A2D35] rounded-lg overflow-hidden">
+                                    {/* Summary row */}
+                                    <div className="p-3 flex items-center justify-between gap-2">
+                                      <p className="text-[#E0E0E0] text-xs flex-1 min-w-0 truncate">{pa.description}</p>
+                                      <button
+                                        onClick={() => setPreviewActionId(isOpen ? null : pa.id)}
+                                        className="flex items-center gap-1 px-2.5 py-1 bg-[#3A89FF]/15 text-[#3A89FF] rounded-lg text-xs font-medium hover:bg-[#3A89FF]/25 transition-colors flex-shrink-0"
+                                      >
+                                        <Eye className="w-3 h-3" />
+                                        {isOpen ? "Close" : "Preview"}
+                                      </button>
+                                    </div>
+
+                                    {/* Expanded email preview */}
+                                    {isOpen && emailData && (
+                                      <div className="border-t border-[#2A2D35] p-4 space-y-3">
+                                        <div className="space-y-1.5">
+                                          <div className="flex gap-2 text-xs">
+                                            <span className="text-[#8B8F97] w-14 flex-shrink-0">To:</span>
+                                            <span className="text-white">{emailData.to}</span>
+                                          </div>
+                                          <div className="flex gap-2 text-xs">
+                                            <span className="text-[#8B8F97] w-14 flex-shrink-0">Subject:</span>
+                                            <span className="text-white font-medium">{emailData.subject}</span>
+                                          </div>
+                                        </div>
+
+                                        {/* Email body */}
+                                        <div className="bg-[#111111] border border-[#2A2D35]/50 rounded-lg p-4 max-h-[280px] overflow-y-auto">
+                                          {emailData.htmlBody ? (
+                                            <div
+                                              className="text-[#E0E0E0] text-sm leading-relaxed [&_a]:text-[#3A89FF] [&_a]:underline [&_p]:mb-2 [&_br]:mb-1"
+                                              dangerouslySetInnerHTML={{ __html: emailData.htmlBody }}
+                                            />
+                                          ) : (
+                                            <pre className="text-[#E0E0E0] text-sm leading-relaxed whitespace-pre-wrap font-sans">
+                                              {emailData.textBody ?? "No email body"}
+                                            </pre>
+                                          )}
+                                        </div>
+
+                                        {/* Actions */}
+                                        <div className="flex items-center gap-2 pt-1">
+                                          <button
+                                            onClick={() => { handleApproveDraft(rec.id, pa.id); setPreviewActionId(null); }}
+                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
+                                          >
+                                            <Send className="w-3 h-3" />
+                                            Approve and Send
+                                          </button>
+                                          <button
+                                            onClick={() => {
+                                              handleRejectDraft(rec.id, pa.id, rejectFeedback[pa.id]);
+                                              setPreviewActionId(null);
+                                              setRejectFeedback((prev) => { const next = { ...prev }; delete next[pa.id]; return next; });
+                                            }}
+                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                          >
+                                            <X className="w-3 h-3" />
+                                            Reject
+                                          </button>
+                                        </div>
+
+                                        {/* Rejection feedback input */}
+                                        <input
+                                          type="text"
+                                          placeholder="Optional: correction feedback (e.g. &quot;be more direct&quot;, &quot;don't mention pricing&quot;)"
+                                          value={rejectFeedback[pa.id] ?? ""}
+                                          onChange={(e) => setRejectFeedback((prev) => ({ ...prev, [pa.id]: e.target.value }))}
+                                          className="w-full bg-[#111111] border border-[#2A2D35]/50 rounded-lg px-3 py-2 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F87171]/50 transition-colors"
+                                        />
+                                      </div>
+                                    )}
+
+                                    {/* Compact approve/reject when preview is closed */}
+                                    {!isOpen && (
+                                      <div className="px-3 pb-3 flex gap-2">
+                                        <button
+                                          onClick={() => handleApproveDraft(rec.id, pa.id)}
+                                          className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
+                                        >
+                                          Approve and Send
+                                        </button>
+                                        <button
+                                          onClick={() => handleRejectDraft(rec.id, pa.id)}
+                                          className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                        >
+                                          Reject
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
-                                </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           )}
                         </div>
