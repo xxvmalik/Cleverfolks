@@ -48,6 +48,8 @@ export type ConversationRow = {
   workspace_id: string;
   user_id: string;
   title: string;
+  is_starred?: boolean;
+  custom_title?: string | null;
   created_at: string;
   updated_at: string;
 };

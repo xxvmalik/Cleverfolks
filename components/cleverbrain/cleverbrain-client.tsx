@@ -19,6 +19,10 @@ import {
   User,
   Link2,
   FileText,
+  MoreHorizontal,
+  Star,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import Nango from "@nangohq/frontend";
 import type { ConnectUIEvent } from "@nangohq/frontend";
@@ -180,23 +184,112 @@ function ConvItem({
   conv,
   isActive,
   onClick,
+  onStar,
+  onRename,
+  onDelete,
 }: {
   conv: ConversationRow;
   isActive: boolean;
   onClick: () => void;
+  onStar: (id: string, starred: boolean) => void;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState(conv.custom_title ?? conv.title ?? "");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [menuOpen]);
+
+  if (renaming) {
+    return (
+      <div className="px-2 py-1">
+        <input
+          autoFocus
+          value={renameValue}
+          onChange={(e) => setRenameValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { onRename(conv.id, renameValue); setRenaming(false); }
+            if (e.key === "Escape") setRenaming(false);
+          }}
+          onBlur={() => { onRename(conv.id, renameValue); setRenaming(false); }}
+          className="w-full bg-[#2A2A2A] border border-[#3A89FF]/50 rounded-lg px-3 py-1.5 text-sm text-white outline-none"
+        />
+      </div>
+    );
+  }
+
+  if (confirmDelete) {
+    return (
+      <div className="px-2 py-1.5 bg-[#F87171]/10 border border-[#F87171]/30 rounded-lg mx-1">
+        <p className="text-[#F87171] text-xs mb-2">Delete this conversation?</p>
+        <div className="flex gap-2">
+          <button onClick={() => { onDelete(conv.id); setConfirmDelete(false); }} className="px-2 py-1 bg-[#F87171]/20 text-[#F87171] rounded text-xs hover:bg-[#F87171]/30">Delete</button>
+          <button onClick={() => setConfirmDelete(false)} className="px-2 py-1 bg-white/5 text-[#8B8F97] rounded text-xs hover:bg-white/10">Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  const displayTitle = conv.custom_title || conv.title || "New conversation";
+
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150",
-        isActive
-          ? "bg-white/10 text-white"
-          : "text-[#8B8F97] hover:bg-white/5 hover:text-white"
-      )}
-    >
-      {conv.title || "New conversation"}
-    </button>
+    <div className="group relative flex items-center">
+      <button
+        onClick={onClick}
+        className={cn(
+          "w-full text-left px-3 py-2 rounded-lg text-sm truncate transition-colors duration-150 flex items-center gap-1.5",
+          isActive
+            ? "bg-white/10 text-white"
+            : "text-[#8B8F97] hover:bg-white/5 hover:text-white"
+        )}
+      >
+        {conv.is_starred && <Star className="w-3 h-3 text-[#FBB040] fill-[#FBB040] flex-shrink-0" />}
+        <span className="truncate">{displayTitle}</span>
+      </button>
+      <div ref={menuRef} className="absolute right-1 top-1/2 -translate-y-1/2">
+        <button
+          onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
+          className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity"
+        >
+          <MoreHorizontal className="w-3.5 h-3.5 text-[#8B8F97]" />
+        </button>
+        {menuOpen && (
+          <div className="absolute right-0 top-full mt-1 bg-[#1C1F24] border border-[#2A2D35] rounded-lg shadow-xl py-1 z-50 w-36">
+            <button
+              onClick={() => { onStar(conv.id, !conv.is_starred); setMenuOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-[#E0E0E0] hover:bg-white/5 flex items-center gap-2"
+            >
+              <Star className={cn("w-3 h-3", conv.is_starred ? "text-[#FBB040] fill-[#FBB040]" : "text-[#8B8F97]")} />
+              {conv.is_starred ? "Unstar" : "Star"}
+            </button>
+            <button
+              onClick={() => { setRenaming(true); setMenuOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-[#E0E0E0] hover:bg-white/5 flex items-center gap-2"
+            >
+              <Pencil className="w-3 h-3 text-[#8B8F97]" />
+              Rename
+            </button>
+            <button
+              onClick={() => { setConfirmDelete(true); setMenuOpen(false); }}
+              className="w-full text-left px-3 py-1.5 text-xs text-[#F87171] hover:bg-white/5 flex items-center gap-2"
+            >
+              <Trash2 className="w-3 h-3" />
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1112,7 +1205,37 @@ export function CleverBrainClient({
     router.push("/login");
   }
 
-  const groups = groupConversations(conversations);
+  // ── Conversation management handlers ──────────────────────────────────────
+  async function handleStarConversation(id: string, starred: boolean) {
+    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, is_starred: starred } : c));
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_starred: starred }),
+    });
+  }
+
+  async function handleRenameConversation(id: string, title: string) {
+    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, custom_title: title || null } : c));
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_title: title }),
+    });
+  }
+
+  async function handleDeleteConversation(id: string) {
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeConversationId === id) {
+      setActiveConversationId(null);
+      setMessages([]);
+    }
+    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+  }
+
+  const starred = conversations.filter((c) => c.is_starred);
+  const unstarred = conversations.filter((c) => !c.is_starred);
+  const groups = groupConversations(unstarred);
   const hasMessages = messages.length > 0 || streamingState !== null;
 
   // ── Render ──────────────────────────────────────────────────────────────
@@ -1203,6 +1326,30 @@ export function CleverBrainClient({
           {/* Conversation list */}
           {!historyCollapsed && (
             <div className="flex-1 overflow-y-auto px-2 pb-2">
+              {/* Starred section */}
+              {starred.length > 0 && (
+                <div className="mb-2">
+                  <div className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-[#FBB040]/70 flex items-center gap-1">
+                    <Star className="w-2.5 h-2.5 fill-[#FBB040] text-[#FBB040]" />
+                    Starred
+                  </div>
+                  <div className="space-y-0.5">
+                    {starred.map((conv) => (
+                      <ConvItem
+                        key={conv.id}
+                        conv={conv}
+                        isActive={conv.id === activeConversationId}
+                        onClick={() => void loadConversation(conv.id)}
+                        onStar={handleStarConversation}
+                        onRename={handleRenameConversation}
+                        onDelete={handleDeleteConversation}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Time-grouped sections */}
               {(["today", "yesterday", "previous7Days", "older"] as const).map((key) => {
                 const label = {
                   today: "Today",
@@ -1224,6 +1371,9 @@ export function CleverBrainClient({
                           conv={conv}
                           isActive={conv.id === activeConversationId}
                           onClick={() => void loadConversation(conv.id)}
+                          onStar={handleStarConversation}
+                          onRename={handleRenameConversation}
+                          onDelete={handleDeleteConversation}
                         />
                       ))}
                     </div>
