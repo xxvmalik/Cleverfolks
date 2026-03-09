@@ -46,11 +46,18 @@ export async function detectReferral(chunkText: string): Promise<ReferralResult>
 
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 150,
+      max_tokens: 50,
+      system: [
+        {
+          type: "text",
+          text: REFERRAL_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
       messages: [
         {
           role: "user",
-          content: REFERRAL_PROMPT + chunkText.slice(0, 2000), // Cap input to control costs
+          content: chunkText.slice(0, 2000), // Cap input to control costs
         },
       ],
     });

@@ -63,6 +63,27 @@ export async function processSyncedData(
 
   console.log(`[processor] Starting — ${deduped.length} records (after dedup), workspace=${workspaceId}`);
 
+  // Pre-fetch referral-checked status for all email records in batch
+  const emailExternalIds = deduped
+    .filter((r) => r.source_type === "gmail_message" || r.source_type === "outlook_email")
+    .map((r) => r.external_id);
+  const referralCheckedSet = new Set<string>();
+  if (emailExternalIds.length > 0) {
+    const { data: checkedDocs } = await supabase
+      .from("synced_documents")
+      .select("external_id, metadata")
+      .eq("workspace_id", workspaceId)
+      .in("external_id", emailExternalIds);
+    for (const doc of checkedDocs ?? []) {
+      const meta = (doc.metadata ?? {}) as Record<string, unknown>;
+      if (meta.referral_checked === true) {
+        referralCheckedSet.add(doc.external_id);
+      }
+    }
+    const unchecked = emailExternalIds.length - referralCheckedSet.size;
+    console.log(`[Referral Detector] ${unchecked} unchecked emails, ${referralCheckedSet.size} already processed — skipping those.`);
+  }
+
   for (let i = 0; i < deduped.length; i++) {
     const record = deduped[i];
     const label = `[processor] record[${i}] external_id=${record.external_id}`;
@@ -83,18 +104,18 @@ export async function processSyncedData(
         continue;
       }
 
-      // ── Step A2: Referral detection (emails only) ─────────────────────────
+      // ── Step A2: Referral detection (emails only, skip if already checked) ──
       const isEmailType = record.source_type === "gmail_message" || record.source_type === "outlook_email";
-      if (isEmailType) {
+      if (isEmailType && !referralCheckedSet.has(record.external_id)) {
         const referral = await detectReferral(content);
-        if (referral.is_referral) {
-          record.metadata = {
-            ...(record.metadata ?? {}),
-            referral_detected: true,
-            referrer_name: referral.referrer_name ?? null,
-            referrer_company: referral.referrer_company ?? null,
-          };
-        }
+        record.metadata = {
+          ...(record.metadata ?? {}),
+          referral_checked: true,
+          referral_checked_at: new Date().toISOString(),
+          referral_detected: referral.is_referral,
+          referrer_name: referral.is_referral ? (referral.referrer_name ?? null) : null,
+          referrer_company: referral.is_referral ? (referral.referrer_company ?? null) : null,
+        };
       }
 
       // ── Step B: Upsert document ──────────────────────────────────────────
