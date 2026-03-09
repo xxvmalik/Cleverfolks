@@ -105,19 +105,19 @@ export async function processSyncedData(
         continue;
       }
 
-      // ── Step A2: Referral detection (emails only, skip if already checked) ──
+      // DISABLED: referral + reply detection — re-enable after fixing the guard
       const isEmailType = record.source_type === "gmail_message" || record.source_type === "outlook_email";
-      if (isEmailType && !referralCheckedSet.has(record.external_id)) {
-        const referral = await detectReferral(content);
-        record.metadata = {
-          ...(record.metadata ?? {}),
-          referral_checked: true,
-          referral_checked_at: new Date().toISOString(),
-          referral_detected: referral.is_referral,
-          referrer_name: referral.is_referral ? (referral.referrer_name ?? null) : null,
-          referrer_company: referral.is_referral ? (referral.referrer_company ?? null) : null,
-        };
-      }
+      // if (isEmailType && !referralCheckedSet.has(record.external_id)) {
+      //   const referral = await detectReferral(content);
+      //   record.metadata = {
+      //     ...(record.metadata ?? {}),
+      //     referral_checked: true,
+      //     referral_checked_at: new Date().toISOString(),
+      //     referral_detected: referral.is_referral,
+      //     referrer_name: referral.is_referral ? (referral.referrer_name ?? null) : null,
+      //     referrer_company: referral.is_referral ? (referral.referrer_company ?? null) : null,
+      //   };
+      // }
 
       // ── Step B: Upsert document ──────────────────────────────────────────
       const { data: documentId, error: docError } = await supabase.rpc(
@@ -219,18 +219,17 @@ export async function processSyncedData(
         storedChunks++;
       }
 
-      // ── Step G: Reply detection for Sales Closer pipeline ──────────────
-      if (isEmailType) {
-        try {
-          await detectPipelineReply(supabase, workspaceId, {
-            content,
-            metadata: record.metadata,
-          });
-        } catch (replyErr) {
-          // Non-fatal — log and continue
-          console.warn(`${label} reply detection error:`, replyErr);
-        }
-      }
+      // DISABLED: referral + reply detection — re-enable after fixing the guard
+      // if (isEmailType) {
+      //   try {
+      //     await detectPipelineReply(supabase, workspaceId, {
+      //       content,
+      //       metadata: record.metadata,
+      //     });
+      //   } catch (replyErr) {
+      //     console.warn(`${label} reply detection error:`, replyErr);
+      //   }
+      // }
 
       processed++;
       console.log(`[processor] ${processed}/${deduped.length} done — ${storedChunks} chunks stored`);
