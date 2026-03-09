@@ -30,6 +30,7 @@ export const salesCloserWorkflow = inngest.createFunction(
       workspaceId,
       leadScoreId,
       leadScore,
+      pipelineId: existingPipelineId,
     } = event.data as {
       contactId: string;
       contactEmail: string;
@@ -39,6 +40,7 @@ export const salesCloserWorkflow = inngest.createFunction(
       workspaceId: string;
       leadScoreId?: string;
       leadScore?: number;
+      pipelineId?: string;
     };
 
     if (!contactEmail) {
@@ -46,21 +48,34 @@ export const salesCloserWorkflow = inngest.createFunction(
       return { status: "skipped", reason: "no_email" };
     }
 
-    // Step 1: Create pipeline record
+    // Step 1: Create or fetch pipeline record
     const pipeline = await step.run("create-pipeline-record", async () => {
       const db = createAdminSupabaseClient();
 
-      // Check for existing pipeline record
-      const { data: existing } = await db
+      // If a pipeline record was already created by the entry point, fetch it
+      if (existingPipelineId) {
+        const { data: existing } = await db
+          .from("skyler_sales_pipeline")
+          .select("id, stage")
+          .eq("id", existingPipelineId)
+          .single();
+        if (existing) {
+          console.log(`[sales-closer] Using existing pipeline record ${existing.id}`);
+          return { id: existing.id, existing: true };
+        }
+      }
+
+      // Check for existing pipeline record by email
+      const { data: byEmail } = await db
         .from("skyler_sales_pipeline")
         .select("id, stage")
         .eq("workspace_id", workspaceId)
         .eq("contact_email", contactEmail)
         .single();
 
-      if (existing) {
-        console.log(`[sales-closer] Contact ${contactEmail} already in pipeline (${existing.stage})`);
-        return { id: existing.id, existing: true };
+      if (byEmail) {
+        console.log(`[sales-closer] Contact ${contactEmail} already in pipeline (${byEmail.stage})`);
+        return { id: byEmail.id, existing: true };
       }
 
       const { data, error } = await db

@@ -772,6 +772,21 @@ async function handleSalesCloserTool(
 
     if (error) return { results: [], summary: `Failed to add to pipeline: ${error.message}` };
 
+    // Trigger Sales Closer workflow
+    const { inngest } = await import("@/lib/inngest/client");
+    await inngest.send({
+      name: "skyler/lead.qualified.hot",
+      data: {
+        contactId: (input.contact_id as string) ?? contactEmail,
+        contactEmail,
+        contactName: (input.contact_name as string) ?? contactEmail,
+        companyName: (input.company_name as string) ?? null,
+        workspaceId,
+        leadScoreId: null,
+        pipelineId: data!.id,
+      },
+    });
+
     return {
       results: [],
       summary: `Added ${input.contact_name ?? contactEmail} to the Sales Closer pipeline. I will research their company and draft an outreach email for your approval.`,

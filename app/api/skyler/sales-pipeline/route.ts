@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { inngest } from "@/lib/inngest/client";
 
 async function resolveWorkspaceId(
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
@@ -127,6 +128,21 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Trigger Sales Closer workflow
+  await inngest.send({
+    name: "skyler/lead.qualified.hot",
+    data: {
+      contactId: contactId ?? contactEmail,
+      contactEmail,
+      contactName: contactName ?? contactEmail,
+      companyName: companyName ?? null,
+      companyId: companyId ?? null,
+      workspaceId,
+      leadScoreId: null,
+      pipelineId: data!.id,
+    },
+  });
 
   return NextResponse.json({ id: data!.id, status: "created" }, { status: 201 });
 }
