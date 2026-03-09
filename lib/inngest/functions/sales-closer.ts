@@ -105,14 +105,15 @@ export const salesCloserWorkflow = inngest.createFunction(
     const memories = await step.run("fetch-business-context", async () => {
       console.log("[Sales Closer] Step 2: Fetching business context...");
       const db = createAdminSupabaseClient();
-      // Fetch ALL active memory types — corrections & terminology contain service descriptions
-      const { data: memData } = await db
+      // Active memories = superseded_by IS NULL (no status column exists)
+      const { data: memData, error: memErr } = await db
         .from("workspace_memories")
         .select("content")
         .eq("workspace_id", workspaceId)
-        .eq("status", "active")
+        .is("superseded_by", null)
         .order("times_reinforced", { ascending: false })
         .limit(20);
+      if (memErr) console.error("[Sales Closer] Memory fetch error:", memErr.message);
       const result = (memData ?? []).map((m) => m.content as string);
       console.log(`[Sales Closer] Workspace memories count: ${result.length}`);
       if (result.length > 0) {

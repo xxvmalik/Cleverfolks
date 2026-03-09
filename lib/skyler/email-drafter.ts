@@ -8,6 +8,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { CompanyResearch } from "@/lib/skyler/company-research";
 import type { SalesVoice } from "@/lib/skyler/voice-learner";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
+import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 export type ConversationEntry = {
   role: string;
@@ -184,7 +185,23 @@ export async function draftEmail(params: {
   conversationThread: ConversationEntry[];
   workspaceMemories: string[];
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, workspaceMemories } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread } = params;
+  let workspaceMemories = params.workspaceMemories;
+
+  // Fallback: fetch memories directly if none were passed
+  if (!workspaceMemories || workspaceMemories.length === 0) {
+    console.log("[email-drafter] No memories passed — fetching directly from DB");
+    const db = createAdminSupabaseClient();
+    const { data } = await db
+      .from("workspace_memories")
+      .select("content")
+      .eq("workspace_id", params.workspaceId)
+      .is("superseded_by", null)
+      .order("times_reinforced", { ascending: false })
+      .limit(20);
+    workspaceMemories = (data ?? []).map((m) => m.content as string);
+    console.log(`[email-drafter] Fetched ${workspaceMemories.length} memories directly`);
+  }
 
   // Map cadence step to angle
   const angleMap: Record<number, string> = {

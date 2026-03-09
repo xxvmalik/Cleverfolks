@@ -136,9 +136,13 @@ export async function researchCompany(params: {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      max_tokens: 2000,
       messages: [{ role: "user", content: prompt }],
     });
+
+    if (response.stop_reason === "max_tokens") {
+      console.warn("[company-research] Response truncated — max_tokens hit");
+    }
 
     const text = response.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
