@@ -7,6 +7,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CompanyResearch } from "@/lib/skyler/company-research";
 import type { SalesVoice } from "@/lib/skyler/voice-learner";
+import type { SalesPlaybook } from "@/lib/skyler/sales-playbook";
+import { formatPlaybookForPrompt } from "@/lib/skyler/sales-playbook";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
@@ -52,6 +54,16 @@ Keep it short and direct. Under 100 words.`,
 Be honest and respectful. Acknowledge they are busy. Keep the door open.
 No guilt trips, no passive-aggression. Simply say this is your last email, and if timing is ever right, you are here.
 Under 80 words. Subject like "Closing the loop" or similar.`,
+
+  reply_followup: `The prospect REPLIED to one of our outreach emails. This is a warm conversation now.
+Read their reply carefully and respond appropriately:
+- If they asked a question, answer it directly using our service details
+- If they expressed interest, propose a specific next step (call, demo, meeting)
+- If they objected, address it respectfully using our objection handlers
+- If they asked to be removed, be gracious and confirm removal
+- Match their energy and formality level
+- Reference what they said specifically — do NOT send a generic follow-up
+Keep it conversational. Under 150 words.`,
 };
 
 function buildDraftPrompt(params: {
@@ -61,6 +73,7 @@ function buildDraftPrompt(params: {
   salesVoice: SalesVoice | null;
   conversationThread: ConversationEntry[];
   workspaceMemories: string[];
+  salesPlaybook?: SalesPlaybook | null;
   contactName: string;
   contactEmail: string;
   companyName: string;
@@ -71,6 +84,7 @@ function buildDraftPrompt(params: {
     salesVoice,
     conversationThread,
     workspaceMemories,
+    salesPlaybook,
     contactName,
     companyName,
   } = params;
@@ -103,12 +117,19 @@ USE THIS DEFAULT STYLE:
           .join("\n")}\n`
       : "";
 
-  const ourBusinessBlock =
-    workspaceMemories.length > 0
-      ? `${workspaceMemories.join("\n")}
+  // Prefer structured playbook over raw memories
+  let ourBusinessBlock: string;
+  if (salesPlaybook && salesPlaybook.services.length > 0) {
+    ourBusinessBlock = `${formatPlaybookForPrompt(salesPlaybook)}
 
-CRITICAL: You MUST mention specific services from the list above in your email. Do NOT write generic "we help businesses" — instead reference actual services, products, pricing, or capabilities listed above.`
-      : "No specific business context available. Keep the pitch generic but professional.";
+CRITICAL: You MUST mention specific services from the SERVICES WE SELL section above. Do NOT write generic "we help businesses" — reference actual service names, benefits, pricing, or differentiators listed above.`;
+  } else if (workspaceMemories.length > 0) {
+    ourBusinessBlock = `${workspaceMemories.join("\n")}
+
+CRITICAL: You MUST mention specific services from the list above in your email. Do NOT write generic "we help businesses" — instead reference actual services, products, pricing, or capabilities listed above.`;
+  } else {
+    ourBusinessBlock = "No specific business context available. Keep the pitch generic but professional.";
+  }
 
   const alignmentBlock =
     (companyResearch.service_alignment_points ?? []).length > 0
@@ -184,13 +205,14 @@ export async function draftEmail(params: {
   salesVoice: SalesVoice | null;
   conversationThread: ConversationEntry[];
   workspaceMemories: string[];
+  salesPlaybook?: SalesPlaybook | null;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook } = params;
   let workspaceMemories = params.workspaceMemories;
 
-  // Fallback: fetch memories directly if none were passed
-  if (!workspaceMemories || workspaceMemories.length === 0) {
-    console.log("[email-drafter] No memories passed — fetching directly from DB");
+  // Fallback: fetch memories directly if none were passed and no playbook
+  if ((!workspaceMemories || workspaceMemories.length === 0) && !salesPlaybook) {
+    console.log("[email-drafter] No memories or playbook passed — fetching directly from DB");
     const db = createAdminSupabaseClient();
     const { data } = await db
       .from("workspace_memories")
@@ -203,8 +225,9 @@ export async function draftEmail(params: {
     console.log(`[email-drafter] Fetched ${workspaceMemories.length} memories directly`);
   }
 
-  // Map cadence step to angle
+  // Map cadence step to angle (-1 = reply followup)
   const angleMap: Record<number, string> = {
+    [-1]: "reply_followup",
     1: "initial_outreach",
     2: "different_value_prop",
     3: "social_proof_or_case_study",
@@ -219,6 +242,7 @@ export async function draftEmail(params: {
     salesVoice,
     conversationThread,
     workspaceMemories,
+    salesPlaybook,
     contactName: pipelineRecord.contact_name,
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,

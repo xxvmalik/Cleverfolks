@@ -9,6 +9,8 @@ import { searchWeb } from "@/lib/web-search";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SALES_CLOSER_DEFAULTS } from "@/lib/email/email-sender";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
+import type { SalesPlaybook } from "@/lib/skyler/sales-playbook";
+import { formatPlaybookForPrompt } from "@/lib/skyler/sales-playbook";
 
 export type CompanyResearch = {
   summary: string;
@@ -23,11 +25,12 @@ export type CompanyResearch = {
   researched_at: string;
 };
 
-function buildResearchPrompt(businessContext: string): string {
+function buildResearchPrompt(businessContext: string, playbookText?: string): string {
+  const ourContext = playbookText || businessContext || "No business context provided yet.";
   return `You are analysing web search results about a PROSPECT company to prepare for a sales outreach email.
 
 IMPORTANT CONTEXT — Who we are (the company doing the selling):
-${businessContext || "No business context provided yet."}
+${ourContext}
 
 Produce a structured JSON response with these fields:
 - summary: 2-3 sentence overview of the PROSPECT (what THEY do, where they're based, rough size)
@@ -65,8 +68,9 @@ export async function researchCompany(params: {
   pipelineId?: string;
   db?: SupabaseClient;
   businessContext?: string;
+  salesPlaybook?: SalesPlaybook | null;
 }): Promise<CompanyResearch> {
-  const { companyName, companyWebsite, contactName, contactEmail, workspaceId, pipelineId, db, businessContext } = params;
+  const { companyName, companyWebsite, contactName, contactEmail, workspaceId, pipelineId, db, businessContext, salesPlaybook } = params;
 
   // Check for cached research (less than 7 days old)
   if (db && pipelineId) {
@@ -125,8 +129,9 @@ export async function researchCompany(params: {
     return fallback;
   }
 
-  // Analyse with Haiku
-  const prompt = buildResearchPrompt(businessContext ?? "")
+  // Analyse with Haiku — prefer playbook over raw context
+  const playbookText = salesPlaybook ? formatPlaybookForPrompt(salesPlaybook) : undefined;
+  const prompt = buildResearchPrompt(businessContext ?? "", playbookText)
     .replace("{company_name}", companyName)
     .replace("{contact_name}", contactName ?? "Unknown")
     .replace("{contact_email}", contactEmail ?? "Unknown")

@@ -10,6 +10,7 @@ import { researchCompany } from "@/lib/skyler/company-research";
 import { learnSalesVoice, getSalesVoice } from "@/lib/skyler/voice-learner";
 import { draftEmail } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
+import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 
 // ── Sales Closer Workflow ─────────────────────────────────────────────────────
 // Triggered when a lead scores hot (70+). Manages the full outreach lifecycle.
@@ -122,9 +123,16 @@ export const salesCloserWorkflow = inngest.createFunction(
       return result;
     });
 
-    // Step 3: Research the company (with our business context for alignment)
+    // Step 3: Build structured sales playbook from memories
+    const playbook = await step.run("build-sales-playbook", async () => {
+      console.log("[Sales Closer] Step 3: Building sales playbook...");
+      const db = createAdminSupabaseClient();
+      return await buildSalesPlaybook(db, workspaceId, memories);
+    });
+
+    // Step 4: Research the company (with playbook for alignment)
     const research = await step.run("research-company", async () => {
-      console.log("[Sales Closer] Step 3: Researching company...");
+      console.log("[Sales Closer] Step 4: Researching company...");
       const db = createAdminSupabaseClient();
       return await researchCompany({
         companyName: pipeline.company_name || companyName,
@@ -134,21 +142,22 @@ export const salesCloserWorkflow = inngest.createFunction(
         pipelineId: pipeline.id,
         db,
         businessContext: memories.join("\n"),
+        salesPlaybook: playbook,
       });
     });
 
-    // Step 4: Learn sales voice (if not already learned)
+    // Step 5: Learn sales voice (if not already learned)
     const voice = await step.run("learn-sales-voice", async () => {
-      console.log("[Sales Closer] Step 4: Learning sales voice...");
+      console.log("[Sales Closer] Step 5: Learning sales voice...");
       const db = createAdminSupabaseClient();
       const existing = await getSalesVoice(db, workspaceId);
       if (existing) return existing;
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 5: Draft initial outreach email
+    // Step 6: Draft initial outreach email (using playbook)
     const draft = await step.run("draft-initial-email", async () => {
-      console.log("[Sales Closer] Step 5: Drafting initial email...");
+      console.log("[Sales Closer] Step 6: Drafting initial email...");
 
       return await draftEmail({
         workspaceId,
@@ -166,12 +175,13 @@ export const salesCloserWorkflow = inngest.createFunction(
         salesVoice: voice,
         conversationThread: [],
         workspaceMemories: memories,
+        salesPlaybook: playbook,
       });
     });
 
-    // Step 6: Store draft for approval
+    // Step 7: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
-      console.log("[Sales Closer] Step 6: Storing draft for approval...");
+      console.log("[Sales Closer] Step 7: Storing draft for approval...");
       const db = createAdminSupabaseClient();
       return await draftOutreachEmail(db, {
         workspaceId,
@@ -185,6 +195,153 @@ export const salesCloserWorkflow = inngest.createFunction(
 
     console.log("[Sales Closer] Initial draft complete. Waiting for approval...");
     return { status: "draft_pending", pipeline_id: pipeline.id, action_id: action.actionId };
+  }
+);
+
+// ── Handle Pipeline Reply ────────────────────────────────────────────────────
+// Triggered when an incoming email matches an active pipeline record.
+// Drafts a contextual reply for user approval.
+
+export const handlePipelineReply = inngest.createFunction(
+  {
+    id: "handle-pipeline-reply",
+    retries: 1,
+  },
+  { event: "skyler/pipeline.reply.received" },
+  async ({ event, step }) => {
+    const { pipelineId, contactEmail, workspaceId, replyContent, stage } = event.data as {
+      pipelineId: string;
+      contactEmail: string;
+      workspaceId: string;
+      replyContent: string;
+      stage: string;
+    };
+
+    // Step 1: Update pipeline record with the reply
+    const pipeline = await step.run("update-pipeline-with-reply", async () => {
+      const db = createAdminSupabaseClient();
+      const now = new Date().toISOString();
+
+      // Fetch current pipeline record
+      const { data: current } = await db
+        .from("skyler_sales_pipeline")
+        .select("*")
+        .eq("id", pipelineId)
+        .single();
+
+      if (!current) throw new Error(`Pipeline record ${pipelineId} not found`);
+
+      // Append reply to conversation thread
+      const thread = (current.conversation_thread ?? []) as Array<Record<string, unknown>>;
+      thread.push({
+        role: "prospect",
+        content: replyContent,
+        timestamp: now,
+        status: "received",
+      });
+
+      // Update pipeline: mark as replied, update stage
+      await db
+        .from("skyler_sales_pipeline")
+        .update({
+          awaiting_reply: false,
+          last_reply_at: now,
+          stage: "replied",
+          conversation_thread: thread,
+          updated_at: now,
+        })
+        .eq("id", pipelineId);
+
+      console.log(`[Pipeline Reply] Updated pipeline ${pipelineId} with reply from ${contactEmail}`);
+      return { ...current, conversation_thread: thread };
+    });
+
+    // Step 2: Fetch memories and playbook
+    const memories = await step.run("fetch-reply-context", async () => {
+      const db = createAdminSupabaseClient();
+      const { data: memData } = await db
+        .from("workspace_memories")
+        .select("content")
+        .eq("workspace_id", workspaceId)
+        .is("superseded_by", null)
+        .order("times_reinforced", { ascending: false })
+        .limit(20);
+      return (memData ?? []).map((m) => m.content as string);
+    });
+
+    const playbook = await step.run("build-reply-playbook", async () => {
+      const db = createAdminSupabaseClient();
+      return await buildSalesPlaybook(db, workspaceId, memories);
+    });
+
+    // Step 3: Research company (use cache if available)
+    const research = await step.run("research-for-reply", async () => {
+      const db = createAdminSupabaseClient();
+      return await researchCompany({
+        companyName: pipeline.company_name as string,
+        contactEmail: pipeline.contact_email as string,
+        contactName: pipeline.contact_name as string,
+        workspaceId,
+        pipelineId,
+        db,
+        businessContext: memories.join("\n"),
+        salesPlaybook: playbook,
+      });
+    });
+
+    // Step 4: Learn sales voice
+    const voice = await step.run("learn-reply-voice", async () => {
+      const db = createAdminSupabaseClient();
+      const existing = await getSalesVoice(db, workspaceId);
+      if (existing) return existing;
+      return await learnSalesVoice(db, workspaceId);
+    });
+
+    // Step 5: Draft reply email (cadenceStep -1 = reply mode)
+    const thread = (pipeline.conversation_thread ?? []) as Array<{
+      role: string;
+      content: string;
+      subject?: string;
+      timestamp: string;
+    }>;
+
+    const draft = await step.run("draft-reply-email", async () => {
+      console.log("[Pipeline Reply] Drafting reply email...");
+      return await draftEmail({
+        workspaceId,
+        pipelineRecord: {
+          id: pipelineId,
+          contact_name: pipeline.contact_name as string,
+          contact_email: pipeline.contact_email as string,
+          company_name: pipeline.company_name as string,
+          stage: "replied",
+          cadence_step: pipeline.cadence_step as number,
+          conversation_thread: thread,
+        },
+        cadenceStep: -1, // Reply mode
+        companyResearch: research,
+        salesVoice: voice,
+        conversationThread: thread,
+        workspaceMemories: memories,
+        salesPlaybook: playbook,
+      });
+    });
+
+    // Step 6: Store reply draft for approval
+    const action = await step.run("store-reply-draft", async () => {
+      const db = createAdminSupabaseClient();
+      return await draftOutreachEmail(db, {
+        workspaceId,
+        pipelineId,
+        to: pipeline.contact_email as string,
+        subject: draft.subject,
+        htmlBody: draft.htmlBody,
+        textBody: draft.textBody,
+      });
+    });
+
+    console.log(`[Pipeline Reply] Reply draft stored for approval: ${action.actionId}`);
+    return { status: "reply_draft_pending", pipeline_id: pipelineId, action_id: action.actionId };
   }
 );
 

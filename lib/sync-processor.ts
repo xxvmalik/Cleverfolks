@@ -5,6 +5,7 @@ import { chunkText } from "@/lib/chunking";
 import { createEmbeddings } from "@/lib/embeddings";
 import { resolveSlackMentions } from "@/lib/slack-user-resolver";
 import { detectReferral } from "@/lib/sync/referral-detector";
+import { detectPipelineReply } from "@/lib/sync/reply-detector";
 
 export type SyncRecord = {
   external_id: string;
@@ -216,6 +217,19 @@ export async function processSyncedData(
           throw new Error(`create_document_chunk failed: ${chunkError.message}`);
         }
         storedChunks++;
+      }
+
+      // ── Step G: Reply detection for Sales Closer pipeline ──────────────
+      if (isEmailType) {
+        try {
+          await detectPipelineReply(supabase, workspaceId, {
+            content,
+            metadata: record.metadata,
+          });
+        } catch (replyErr) {
+          // Non-fatal — log and continue
+          console.warn(`${label} reply detection error:`, replyErr);
+        }
       }
 
       processed++;
