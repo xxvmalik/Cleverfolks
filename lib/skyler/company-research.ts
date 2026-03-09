@@ -17,30 +17,39 @@ export type CompanyResearch = {
   pain_points: string[];
   decision_makers: string[];
   talking_points: string[];
+  service_alignment_points: string[];
   website_insights: string;
   researched_at: string;
 };
 
-const RESEARCH_PROMPT = `You are analysing web search results about a company to prepare for a sales outreach email.
+function buildResearchPrompt(businessContext: string): string {
+  return `You are analysing web search results about a PROSPECT company to prepare for a sales outreach email.
+
+IMPORTANT CONTEXT — Who we are (the company doing the selling):
+${businessContext || "No business context provided yet."}
 
 Produce a structured JSON response with these fields:
-- summary: 2-3 sentence company overview (what they do, where they're based, rough size)
-- industry: the company's primary industry
+- summary: 2-3 sentence overview of the PROSPECT (what THEY do, where they're based, rough size)
+- industry: the PROSPECT's primary industry
 - estimated_size: one of "1-10", "11-50", "51-200", "201-1000", "1000+"
-- recent_news: array of up to 3 relevant recent news items (one sentence each)
-- pain_points: array of 2-4 potential business problems we could help solve
-- decision_makers: array of key people mentioned (name and role)
-- talking_points: array of 3-5 specific hooks for personalised outreach
-- website_insights: one paragraph about what we learned from their online presence
+- recent_news: array of up to 3 relevant recent news items about the PROSPECT (one sentence each)
+- pain_points: array of 2-4 potential business problems the PROSPECT might have that OUR services could solve
+- decision_makers: array of key people at the PROSPECT mentioned (name and role)
+- talking_points: array of 3-5 specific hooks for personalised outreach to the PROSPECT
+- service_alignment_points: array of 2-3 specific ways OUR services could help THIS PROSPECT (connect our actual services to their actual needs). If no business context is available, leave empty.
+- website_insights: one paragraph about the PROSPECT's online presence
+
+CRITICAL: The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve. Do NOT describe what the PROSPECT sells as if we are selling it.
 
 Respond with ONLY valid JSON, no other text.
 If information is not available for a field, use an empty string or empty array.
 
-Company: {company_name}
-Contact: {contact_name} ({contact_email})
+PROSPECT Company: {company_name}
+PROSPECT Contact: {contact_name} ({contact_email})
 
 Web search results:
 `;
+}
 
 /**
  * Research a company using Tavily web search and Claude Haiku analysis.
@@ -54,8 +63,9 @@ export async function researchCompany(params: {
   workspaceId: string;
   pipelineId?: string;
   db?: SupabaseClient;
+  businessContext?: string;
 }): Promise<CompanyResearch> {
-  const { companyName, companyWebsite, contactName, contactEmail, workspaceId, pipelineId, db } = params;
+  const { companyName, companyWebsite, contactName, contactEmail, workspaceId, pipelineId, db, businessContext } = params;
 
   // Check for cached research (less than 7 days old)
   if (db && pipelineId) {
@@ -107,6 +117,7 @@ export async function researchCompany(params: {
       pain_points: [],
       decision_makers: [],
       talking_points: [`Personalise based on ${contactName ?? contactEmail ?? "the contact"}'s role`],
+      service_alignment_points: [],
       website_insights: "No website data available.",
       researched_at: new Date().toISOString(),
     };
@@ -114,7 +125,7 @@ export async function researchCompany(params: {
   }
 
   // Analyse with Haiku
-  const prompt = RESEARCH_PROMPT
+  const prompt = buildResearchPrompt(businessContext ?? "")
     .replace("{company_name}", companyName)
     .replace("{contact_name}", contactName ?? "Unknown")
     .replace("{contact_email}", contactEmail ?? "Unknown")
@@ -136,6 +147,7 @@ export async function researchCompany(params: {
 
     const parsed = JSON.parse(text) as CompanyResearch;
     parsed.researched_at = new Date().toISOString();
+    if (!parsed.service_alignment_points) parsed.service_alignment_points = [];
 
     // Cache in pipeline record
     if (db && pipelineId) {
@@ -161,6 +173,7 @@ export async function researchCompany(params: {
       pain_points: [],
       decision_makers: [],
       talking_points: [],
+      service_alignment_points: [],
       website_insights: allResults.map((r) => r.content).join(" ").slice(0, 500),
       researched_at: new Date().toISOString(),
     };

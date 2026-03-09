@@ -101,34 +101,10 @@ export const salesCloserWorkflow = inngest.createFunction(
       return data!;
     });
 
-    // Step 2: Research the company
-    const research = await step.run("research-company", async () => {
-      console.log("[Sales Closer] Step 2: Researching company...");
+    // Step 2: Fetch workspace business context (needed for research + drafting)
+    const memories = await step.run("fetch-business-context", async () => {
+      console.log("[Sales Closer] Step 2: Fetching business context...");
       const db = createAdminSupabaseClient();
-      return await researchCompany({
-        companyName: pipeline.company_name || companyName,
-        contactName: pipeline.contact_name || contactName,
-        contactEmail: pipeline.contact_email || contactEmail,
-        workspaceId: pipeline.workspace_id || workspaceId,
-        pipelineId: pipeline.id,
-        db,
-      });
-    });
-
-    // Step 3: Learn sales voice (if not already learned)
-    const voice = await step.run("learn-sales-voice", async () => {
-      console.log("[Sales Closer] Step 3: Learning sales voice...");
-      const db = createAdminSupabaseClient();
-      const existing = await getSalesVoice(db, workspaceId);
-      if (existing) return existing;
-      return await learnSalesVoice(db, workspaceId);
-    });
-
-    // Step 4: Draft initial outreach email
-    const draft = await step.run("draft-initial-email", async () => {
-      console.log("[Sales Closer] Step 4: Drafting initial email...");
-      const db = createAdminSupabaseClient();
-      // Fetch workspace memories inline
       const { data: memData } = await db
         .from("workspace_memories")
         .select("content")
@@ -137,7 +113,36 @@ export const salesCloserWorkflow = inngest.createFunction(
         .in("type", ["pattern", "learning", "preference"])
         .order("times_reinforced", { ascending: false })
         .limit(10);
-      const memories = (memData ?? []).map((m) => m.content as string);
+      return (memData ?? []).map((m) => m.content as string);
+    });
+
+    // Step 3: Research the company (with our business context for alignment)
+    const research = await step.run("research-company", async () => {
+      console.log("[Sales Closer] Step 3: Researching company...");
+      const db = createAdminSupabaseClient();
+      return await researchCompany({
+        companyName: pipeline.company_name || companyName,
+        contactName: pipeline.contact_name || contactName,
+        contactEmail: pipeline.contact_email || contactEmail,
+        workspaceId: pipeline.workspace_id || workspaceId,
+        pipelineId: pipeline.id,
+        db,
+        businessContext: memories.join("\n"),
+      });
+    });
+
+    // Step 4: Learn sales voice (if not already learned)
+    const voice = await step.run("learn-sales-voice", async () => {
+      console.log("[Sales Closer] Step 4: Learning sales voice...");
+      const db = createAdminSupabaseClient();
+      const existing = await getSalesVoice(db, workspaceId);
+      if (existing) return existing;
+      return await learnSalesVoice(db, workspaceId);
+    });
+
+    // Step 5: Draft initial outreach email
+    const draft = await step.run("draft-initial-email", async () => {
+      console.log("[Sales Closer] Step 5: Drafting initial email...");
 
       return await draftEmail({
         workspaceId,
@@ -158,9 +163,9 @@ export const salesCloserWorkflow = inngest.createFunction(
       });
     });
 
-    // Step 5: Store draft for approval
+    // Step 6: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
-      console.log("[Sales Closer] Step 5: Storing draft for approval...");
+      console.log("[Sales Closer] Step 6: Storing draft for approval...");
       const db = createAdminSupabaseClient();
       return await draftOutreachEmail(db, {
         workspaceId,
