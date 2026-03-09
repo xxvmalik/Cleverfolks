@@ -92,15 +92,15 @@ async function getEmailProvider(
 
   if (!integrations || integrations.length === 0) return null;
 
-  // Prefer Gmail, fall back to Outlook
-  const gmail = integrations.find((i) => i.provider === "google-mail");
-  if (gmail?.nango_connection_id) {
-    return { provider: "google-mail", connectionId: gmail.nango_connection_id };
-  }
-
+  // Prefer Outlook, fall back to Gmail
   const outlook = integrations.find((i) => i.provider === "outlook");
   if (outlook?.nango_connection_id) {
     return { provider: "outlook", connectionId: outlook.nango_connection_id };
+  }
+
+  const gmail = integrations.find((i) => i.provider === "google-mail");
+  if (gmail?.nango_connection_id) {
+    return { provider: "google-mail", connectionId: gmail.nango_connection_id };
   }
 
   return null;
