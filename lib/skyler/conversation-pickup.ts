@@ -4,8 +4,9 @@
  * to understand context before continuing the conversation.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type ConversationContext = {
   summary: string;
@@ -29,10 +30,7 @@ Produce a structured JSON response:
 - open_questions: array of unanswered questions from either side
 - suggested_next_action: one sentence describing what should happen next
 
-Respond with ONLY valid JSON, no other text.
-
-Email thread (chronological order):
-`;
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.`;
 
 /**
  * Read existing email threads with a contact and produce a conversation context summary.
@@ -79,20 +77,13 @@ export async function pickupExistingConversation(params: {
     .slice(0, 6000);
 
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 500,
-      messages: [{ role: "user", content: PICKUP_PROMPT + threadText }],
+    const text = await classifyWithGPT4oMini({
+      systemPrompt: PICKUP_PROMPT,
+      userContent: `Email thread (chronological order):\n${threadText}`,
+      maxTokens: 500,
     });
 
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-
-    const context = JSON.parse(text) as ConversationContext;
+    const context = parseAIJson<ConversationContext>(text);
     context.email_count = emailChunks.length;
 
     // Determine initial stage based on conversation state
@@ -135,10 +126,10 @@ export async function pickupExistingConversation(params: {
       }
     }
 
-    console.log(`[conversation-pickup] Analysed ${emailChunks.length} emails for ${contactEmail}: ${context.summary.slice(0, 100)}`);
+    console.log(`[conversation-pickup] Analysed ${emailChunks.length} emails for ${contactEmail} (GPT-4o-mini): ${context.summary.slice(0, 100)}`);
     return context;
   } catch (err) {
-    console.error("[conversation-pickup] Analysis failed:", err instanceof Error ? err.message : String(err));
+    console.error("[conversation-pickup] Analysis failed (GPT-4o-mini):", err instanceof Error ? err.message : String(err));
     return {
       summary: `Found ${emailChunks.length} emails with ${contactName ?? contactEmail} but analysis failed.`,
       last_message_from: "unknown",

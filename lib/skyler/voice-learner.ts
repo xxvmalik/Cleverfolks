@@ -4,7 +4,7 @@
  * so Skyler can match their voice in outreach emails.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
@@ -34,10 +34,7 @@ Produce a structured JSON response with these fields:
 - avoid_patterns: array of things they never do in emails
 - example_phrases: array of 5-10 characteristic phrases from their emails
 
-Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.
-
-Emails to analyse:
-`;
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.`;
 
 /**
  * Analyse the user's past sent emails to learn their sales voice.
@@ -90,18 +87,11 @@ export async function learnSalesVoice(
     .slice(0, 8000);
 
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
-      messages: [{ role: "user", content: VOICE_ANALYSIS_PROMPT + emailTexts }],
+    const text = await classifyWithGPT4oMini({
+      systemPrompt: VOICE_ANALYSIS_PROMPT,
+      userContent: `Emails to analyse:\n${emailTexts}`,
+      maxTokens: 600,
     });
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
 
     const voice = parseAIJson<SalesVoice>(text);
     voice.learned_at = new Date().toISOString();
@@ -122,10 +112,10 @@ export async function learnSalesVoice(
         { onConflict: "workspace_id,content", ignoreDuplicates: true }
       );
 
-    console.log(`[voice-learner] Learned sales voice: tone=${voice.tone}, avg_length=${voice.avg_length}`);
+    console.log(`[voice-learner] Learned sales voice (GPT-4o-mini): tone=${voice.tone}, avg_length=${voice.avg_length}`);
     return voice;
   } catch (err) {
-    console.error("[voice-learner] Voice analysis failed:", err instanceof Error ? err.message : String(err));
+    console.error("[voice-learner] Voice analysis failed (GPT-4o-mini):", err instanceof Error ? err.message : String(err));
     return null;
   }
 }

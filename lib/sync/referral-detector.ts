@@ -1,5 +1,5 @@
 /**
- * Sync-time referral detection using Claude Haiku.
+ * Sync-time referral detection using GPT-4o-mini.
  * Analyses email content for referral introduction patterns.
  *
  * This is Layer 3 of the email classification pipeline.
@@ -7,7 +7,7 @@
  * Expected: ~10-20% of all emails.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export type ReferralResult = {
@@ -34,43 +34,23 @@ function truncateForClassification(text: string, maxChars = 1500): string {
 }
 
 /**
- * Detect referral signals in email content using Claude Haiku.
+ * Detect referral signals in email content using GPT-4o-mini.
  * Returns referral metadata to be stored in document metadata.
  * Never throws — returns { is_referral: false } on any error.
  */
 export async function detectReferral(chunkText: string): Promise<ReferralResult> {
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 50,
-      system: [
-        {
-          type: "text",
-          text: REFERRAL_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [
-        {
-          role: "user",
-          content: truncateForClassification(chunkText),
-        },
-      ],
+    const text = await classifyWithGPT4oMini({
+      systemPrompt: REFERRAL_PROMPT,
+      userContent: truncateForClassification(chunkText),
+      maxTokens: 50,
     });
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
 
     const parsed = parseAIJson<ReferralResult>(text);
 
     if (parsed.is_referral && parsed.referrer_name) {
       console.log(
-        `[referral-detector] Referral detected: ${parsed.referrer_name}${parsed.referrer_company ? ` from ${parsed.referrer_company}` : ""}`
+        `[referral-detector] Referral detected (GPT-4o-mini): ${parsed.referrer_name}${parsed.referrer_company ? ` from ${parsed.referrer_company}` : ""}`
       );
       return parsed;
     }

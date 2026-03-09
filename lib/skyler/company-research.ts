@@ -1,10 +1,10 @@
 /**
  * Company research for Skyler Sales Closer.
- * Uses Tavily web search + Claude Haiku to produce structured company intelligence
+ * Uses Tavily web search + GPT-4o-mini to produce structured company intelligence
  * before drafting any outreach email.
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import { searchWeb } from "@/lib/web-search";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SALES_CLOSER_DEFAULTS } from "@/lib/email/email-sender";
@@ -56,7 +56,7 @@ Web search results:
 }
 
 /**
- * Research a company using Tavily web search and Claude Haiku analysis.
+ * Research a company using Tavily web search and GPT-4o-mini analysis.
  * Caches results in the pipeline record's company_research field.
  */
 export async function researchCompany(params: {
@@ -129,31 +129,19 @@ export async function researchCompany(params: {
     return fallback;
   }
 
-  // Analyse with Haiku — prefer playbook over raw context
+  // Analyse with GPT-4o-mini — prefer playbook over raw context
   const playbookText = salesPlaybook ? formatPlaybookForPrompt(salesPlaybook) : undefined;
-  const prompt = buildResearchPrompt(businessContext ?? "", playbookText)
+  const systemPrompt = buildResearchPrompt(businessContext ?? "", playbookText)
     .replace("{company_name}", companyName)
     .replace("{contact_name}", contactName ?? "Unknown")
-    .replace("{contact_email}", contactEmail ?? "Unknown")
-    + combinedText;
+    .replace("{contact_email}", contactEmail ?? "Unknown");
 
   try {
-    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-    const response = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 2000,
-      messages: [{ role: "user", content: prompt }],
+    const text = await classifyWithGPT4oMini({
+      systemPrompt,
+      userContent: combinedText,
+      maxTokens: 2000,
     });
-
-    if (response.stop_reason === "max_tokens") {
-      console.warn("[company-research] Response truncated — max_tokens hit");
-    }
-
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
 
     const parsed = parseAIJson<CompanyResearch>(text);
     parsed.researched_at = new Date().toISOString();
@@ -171,7 +159,7 @@ export async function researchCompany(params: {
         .eq("id", pipelineId);
     }
 
-    console.log(`[company-research] Researched ${companyName}: ${parsed.summary.slice(0, 100)}`);
+    console.log(`[company-research] Researched ${companyName} (GPT-4o-mini): ${parsed.summary.slice(0, 100)}`);
     return parsed;
   } catch (err) {
     console.error("[company-research] Analysis failed:", err instanceof Error ? err.message : String(err));

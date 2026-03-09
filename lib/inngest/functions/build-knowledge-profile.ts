@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
@@ -360,30 +360,27 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         return { personSamples, channelSamples };
       });
 
-      // ── Step 4: Single Claude call to analyze all data ────────────────────
-      const finalProfile = await step.run("analyze-with-claude", async () => {
-        const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      // ── Step 4: Single GPT-4o-mini call to analyze all data ─────────────
+      const finalProfile = await step.run("analyze-with-gpt4o-mini", async () => {
         const prompt = buildAnalysisPrompt(teamData, sampleData);
 
-        console.log("[knowledge-profile] Calling Claude for analysis");
+        console.log("[knowledge-profile] Calling GPT-4o-mini for analysis");
 
-        const response = await anthropic.messages.create({
-          model: "claude-haiku-4-5-20251001",
-          max_tokens: 2048,
-          messages: [{ role: "user", content: prompt }],
+        const text = await classifyWithGPT4oMini({
+          systemPrompt: prompt,
+          userContent: "Analyze the data above and return the JSON profile.",
+          maxTokens: 2048,
         });
 
-        const text =
-          response.content[0]?.type === "text" ? response.content[0].text : "";
         const parsed = extractJSON(text);
 
         if (!parsed) {
-          console.error("[knowledge-profile] Failed to parse Claude response");
+          console.error("[knowledge-profile] Failed to parse GPT-4o-mini response");
           return {} as Record<string, unknown>;
         }
 
         const memberCount = (parsed.team_members as unknown[] | undefined)?.length ?? 0;
-        console.log(`[knowledge-profile] Claude returned ${memberCount} team members`);
+        console.log(`[knowledge-profile] GPT-4o-mini returned ${memberCount} team members`);
         return parsed;
       });
 

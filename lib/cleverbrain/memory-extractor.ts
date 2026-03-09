@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export interface ExtractedMemory {
@@ -45,8 +45,6 @@ export async function extractMemories(
 ): Promise<ExtractedMemory[]> {
   if (conversationMessages.length < 2) return [];
 
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
   // Format conversation for analysis
   const conversationText = conversationMessages
     .map((m) => `${m.role === "user" ? "USER" : "ASSISTANT"}: ${m.content}`)
@@ -59,22 +57,13 @@ export async function extractMemories(
       : "";
 
   try {
-    const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 1024,
-      temperature: 0,
-      messages: [
-        {
-          role: "user",
-          content: `${EXTRACTION_PROMPT}${existingContext}\n\nCONVERSATION TO ANALYSE:\n${conversationText}\n\nExtract learnings as a JSON array:`,
-        },
-      ],
+    const text = await classifyWithGPT4oMini({
+      systemPrompt: EXTRACTION_PROMPT,
+      userContent: `${existingContext}\n\nCONVERSATION TO ANALYSE:\n${conversationText}\n\nExtract learnings as a JSON array:`,
+      maxTokens: 1024,
     });
 
-    const textBlock = response.content.find((b) => b.type === "text");
-    if (!textBlock || textBlock.type !== "text") return [];
-
-    const parsed = parseAIJson(textBlock.text);
+    const parsed = parseAIJson(text);
     if (!Array.isArray(parsed)) return [];
 
     // Normalize and validate each memory
@@ -106,7 +95,7 @@ export async function extractMemories(
           (m as ExtractedMemory).content.length > 0
       );
   } catch (error) {
-    console.error("[memory-extractor] Failed to extract memories:", error);
+    console.error("[memory-extractor] Failed to extract memories (GPT-4o-mini):", error);
     return [];
   }
 }
