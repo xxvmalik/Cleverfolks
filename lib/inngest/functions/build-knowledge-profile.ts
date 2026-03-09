@@ -221,6 +221,57 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
     console.log(`[knowledge-profile] Starting build for workspace ${workspaceId}`);
 
     try {
+      // ── Guard: 24-hour cooldown (runs FIRST, before any expensive work) ──
+      const earlyCheck = await step.run("guard-cooldown", async () => {
+        const db = createAdminSupabaseClient();
+        const { data: workspace } = await db
+          .from("workspaces")
+          .select("settings")
+          .eq("id", workspaceId)
+          .single();
+
+        const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
+        const lastBuildTime = settings.last_profile_build_at as string | undefined;
+        const lastProfileHash = settings.last_profile_hash as string | undefined;
+
+        // Quick content hash: chunk count + latest updated_at
+        const { count } = await db
+          .from("document_chunks")
+          .select("*", { count: "exact", head: true })
+          .eq("workspace_id", workspaceId);
+        const { data: latest } = await db
+          .from("document_chunks")
+          .select("updated_at")
+          .eq("workspace_id", workspaceId)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .single();
+
+        const quickHash = createHash("sha256")
+          .update(`${count ?? 0}-${latest?.updated_at ?? ""}`)
+          .digest("hex");
+
+        if (lastBuildTime) {
+          const hoursSince = (Date.now() - new Date(lastBuildTime).getTime()) / (1000 * 60 * 60);
+          if (hoursSince < 24) {
+            console.log(`[Knowledge Profile] Skipping rebuild — last build was ${hoursSince.toFixed(1)} hours ago`);
+            return { skip: true, reason: "cooldown", quickHash };
+          }
+        }
+
+        if (lastProfileHash === quickHash) {
+          console.log(`[Knowledge Profile] Skipping rebuild — data unchanged (hash: ${quickHash.slice(0, 8)}...)`);
+          return { skip: true, reason: "unchanged", quickHash };
+        }
+
+        console.log(`[Knowledge Profile] Guards passed — proceeding with build (hash: ${quickHash.slice(0, 8)}...)`);
+        return { skip: false, reason: null, quickHash };
+      });
+
+      if (earlyCheck.skip) {
+        return { status: "skipped", reason: earlyCheck.reason };
+      }
+
       // ── Step 1: Set status to 'building' ──────────────────────────────────
       await step.run("set-status-building", async () => {
         const db = createAdminSupabaseClient();
@@ -309,59 +360,6 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         return { personSamples, channelSamples };
       });
 
-      // ── Step 3.5: Check if rebuild is needed (daily cap + content hash) ──
-      const shouldSkip = await step.run("check-rebuild-needed", async () => {
-        const db = createAdminSupabaseClient();
-
-        // Generate hash of input data (same data sent to Claude)
-        const inputHash = createHash("sha256")
-          .update(JSON.stringify({ teamData, sampleData }))
-          .digest("hex");
-
-        const { data: workspace } = await db
-          .from("workspaces")
-          .select("settings")
-          .eq("id", workspaceId)
-          .single();
-
-        const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
-
-        // Safety cap: max 1 rebuild per day per workspace
-        const lastBuildTime = settings.last_profile_build_at as string | undefined;
-        if (lastBuildTime) {
-          const hoursSinceLastBuild =
-            (Date.now() - new Date(lastBuildTime).getTime()) / (1000 * 60 * 60);
-          if (hoursSinceLastBuild < 24) {
-            console.log(
-              `[knowledge-profile] Last built ${hoursSinceLastBuild.toFixed(1)}h ago -- skipping (24h cap)`
-            );
-            return { skip: true, inputHash };
-          }
-        }
-
-        // Content hash guard: skip if data hasn't changed
-        const lastProfileHash = settings.last_profile_hash as string | undefined;
-        if (lastProfileHash === inputHash) {
-          console.log(
-            `[knowledge-profile] Data unchanged (hash: ${inputHash.slice(0, 8)}...) -- skipping rebuild`
-          );
-          return { skip: true, inputHash };
-        }
-
-        console.log(
-          `[knowledge-profile] Data changed (old: ${lastProfileHash?.slice(0, 8) ?? "none"}, new: ${inputHash.slice(0, 8)}...) -- rebuilding`
-        );
-        return { skip: false, inputHash };
-      });
-
-      if (shouldSkip.skip) {
-        return {
-          status: "skipped",
-          members: teamData.activity.length,
-          channels: teamData.channels.length,
-        };
-      }
-
       // ── Step 4: Single Claude call to analyze all data ────────────────────
       const finalProfile = await step.run("analyze-with-claude", async () => {
         const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
@@ -424,7 +422,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
           .update({
             settings: {
               ...(workspace?.settings as Record<string, unknown> ?? {}),
-              last_profile_hash: shouldSkip.inputHash,
+              last_profile_hash: earlyCheck.quickHash,
               last_profile_build_at: new Date().toISOString(),
             },
           })
