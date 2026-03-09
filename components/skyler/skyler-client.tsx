@@ -265,6 +265,16 @@ function formatStage(stage: string): string {
   return stage.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function getSkylerUnavailableMessage(): string {
+  const hour = new Date().getHours();
+  if (hour >= 6 && hour < 9) return "Skyler is grabbing her morning coffee ☕ She'll be back shortly!";
+  if (hour >= 9 && hour < 12) return "Skyler just stepped into a quick meeting. She'll be right back!";
+  if (hour >= 12 && hour < 14) return "Skyler is currently on her lunch break 🍽️ She'll be back soon!";
+  if (hour >= 14 && hour < 17) return "Skyler is recharging with a quick power nap. Back in a moment!";
+  if (hour >= 17 && hour < 21) return "Skyler has clocked out for the evening 🌅 She'll be back shortly!";
+  return "Skyler is getting her beauty sleep 🌙 She'll be fresh and ready soon!";
+}
+
 const QUICK_ACTIONS = [
   "How's our pipeline looking?",
   "Which deals are closing soon?",
@@ -589,10 +599,13 @@ export function SkylerClient({
               // Refresh conversation list
               fetchConversations();
             } else if (event.type === "error") {
+              const friendlyMsg = event.error === "ai_unavailable"
+                ? getSkylerUnavailableMessage()
+                : `Something went wrong. Please try again.`;
               const errorMsg: ChatMessage = {
                 id: `error-${Date.now()}`,
                 role: "assistant",
-                content: `Sorry, something went wrong: ${event.error}`,
+                content: friendlyMsg,
               };
               setChatMessages((prev) => [...prev, errorMsg]);
               setStreamingContent("");
@@ -701,8 +714,10 @@ export function SkylerClient({
         fetchSalesCloserData(); // Refresh
       } else {
         const data = await res.json().catch(() => ({}));
-        setSendError((prev) => ({ ...prev, [actionId]: data.error ?? "Send failed" }));
-        // Action stays pending — user can retry
+        const friendlyError = data.error === "ai_unavailable"
+          ? "Skyler can't process this right now. Your draft is saved — you can retry shortly."
+          : (data.error ?? "Send failed — your draft is saved, try again.");
+        setSendError((prev) => ({ ...prev, [actionId]: friendlyError }));
       }
     } catch {
       setSendError((prev) => ({ ...prev, [actionId]: "Network error — please try again" }));

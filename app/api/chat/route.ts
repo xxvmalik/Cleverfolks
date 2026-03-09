@@ -22,6 +22,7 @@ import {
 import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
 import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
 import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
+import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -505,8 +506,7 @@ export async function POST(request: NextRequest) {
         try {
           send({
             type: "error",
-            error:
-              err instanceof Error ? err.message : "Internal server error",
+            error: sanitizeErrorForUser(err),
           });
         } catch {
           /* controller may already be closed */

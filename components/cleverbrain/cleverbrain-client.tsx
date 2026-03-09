@@ -94,6 +94,18 @@ const SUGGESTIONS = [
   "Are there any action items from recent discussions?",
 ];
 
+// ── Friendly unavailable messages ────────────────────────────────────────────
+
+function getCleverBrainUnavailableMessage(): string {
+  const hour = new Date().getHours();
+  if (hour >= 6 && hour < 9) return "CleverBrain is booting up with a morning espresso ☕ Back shortly!";
+  if (hour >= 9 && hour < 12) return "CleverBrain is doing some stretches. Back in a moment!";
+  if (hour >= 12 && hour < 14) return "CleverBrain is refuelling 🍽️ Try again in a bit!";
+  if (hour >= 14 && hour < 17) return "CleverBrain is taking a quick breather. Won't be long!";
+  if (hour >= 17 && hour < 21) return "CleverBrain is winding down for the day 🌅 Back shortly!";
+  return "CleverBrain is catching some Z's 🌙 Try again soon!";
+}
+
 // ── Time grouping ─────────────────────────────────────────────────────────────
 
 function groupConversations(convs: ConversationRow[]) {
@@ -1041,10 +1053,13 @@ export function CleverBrainClient({
               setStreamingState(null);
               void fetchConversations();
             } else if (event.type === "error") {
+              const friendlyMsg = event.error === "ai_unavailable"
+                ? getCleverBrainUnavailableMessage()
+                : `Something went wrong. Please try again.`;
               const errMsg: UIMessage = {
                 id: `err-${Date.now()}`,
                 role: "assistant",
-                content: `Sorry, something went wrong: ${event.error}`,
+                content: friendlyMsg,
                 sources: null,
                 created_at: new Date().toISOString(),
               };
