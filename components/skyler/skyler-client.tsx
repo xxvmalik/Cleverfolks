@@ -685,7 +685,12 @@ export function SkylerClient({
   });
 
   // Sales Closer: approve/reject email draft
+  const [sendError, setSendError] = useState<Record<string, string>>({});
+  const [sendingAction, setSendingAction] = useState<string | null>(null);
+
   async function handleApproveDraft(pipelineId: string, actionId: string) {
+    setSendingAction(actionId);
+    setSendError((prev) => { const next = { ...prev }; delete next[actionId]; return next; });
     try {
       const res = await fetch(`/api/skyler/sales-pipeline/${pipelineId}/approve`, {
         method: "POST",
@@ -694,9 +699,15 @@ export function SkylerClient({
       });
       if (res.ok) {
         fetchSalesCloserData(); // Refresh
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setSendError((prev) => ({ ...prev, [actionId]: data.error ?? "Send failed" }));
+        // Action stays pending — user can retry
       }
     } catch {
-      // Silently handle
+      setSendError((prev) => ({ ...prev, [actionId]: "Network error — please try again" }));
+    } finally {
+      setSendingAction(null);
     }
   }
 
@@ -981,8 +992,10 @@ export function SkylerClient({
                               {rec.pending_actions.map((pa) => {
                                 const isOpen = previewActionId === pa.id;
                                 const emailData = pa.tool_input;
+                                const isSending = sendingAction === pa.id;
+                                const error = sendError[pa.id];
                                 return (
-                                  <div key={pa.id} className="bg-[#1A1A1A] border border-[#2A2D35] rounded-lg overflow-hidden">
+                                  <div key={pa.id} className={cn("bg-[#1A1A1A] border rounded-lg overflow-hidden", error ? "border-[#F87171]/40" : "border-[#2A2D35]")}>
                                     {/* Summary row */}
                                     <div className="p-3 flex items-center justify-between gap-2">
                                       <p className="text-[#E0E0E0] text-xs flex-1 min-w-0 truncate">{pa.description}</p>
@@ -994,6 +1007,13 @@ export function SkylerClient({
                                         {isOpen ? "Close" : "Preview"}
                                       </button>
                                     </div>
+
+                                    {/* Error banner */}
+                                    {error && (
+                                      <div className="mx-3 mb-2 px-3 py-2 bg-[#F87171]/10 border border-[#F87171]/30 rounded-lg text-[#F87171] text-xs">
+                                        Send failed: {error}
+                                      </div>
+                                    )}
 
                                     {/* Expanded email preview */}
                                     {isOpen && emailData && (
@@ -1026,19 +1046,21 @@ export function SkylerClient({
                                         {/* Actions */}
                                         <div className="flex items-center gap-2 pt-1">
                                           <button
-                                            onClick={() => { handleApproveDraft(rec.id, pa.id); setPreviewActionId(null); }}
-                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
+                                            disabled={isSending}
+                                            onClick={() => handleApproveDraft(rec.id, pa.id)}
+                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors disabled:opacity-50"
                                           >
-                                            <Send className="w-3 h-3" />
-                                            Approve and Send
+                                            {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                                            {isSending ? "Sending..." : error ? "Retry Send" : "Approve and Send"}
                                           </button>
                                           <button
+                                            disabled={isSending}
                                             onClick={() => {
                                               handleRejectDraft(rec.id, pa.id, rejectFeedback[pa.id]);
                                               setPreviewActionId(null);
                                               setRejectFeedback((prev) => { const next = { ...prev }; delete next[pa.id]; return next; });
                                             }}
-                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
                                           >
                                             <X className="w-3 h-3" />
                                             Reject
@@ -1060,14 +1082,16 @@ export function SkylerClient({
                                     {!isOpen && (
                                       <div className="px-3 pb-3 flex gap-2">
                                         <button
+                                          disabled={isSending}
                                           onClick={() => handleApproveDraft(rec.id, pa.id)}
-                                          className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors"
+                                          className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors disabled:opacity-50"
                                         >
-                                          Approve and Send
+                                          {isSending ? "Sending..." : error ? "Retry Send" : "Approve and Send"}
                                         </button>
                                         <button
+                                          disabled={isSending}
                                           onClick={() => handleRejectDraft(rec.id, pa.id)}
-                                          className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                          className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
                                         >
                                           Reject
                                         </button>

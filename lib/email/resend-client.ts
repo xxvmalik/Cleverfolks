@@ -111,10 +111,10 @@ export async function executeEmailSend(
   });
 
   if (sendErr || !emailResult?.id) {
-    // Mark action as failed
+    // Leave action as 'pending' so it stays visible for retry — just store the error
     await db
       .from("skyler_actions")
-      .update({ status: "failed", result: { error: sendErr?.message ?? "Send failed" }, updated_at: new Date().toISOString() })
+      .update({ result: { last_error: sendErr?.message ?? "Send failed", failed_at: new Date().toISOString() }, updated_at: new Date().toISOString() })
       .eq("id", actionId);
     throw new Error(`Resend send failed: ${sendErr?.message ?? "unknown error"}`);
   }

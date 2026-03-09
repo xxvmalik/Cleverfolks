@@ -51,15 +51,20 @@ export async function POST(
   try {
     const { resendId } = await executeEmailSend(db, targetActionId);
 
-    // Send Inngest event so the workflow can continue
-    await inngest.send({
-      name: "skyler/email.approved",
-      data: { pipelineId, actionId: targetActionId, resendId },
-    });
+    // Send Inngest event so the workflow can continue (non-blocking)
+    try {
+      await inngest.send({
+        name: "skyler/email.approved",
+        data: { pipelineId, actionId: targetActionId, resendId },
+      });
+    } catch (inngestErr) {
+      console.error("[approve] Inngest event failed (email still sent):", inngestErr);
+    }
 
     return NextResponse.json({ ok: true, resendId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    // Action stays as 'pending' so user can retry
+    return NextResponse.json({ error: msg, retryable: true }, { status: 500 });
   }
 }
