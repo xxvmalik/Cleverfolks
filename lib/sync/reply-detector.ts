@@ -1,12 +1,15 @@
 /**
  * Sync-time reply detection for Skyler Sales Closer.
- * Checks if an incoming email is a reply to one of our outreach emails
- * by matching the sender's email against the sales pipeline.
- * If a match is found, fires an Inngest event so the workflow can continue.
+ * Pure database lookup — ZERO AI cost.
+ *
+ * Checks if an incoming email sender matches an active pipeline contact.
+ * If matched, updates the pipeline record and fires an Inngest event
+ * so the sales closer workflow can draft a contextual reply.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { inngest } from "@/lib/inngest/client";
+import { extractSenderFromText, extractSenderFromMetadata } from "./email-prefilter";
 
 export type ReplyDetectionResult = {
   is_reply: boolean;
@@ -16,8 +19,9 @@ export type ReplyDetectionResult = {
 
 /**
  * Detect if an incoming email is a reply to a Sales Closer outreach.
- * Matches by sender email against active pipeline records.
+ * Matches sender email against active pipeline records.
  *
+ * Zero AI cost — pure DB lookups.
  * Never throws — returns { is_reply: false } on any error.
  */
 export async function detectPipelineReply(
@@ -29,18 +33,21 @@ export async function detectPipelineReply(
   }
 ): Promise<ReplyDetectionResult> {
   try {
-    // Extract sender email from metadata
-    const senderEmail = extractSenderEmail(record.metadata);
+    // Extract sender email from metadata or text
+    const senderEmail =
+      extractSenderFromMetadata(record.metadata) ??
+      extractSenderFromText(record.content);
+
     if (!senderEmail) return { is_reply: false };
 
-    // Check if this sender has an active pipeline record
+    // Check if this sender has an active pipeline record awaiting reply
     const { data: pipeline } = await db
       .from("skyler_sales_pipeline")
-      .select("id, contact_email, stage, awaiting_reply")
+      .select("id, contact_email, stage, awaiting_reply, conversation_thread")
       .eq("workspace_id", workspaceId)
       .eq("contact_email", senderEmail)
       .eq("awaiting_reply", true)
-      .single();
+      .maybeSingle();
 
     if (!pipeline) return { is_reply: false };
 
@@ -48,7 +55,33 @@ export async function detectPipelineReply(
       `[reply-detector] Reply detected from ${senderEmail} for pipeline ${pipeline.id} (stage: ${pipeline.stage})`
     );
 
-    // Fire Inngest event for the sales closer workflow to handle
+    // Update pipeline record with the reply
+    const now = new Date().toISOString();
+    const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+    thread.push({
+      role: "prospect",
+      content: record.content.slice(0, 3000),
+      timestamp: now,
+      status: "received",
+    });
+
+    const newStage =
+      pipeline.stage === "initial_outreach" || (pipeline.stage as string).startsWith("follow_up")
+        ? "replied"
+        : pipeline.stage;
+
+    await db
+      .from("skyler_sales_pipeline")
+      .update({
+        awaiting_reply: false,
+        last_reply_at: now,
+        stage: newStage,
+        conversation_thread: thread,
+        updated_at: now,
+      })
+      .eq("id", pipeline.id);
+
+    // Fire Inngest event for the sales closer to draft a reply
     try {
       await inngest.send({
         name: "skyler/pipeline.reply.received",
@@ -56,14 +89,13 @@ export async function detectPipelineReply(
           pipelineId: pipeline.id,
           contactEmail: senderEmail,
           workspaceId,
-          replyContent: record.content.slice(0, 3000), // Cap for event size
+          replyContent: record.content.slice(0, 3000),
           stage: pipeline.stage,
         },
       });
       console.log(`[reply-detector] Fired skyler/pipeline.reply.received for pipeline ${pipeline.id}`);
     } catch (inngestErr) {
       console.error("[reply-detector] Inngest event failed:", inngestErr);
-      // Don't throw — the detection still succeeded
     }
 
     return {
@@ -78,36 +110,4 @@ export async function detectPipelineReply(
     );
     return { is_reply: false };
   }
-}
-
-/**
- * Extract sender email from record metadata.
- * Handles different metadata shapes from Gmail and Outlook normalizers.
- */
-function extractSenderEmail(
-  metadata?: Record<string, unknown>
-): string | null {
-  if (!metadata) return null;
-
-  // Gmail messages: metadata.from or metadata.sender
-  const from = metadata.from ?? metadata.sender ?? metadata.from_email;
-  if (typeof from === "string") {
-    // Could be "Name <email@example.com>" format
-    const match = from.match(/<([^>]+)>/);
-    return match ? match[1].toLowerCase() : from.toLowerCase();
-  }
-
-  // Outlook emails: metadata.from may be an object { emailAddress: { address: "..." } }
-  if (typeof from === "object" && from !== null) {
-    const addr = (from as Record<string, unknown>).emailAddress;
-    if (typeof addr === "object" && addr !== null) {
-      const email = (addr as Record<string, unknown>).address;
-      if (typeof email === "string") return email.toLowerCase();
-    }
-    // Or it could just be { address: "..." }
-    const directAddr = (from as Record<string, unknown>).address;
-    if (typeof directAddr === "string") return directAddr.toLowerCase();
-  }
-
-  return null;
 }

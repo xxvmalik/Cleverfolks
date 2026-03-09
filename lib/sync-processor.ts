@@ -4,8 +4,7 @@ import { extractText } from "@/lib/file-processor";
 import { chunkText } from "@/lib/chunking";
 import { createEmbeddings } from "@/lib/embeddings";
 import { resolveSlackMentions } from "@/lib/slack-user-resolver";
-import { detectReferral } from "@/lib/sync/referral-detector";
-import { detectPipelineReply } from "@/lib/sync/reply-detector";
+import { classifyNewEmails } from "@/lib/sync/email-classifier";
 
 export type SyncRecord = {
   external_id: string;
@@ -64,26 +63,13 @@ export async function processSyncedData(
 
   console.log(`[processor] Starting — ${deduped.length} records (after dedup), workspace=${workspaceId}`);
 
-  // Pre-fetch referral-checked status for all email records in batch
-  const emailExternalIds = deduped
-    .filter((r) => r.source_type === "gmail_message" || r.source_type === "outlook_email")
-    .map((r) => r.external_id);
-  const referralCheckedSet = new Set<string>();
-  if (emailExternalIds.length > 0) {
-    const { data: checkedDocs } = await supabase
-      .from("synced_documents")
-      .select("external_id, metadata")
-      .eq("workspace_id", workspaceId)
-      .in("external_id", emailExternalIds);
-    for (const doc of checkedDocs ?? []) {
-      const meta = (doc.metadata ?? {}) as Record<string, unknown>;
-      if (meta.referral_checked === true) {
-        referralCheckedSet.add(doc.external_id);
-      }
-    }
-    const unchecked = emailExternalIds.length - referralCheckedSet.size;
-    console.log(`[Referral Detector] ${unchecked} unchecked emails, ${referralCheckedSet.size} already processed — skipping those.`);
-  }
+  // Collect email records for batch classification after chunk storage
+  const emailRecordsForClassification: Array<{
+    documentId: string;
+    externalId: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }> = [];
 
   for (let i = 0; i < deduped.length; i++) {
     const record = deduped[i];
@@ -105,19 +91,7 @@ export async function processSyncedData(
         continue;
       }
 
-      // DISABLED: referral + reply detection — re-enable after fixing the guard
       const isEmailType = record.source_type === "gmail_message" || record.source_type === "outlook_email";
-      // if (isEmailType && !referralCheckedSet.has(record.external_id)) {
-      //   const referral = await detectReferral(content);
-      //   record.metadata = {
-      //     ...(record.metadata ?? {}),
-      //     referral_checked: true,
-      //     referral_checked_at: new Date().toISOString(),
-      //     referral_detected: referral.is_referral,
-      //     referrer_name: referral.is_referral ? (referral.referrer_name ?? null) : null,
-      //     referrer_company: referral.is_referral ? (referral.referrer_company ?? null) : null,
-      //   };
-      // }
 
       // ── Step B: Upsert document ──────────────────────────────────────────
       const { data: documentId, error: docError } = await supabase.rpc(
@@ -219,17 +193,15 @@ export async function processSyncedData(
         storedChunks++;
       }
 
-      // DISABLED: referral + reply detection — re-enable after fixing the guard
-      // if (isEmailType) {
-      //   try {
-      //     await detectPipelineReply(supabase, workspaceId, {
-      //       content,
-      //       metadata: record.metadata,
-      //     });
-      //   } catch (replyErr) {
-      //     console.warn(`${label} reply detection error:`, replyErr);
-      //   }
-      // }
+      // Collect email records for batch classification (runs after all chunks stored)
+      if (isEmailType) {
+        emailRecordsForClassification.push({
+          documentId: documentId as string,
+          externalId: record.external_id,
+          content,
+          metadata: record.metadata,
+        });
+      }
 
       processed++;
       console.log(`[processor] ${processed}/${deduped.length} done — ${storedChunks} chunks stored`);
@@ -238,6 +210,19 @@ export async function processSyncedData(
       console.error(`${label} fatal error — skipping record:`, recordErr);
       skipped++;
       continue;
+    }
+  }
+
+  // ── Email classification pipeline (referral detection + reply detection) ──
+  // Runs after all chunks are stored. Uses 4-layer pipeline:
+  // Layer 0: process-once guard, Layer 1: sender pre-filter,
+  // Layer 2: keyword filter, Layer 3: Haiku (only ~10-20% of emails)
+  if (emailRecordsForClassification.length > 0) {
+    try {
+      await classifyNewEmails(supabase, workspaceId, emailRecordsForClassification);
+    } catch (classifyErr) {
+      console.error("[processor] Email classification pipeline error:", classifyErr);
+      // Non-fatal — chunks are already stored, classification can be retried
     }
   }
 

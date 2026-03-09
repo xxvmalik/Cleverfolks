@@ -1,7 +1,10 @@
 /**
  * Sync-time referral detection using Claude Haiku.
  * Analyses email content for referral introduction patterns.
- * Only runs on gmail_message and outlook_email source types.
+ *
+ * This is Layer 3 of the email classification pipeline.
+ * Only emails that pass the prefilter AND keyword filter reach this function.
+ * Expected: ~10-20% of all emails.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -13,33 +16,27 @@ export type ReferralResult = {
   referrer_company?: string | null;
 };
 
-const REFERRAL_PROMPT = `You are analysing an email to detect if this is a referral introduction -- meaning someone was referred or recommended by another person.
+const REFERRAL_PROMPT = `Classify if this email contains a professional referral — someone recommending or introducing a person/company.
 
-Look for patterns like:
-- "referred by [name]"
-- "recommended by [name]"
-- "[name] suggested I reach out"
-- "[name] from [company] mentioned your name"
-- "[name] gave me your details"
-- "[name] introduced us"
-- "heard about you from [name]"
-- "passed your details"
-- Any variation indicating one person directed another to make contact
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences:
+- Not a referral: {"is_referral": false}
+- Referral: {"is_referral": true, "referrer_name": "Full Name", "referrer_company": "Company or null"}
 
-Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers:
-- If NOT a referral: {"is_referral": false}
-- If a referral: {"is_referral": true, "referrer_name": "Full Name", "referrer_company": "Company Name"}
+If the referrer's name is unclear, return {"is_referral": false}.`;
 
-If the referrer's company is not mentioned, set referrer_company to null.
-If the referrer's name is unclear, set referrer_name to null and is_referral to false.
-
-Email content:
-`;
+/**
+ * Truncate email to reduce input tokens.
+ * Referral signals are typically in the opening of the email.
+ */
+function truncateForClassification(text: string, maxChars = 1500): string {
+  if (text.length <= maxChars) return text;
+  return text.substring(0, maxChars) + "... [truncated]";
+}
 
 /**
  * Detect referral signals in email content using Claude Haiku.
- * Returns referral metadata to be stored in chunk metadata.
- * Never throws -- returns { is_referral: false } on any error.
+ * Returns referral metadata to be stored in document metadata.
+ * Never throws — returns { is_referral: false } on any error.
  */
 export async function detectReferral(chunkText: string): Promise<ReferralResult> {
   try {
@@ -58,7 +55,7 @@ export async function detectReferral(chunkText: string): Promise<ReferralResult>
       messages: [
         {
           role: "user",
-          content: chunkText.slice(0, 2000), // Cap input to control costs
+          content: truncateForClassification(chunkText),
         },
       ],
     });
