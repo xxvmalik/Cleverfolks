@@ -1224,15 +1224,13 @@ export function SkylerClient({
 
                                         {/* Email body */}
                                         <div className="bg-[#111111] border border-[#2A2D35]/50 rounded-lg p-4 max-h-[280px] overflow-y-auto">
-                                          {emailData.htmlBody ? (
+                                          {(emailData.htmlBody || emailData.textBody) ? (
                                             <div
                                               className="text-[#E0E0E0] text-sm leading-relaxed [&_a]:text-[#3A89FF] [&_a]:underline [&_p]:mb-2 [&_br]:mb-1"
-                                              dangerouslySetInnerHTML={{ __html: emailData.htmlBody }}
+                                              dangerouslySetInnerHTML={{ __html: emailData.htmlBody || emailData.textBody || "" }}
                                             />
                                           ) : (
-                                            <pre className="text-[#E0E0E0] text-sm leading-relaxed whitespace-pre-wrap font-sans">
-                                              {emailData.textBody ?? "No email body"}
-                                            </pre>
+                                            <p className="text-[#555A63] text-sm italic">No email body</p>
                                           )}
                                         </div>
 

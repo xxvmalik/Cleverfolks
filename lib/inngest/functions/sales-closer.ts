@@ -105,15 +105,20 @@ export const salesCloserWorkflow = inngest.createFunction(
     const memories = await step.run("fetch-business-context", async () => {
       console.log("[Sales Closer] Step 2: Fetching business context...");
       const db = createAdminSupabaseClient();
+      // Fetch ALL active memory types — corrections & terminology contain service descriptions
       const { data: memData } = await db
         .from("workspace_memories")
         .select("content")
         .eq("workspace_id", workspaceId)
         .eq("status", "active")
-        .in("type", ["pattern", "learning", "preference"])
         .order("times_reinforced", { ascending: false })
-        .limit(10);
-      return (memData ?? []).map((m) => m.content as string);
+        .limit(20);
+      const result = (memData ?? []).map((m) => m.content as string);
+      console.log(`[Sales Closer] Workspace memories count: ${result.length}`);
+      if (result.length > 0) {
+        console.log(`[Sales Closer] First memory: ${result[0].substring(0, 120)}`);
+      }
+      return result;
     });
 
     // Step 3: Research the company (with our business context for alignment)

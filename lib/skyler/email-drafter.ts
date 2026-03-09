@@ -103,7 +103,9 @@ USE THIS DEFAULT STYLE:
 
   const ourBusinessBlock =
     workspaceMemories.length > 0
-      ? workspaceMemories.join("\n")
+      ? `${workspaceMemories.join("\n")}
+
+CRITICAL: You MUST mention specific services from the list above in your email. Do NOT write generic "we help businesses" — instead reference actual services, products, pricing, or capabilities listed above.`
       : "No specific business context available. Keep the pitch generic but professional.";
 
   const alignmentBlock =
@@ -139,17 +141,25 @@ ${voiceBlock}
 - NEVER pitch the prospect's own services back to them
 - NEVER describe what the prospect does as if it's what you offer
 - NEVER confuse your company with their company
+- NEVER write generic "we help businesses scale" — always name a specific service from the WHO YOU REPRESENT section
 - Show you understand the PROSPECT's specific business and challenges
-- Explain how YOUR company's services solve the PROSPECT's problems
+- Explain how YOUR company's specific services solve the PROSPECT's problems
 - Reference something specific about THEIR business (news, growth, challenges)
 - No "I hope this email finds you well"
 - No "I wanted to reach out because..."
 - No "I came across your profile"
-- Lead with THEIR problem, then connect it to OUR solution
+- Lead with THEIR problem, then connect it to OUR specific solution
 - One CTA only. Never multiple asks.
 - Subject line under 7 words, no clickbait, no emojis
 - Use the prospect's first name, not full name
 - Keep under 150 words
+
+GOOD email example (mentions specific services):
+"I noticed [prospect company] is growing fast on social media. Our SMM panel can help scale your engagement — we offer followers, likes, and views at competitive rates with refill guarantees, plus a reseller API for agencies."
+
+BAD email example (generic, no actual services):
+"We help businesses streamline their operations and scale efficiently. I think there could be synergies between our teams."
+The bad example mentions NO actual services. NEVER write like this.
 
 Respond with ONLY valid JSON:
 {
@@ -195,6 +205,13 @@ export async function draftEmail(params: {
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,
   });
+
+  console.log(`[email-drafter] Workspace memories count: ${workspaceMemories.length}`);
+  if (workspaceMemories.length > 0) {
+    console.log(`[email-drafter] Memories preview: ${JSON.stringify(workspaceMemories).substring(0, 500)}`);
+  } else {
+    console.warn("[email-drafter] WARNING: No workspace memories — email will be generic");
+  }
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   const response = await anthropic.messages.create({
