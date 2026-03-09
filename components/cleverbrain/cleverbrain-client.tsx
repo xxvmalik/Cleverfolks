@@ -241,9 +241,10 @@ function ConvItem({
   }
 
   const displayTitle = conv.custom_title || conv.title || "New conversation";
+  const isExpanded = menuOpen || confirmDelete || renaming;
 
   return (
-    <div className="group relative flex items-center">
+    <div className={cn("group relative flex items-center", isExpanded && "z-10")}>
       <button
         onClick={onClick}
         className={cn(
