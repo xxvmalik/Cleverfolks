@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 import { ActionApproval } from "@/components/skyler/action-approval";
+import { WorkflowSettings } from "@/components/skyler/workflow-settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1480,8 +1481,15 @@ export function SkylerClient({
             </>
           )}
 
+          {/* ── Workflow Settings Tab ────────────────────────────────── */}
+          {activeTab === "workflows-settings" && (
+            <div className="p-6">
+              <WorkflowSettings workspaceId={workspaceId} />
+            </div>
+          )}
+
           {/* ── Lead Qualification Tab (default) ─────────────────────── */}
-          {activeTab !== "sales-closer" && (
+          {activeTab !== "sales-closer" && activeTab !== "workflows-settings" && (
           <>
           {/* Section 1: Lead Qualification Header */}
           <div className="bg-[#111111] px-6 py-5 border-b border-[#2A2D35]/30">
