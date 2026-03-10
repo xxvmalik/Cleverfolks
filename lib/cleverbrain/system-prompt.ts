@@ -27,6 +27,21 @@ export type KnowledgeProfileRow = {
 export function formatKnowledgeProfile(profile: Record<string, any>): string {
   const sections: string[] = [];
 
+  // Business summary (top-level context)
+  if (profile.business_summary) {
+    sections.push(`Business Summary:\n${profile.business_summary}`);
+  }
+
+  // Services/products offered
+  const services: Array<{ name?: string; description?: string }> =
+    profile.services ?? [];
+  if (services.length > 0) {
+    const lines = services
+      .filter((s) => s.name)
+      .map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""}`);
+    if (lines.length > 0) sections.push(`Services/Products:\n${lines.join("\n")}`);
+  }
+
   const members: Array<{
     name?: string;
     detected_role?: string;

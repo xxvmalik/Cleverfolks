@@ -164,6 +164,9 @@ ${channelSampleLines || "  (no samples)"}
 
 Analyze this data and build a comprehensive company knowledge profile.
 
+BUSINESS ANALYSIS (critical):
+Analyse the operational data carefully to determine what this business SELLS. Look at order complaints, payment discussions, product references, pricing mentions, and customer conversations to identify the actual products and services. For example, if you see discussions about Instagram followers, TikTok likes, or social media orders, the business is likely an SMM panel selling social media marketing services.
+
 For each team member, assess their role based ONLY on BEHAVIORAL signals:
 - High directive_count + high @-mention count → likely a manager, lead, or decision-maker
 - High response_count → likely support, ops, or someone who handles requests
@@ -176,6 +179,13 @@ For each team member, assess their role based ONLY on BEHAVIORAL signals:
 
 Return ONLY a valid JSON object (no markdown, no code blocks, nothing else):
 {
+  "business_summary": "2-3 sentence description of what this business does, what industry it operates in, and who its customers are. Infer from operational data, channel names, conversation topics, and terminology.",
+  "services": [
+    {
+      "name": "string — name of a product or service the business sells",
+      "description": "string — brief description of this service/product"
+    }
+  ],
   "team_members": [
     {
       "name": "string",
@@ -394,7 +404,9 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
 
         const memberCount = (parsed.team_members as unknown[] | undefined)?.length ?? 0;
         const channelCount = (parsed.channels as unknown[] | undefined)?.length ?? 0;
-        console.log(`[knowledge-profile] GPT-4o-mini returned ${memberCount} team members, ${channelCount} channels`);
+        const serviceCount = (parsed.services as unknown[] | undefined)?.length ?? 0;
+        const hasSummary = !!parsed.business_summary;
+        console.log(`[knowledge-profile] GPT-4o-mini returned: ${memberCount} members, ${channelCount} channels, ${serviceCount} services, summary=${hasSummary}`);
         return parsed;
       });
 

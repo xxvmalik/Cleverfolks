@@ -117,6 +117,15 @@ export async function buildSalesPlaybook(
   if (hasProfile) {
     inputParts.push("=== KNOWLEDGE PROFILE (PRIMARY SOURCE) ===");
     const kp = knowledgeProfile!;
+    if (kp.business_summary) {
+      inputParts.push(`Business Summary: ${kp.business_summary as string}`);
+    }
+    if (kp.services && (kp.services as Array<{ name?: string; description?: string }>).length > 0) {
+      const svcs = (kp.services as Array<{ name?: string; description?: string }>)
+        .filter((s) => s.name)
+        .map((s) => `- ${s.name}${s.description ? `: ${s.description}` : ""}`);
+      inputParts.push(`Services/Products:\n${svcs.join("\n")}`);
+    }
     if (kp.business_patterns && (kp.business_patterns as string[]).length > 0) {
       inputParts.push(`Business Patterns:\n${(kp.business_patterns as string[]).map((p) => `- ${p}`).join("\n")}`);
     }

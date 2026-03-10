@@ -269,18 +269,21 @@ ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.j
   if (knowledgeProfile && Object.keys(knowledgeProfile).length > 0) {
     const parts: string[] = [];
     const kp = knowledgeProfile;
+    if (kp.business_summary) {
+      parts.push(`About us: ${kp.business_summary as string}`);
+    }
+    if (kp.services && (kp.services as Array<{ name?: string; description?: string }>).length > 0) {
+      const svcs = (kp.services as Array<{ name?: string; description?: string }>)
+        .filter((s) => s.name)
+        .map((s) => `${s.name}${s.description ? ` — ${s.description}` : ""}`)
+        .join("; ");
+      parts.push(`Our services: ${svcs}`);
+    }
     if (kp.business_patterns && (kp.business_patterns as string[]).length > 0) {
-      parts.push(`What we do: ${(kp.business_patterns as string[]).join("; ")}`);
+      parts.push(`How we operate: ${(kp.business_patterns as string[]).join("; ")}`);
     }
     if (kp.key_topics && (kp.key_topics as string[]).length > 0) {
       parts.push(`Core focus areas: ${(kp.key_topics as string[]).join(", ")}`);
-    }
-    if (kp.terminology && Object.keys(kp.terminology as Record<string, string>).length > 0) {
-      const terms = Object.entries(kp.terminology as Record<string, string>)
-        .slice(0, 5)
-        .map(([k, v]) => `${k} (${v})`)
-        .join(", ");
-      parts.push(`Key terms: ${terms}`);
     }
     if (parts.length > 0) {
       knowledgeBlock = `\nBUSINESS INTELLIGENCE (verified):\n${parts.join("\n")}`;
