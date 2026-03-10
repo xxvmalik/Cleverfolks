@@ -337,8 +337,8 @@ export const handlePipelineReply = inngest.createFunction(
       stage: string;
     };
 
-    // Step 1: Dedup guard + fetch pipeline — skip if reply already processed
-    const pipeline = await step.run("dedup-and-fetch-pipeline", async () => {
+    // Step 1: Fetch pipeline record (reply-detector already updated it with the reply)
+    const pipeline = await step.run("fetch-pipeline", async () => {
       const db = createAdminSupabaseClient();
       const { data: current } = await db
         .from("skyler_sales_pipeline")
@@ -348,16 +348,7 @@ export const handlePipelineReply = inngest.createFunction(
 
       if (!current) throw new Error(`Pipeline record ${pipelineId} not found`);
 
-      // Dedup: if last_reply_at was within the last 5 minutes, this is a duplicate event
-      if (current.last_reply_at) {
-        const lastReply = new Date(current.last_reply_at as string).getTime();
-        if (Date.now() - lastReply < 5 * 60 * 1000) {
-          console.log(`[Pipeline Reply] Duplicate reply event for ${pipelineId} — skipping`);
-          return null;
-        }
-      }
-
-      // If resolution is already set, skip
+      // Skip if already resolved (opt-out, disqualified, etc.)
       if (current.resolution) {
         console.log(`[Pipeline Reply] Pipeline ${pipelineId} already resolved (${current.resolution}) — skipping`);
         return null;
@@ -367,7 +358,7 @@ export const handlePipelineReply = inngest.createFunction(
     });
 
     if (!pipeline) {
-      return { status: "skipped", reason: "duplicate_or_resolved" };
+      return { status: "skipped", reason: "resolved" };
     }
 
     // Step 2: Classify reply intent using Sonnet

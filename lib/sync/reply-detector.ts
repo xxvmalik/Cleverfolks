@@ -3,11 +3,11 @@
  * Pure database lookup — ZERO AI cost.
  *
  * Checks if an incoming email sender matches an active pipeline contact.
- * If matched, updates the pipeline record and fires an Inngest event
- * so the sales closer workflow can draft a contextual reply.
+ * If matched, atomically claims the pipeline record, updates it with the
+ * reply, and fires a single Inngest event for drafting a response.
  *
- * Dedup: skips if the pipeline was already updated within the last 5 minutes
- * (prevents double events from duplicate chunks or re-syncs).
+ * Dedup: uses atomic conditional update (reply_lock_until) to prevent
+ * duplicate events from concurrent chunks of the same email.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -44,8 +44,6 @@ export async function detectPipelineReply(
     if (!senderEmail) return { is_reply: false };
 
     // Check if this sender has an active pipeline record (unresolved)
-    // Match on resolution IS NULL (not just awaiting_reply) to catch replies
-    // that arrive while a follow-up draft is pending approval
     const { data: pipeline } = await db
       .from("skyler_sales_pipeline")
       .select("id, contact_email, stage, awaiting_reply, emails_replied, conversation_thread, last_reply_at")
@@ -56,28 +54,22 @@ export async function detectPipelineReply(
 
     if (!pipeline) return { is_reply: false };
 
-    // Dedup guard: skip if last_reply_at was within the last 5 minutes
-    // Prevents double events from duplicate chunks or re-syncs
-    if (pipeline.last_reply_at) {
-      const lastReply = new Date(pipeline.last_reply_at as string).getTime();
-      if (Date.now() - lastReply < 5 * 60 * 1000) {
-        console.log(
-          `[reply-detector] Skipping duplicate reply from ${senderEmail} — last reply ${Math.round((Date.now() - lastReply) / 1000)}s ago`
-        );
-        return { is_reply: false };
-      }
-    }
-
-    console.log(
-      `[reply-detector] Reply detected from ${senderEmail} for pipeline ${pipeline.id} (stage: ${pipeline.stage})`
-    );
-
-    // Update pipeline record IMMEDIATELY with reply data
+    // Atomic dedup: only proceed if last_reply_at is old enough (>5 min) or null.
+    // This prevents two concurrent chunks of the same email from both firing events.
+    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const now = new Date().toISOString();
+
+    // Build the new conversation thread with the prospect's reply
     const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+    // Find the last subject from Skyler's emails for context
+    let lastSubject = "";
+    for (let i = thread.length - 1; i >= 0; i--) {
+      if (thread[i].subject) { lastSubject = thread[i].subject as string; break; }
+    }
     thread.push({
       role: "prospect",
       content: record.content.slice(0, 3000),
+      subject: lastSubject ? `re: ${lastSubject}` : undefined,
       timestamp: now,
       status: "received",
     });
@@ -87,12 +79,14 @@ export async function detectPipelineReply(
         ? "replied"
         : pipeline.stage;
 
-    await db
+    // Atomic conditional update: only succeeds if last_reply_at is NULL or older than 5 min
+    // This is the dedup mechanism — if two chunks race, only one update succeeds
+    let updateQuery = db
       .from("skyler_sales_pipeline")
       .update({
         awaiting_reply: false,
         last_reply_at: now,
-        next_followup_at: null, // Cancel follow-up cadence immediately
+        next_followup_at: null,
         emails_replied: ((pipeline.emails_replied as number) ?? 0) + 1,
         stage: newStage,
         conversation_thread: thread,
@@ -100,11 +94,34 @@ export async function detectPipelineReply(
       })
       .eq("id", pipeline.id);
 
+    // Add the atomic condition: last_reply_at must be null OR older than 5 min
+    if (pipeline.last_reply_at) {
+      updateQuery = updateQuery.lt("last_reply_at", fiveMinAgo);
+    } else {
+      updateQuery = updateQuery.is("last_reply_at", null);
+    }
+
+    const { data: updated, error: updateErr } = await updateQuery
+      .select("id")
+      .maybeSingle();
+
+    if (updateErr) {
+      console.error(`[reply-detector] Update error: ${updateErr.message}`);
+      return { is_reply: false };
+    }
+
+    if (!updated) {
+      console.log(
+        `[reply-detector] Skipping duplicate reply from ${senderEmail} — pipeline ${pipeline.id} already updated recently`
+      );
+      return { is_reply: false };
+    }
+
     console.log(
       `[reply-detector] Pipeline ${pipeline.id} updated — emails_replied: ${((pipeline.emails_replied as number) ?? 0) + 1}, stage: ${newStage}`
     );
 
-    // Fire Inngest event for the sales closer to classify + draft a reply
+    // Fire Inngest event — guaranteed single fire due to atomic update above
     try {
       await inngest.send({
         name: "skyler/pipeline.reply.received",
