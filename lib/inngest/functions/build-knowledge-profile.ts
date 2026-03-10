@@ -364,23 +364,37 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
       const finalProfile = await step.run("analyze-with-gpt4o-mini", async () => {
         const prompt = buildAnalysisPrompt(teamData, sampleData);
 
-        console.log("[knowledge-profile] Calling GPT-4o-mini for analysis");
+        console.log(`[knowledge-profile] Calling GPT-4o-mini for analysis (prompt length: ${prompt.length} chars)`);
 
-        const text = await classifyWithGPT4oMini({
-          systemPrompt: prompt,
-          userContent: "Analyze the data above and return the JSON profile.",
-          maxTokens: 2048,
-        });
+        let text: string;
+        try {
+          text = await classifyWithGPT4oMini({
+            systemPrompt: prompt,
+            userContent: "Analyze the data above and return the JSON profile.",
+            maxTokens: 4000,
+          });
+        } catch (apiErr) {
+          console.error("[knowledge-profile] GPT-4o-mini API call FAILED:", apiErr instanceof Error ? apiErr.message : String(apiErr));
+          throw apiErr; // Let the outer catch handle it — do NOT silently return {}
+        }
+
+        console.log(`[knowledge-profile] GPT-4o-mini response length: ${text.length} chars`);
+        if (text.length > 0) {
+          console.log(`[knowledge-profile] GPT-4o-mini response preview: ${text.substring(0, 200)}`);
+        } else {
+          console.error("[knowledge-profile] GPT-4o-mini returned EMPTY response");
+        }
 
         const parsed = extractJSON(text);
 
         if (!parsed) {
-          console.error("[knowledge-profile] Failed to parse GPT-4o-mini response");
+          console.error("[knowledge-profile] Failed to parse JSON from response. Full text:", text.substring(0, 500));
           return {} as Record<string, unknown>;
         }
 
         const memberCount = (parsed.team_members as unknown[] | undefined)?.length ?? 0;
-        console.log(`[knowledge-profile] GPT-4o-mini returned ${memberCount} team members`);
+        const channelCount = (parsed.channels as unknown[] | undefined)?.length ?? 0;
+        console.log(`[knowledge-profile] GPT-4o-mini returned ${memberCount} team members, ${channelCount} channels`);
         return parsed;
       });
 
@@ -407,27 +421,32 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         });
         if (error) throw new Error(`Failed to save profile: ${error.message}`);
 
-        // Save hash and build timestamp so we can skip unnecessary rebuilds
-        const { data: workspace } = await db
-          .from("workspaces")
-          .select("settings")
-          .eq("id", workspaceId)
-          .single();
+        // Only save hash + timestamp on SUCCESS — never on error/empty profiles
+        // Otherwise the cooldown guard blocks rebuilds after failures
+        if (status !== "error") {
+          const { data: workspace } = await db
+            .from("workspaces")
+            .select("settings")
+            .eq("id", workspaceId)
+            .single();
 
-        await db
-          .from("workspaces")
-          .update({
-            settings: {
-              ...(workspace?.settings as Record<string, unknown> ?? {}),
-              last_profile_hash: earlyCheck.quickHash,
-              last_profile_build_at: new Date().toISOString(),
-            },
-          })
-          .eq("id", workspaceId);
+          await db
+            .from("workspaces")
+            .update({
+              settings: {
+                ...(workspace?.settings as Record<string, unknown> ?? {}),
+                last_profile_hash: earlyCheck.quickHash,
+                last_profile_build_at: new Date().toISOString(),
+              },
+            })
+            .eq("id", workspaceId);
 
-        console.log(
-          `[knowledge-profile] Profile rebuilt and hash saved (${status}) — workspace ${workspaceId}`
-        );
+          console.log(
+            `[knowledge-profile] Profile rebuilt and hash saved (${status}) — workspace ${workspaceId}`
+          );
+        } else {
+          console.warn("[knowledge-profile] Profile was empty — NOT saving hash/timestamp so rebuild can retry");
+        }
       });
 
       return {
