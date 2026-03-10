@@ -146,9 +146,44 @@ APPROACH:
     };
   }
 
-  // Scenario 2: Company-level lead — we know the company, researched it
+  // Scenario 2 & 2b: Company-level lead — we know the company, researched it
   if (companyName && companyName !== "Unknown" && companyResearch.summary && companyResearch.industry !== "Unknown") {
     const hasTrigger = !!companyResearch.trigger_event;
+
+    // Check if we have meaningful service alignment
+    const alignmentPoints = companyResearch.service_alignment_points ?? [];
+    const GENERIC_PHRASES = ["help", "benefit", "improve", "support", "assist", "grow"];
+    const hasWeakAlignment =
+      alignmentPoints.length === 0 ||
+      alignmentPoints.every((p) =>
+        GENERIC_PHRASES.some((g) => p.toLowerCase().split(/\s+/).length <= 6 && p.toLowerCase().includes(g))
+      );
+
+    // Scenario 2b: Company researched but no clear service fit — universal benefits
+    if (hasWeakAlignment && !hasTrigger) {
+      const industry = companyResearch.industry || "their";
+      return {
+        scenario: "universal_benefits",
+        scenarioInstructions: `SCENARIO: UNIVERSAL BENEFITS — We researched ${companyName} (${industry}) but there's no obvious direct link between our services and their core business. Do NOT force a connection that doesn't exist.
+
+Instead, pitch the UNIVERSAL benefits of our services that apply to ANY business:
+- Stronger brand credibility — more followers = more trust from prospects
+- Social proof that attracts customers before you even pitch them
+- Consistent social media presence without the manual effort
+- Audience growth that compounds over time
+- Buyers check your socials before reaching out, regardless of industry
+
+APPROACH:
+- Acknowledge their industry naturally, then pivot to why online presence matters for everyone
+- Frame it as: "Most ${industry} companies underestimate how much a strong social presence drives inbound leads"
+- Do NOT pretend our services directly relate to their core product
+- Be honest and conversational — "even in ${industry}, buyers check your socials before reaching out"
+- Use their company name or industry to personalise, but pitch the universal angle
+- CTA: interest-based ("Is this something you've thought about?")`,
+      };
+    }
+
+    // Scenario 2: Strong alignment — pitch the direct connection
     return {
       scenario: "company_lead",
       scenarioInstructions: `SCENARIO: COMPANY LEAD — We researched ${companyName} and are reaching out cold.
