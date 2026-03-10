@@ -4,7 +4,7 @@
  * company research, sales voice, cadence step, and workspace context.
  *
  * Rules grounded in elite sales data:
- * - Cold emails: 25-75 words (optimal open + reply rate)
+ * - Cold emails: 50-100 words (sweet spot 60-80)
  * - 5th grade reading level (Boomerang data: 36% higher response)
  * - Interest CTAs beat calendar CTAs 2x (Gong)
  * - Trigger events → 5x conversion (Forrester)
@@ -18,6 +18,7 @@ import type { SalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { formatPlaybookForPrompt } from "@/lib/skyler/sales-playbook";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 
 export type ConversationEntry = {
   role: string;
@@ -56,9 +57,9 @@ export type DraftedEmail = {
 const CADENCE_ANGLES: Record<string, string> = {
   initial_outreach: `FIRST COLD EMAIL. They have never heard from us.
 
-STRUCTURE (25-75 words TOTAL):
+STRUCTURE (50-100 words, sweet spot 60-80):
 1. One sentence about THEIR situation (trigger event, pain point, or observation)
-2. One sentence connecting our specific service to their situation
+2. One or two sentences connecting our specific service to their situation
 3. Interest CTA (NOT a calendar link)
 
 SUBJECT LINE: all lowercase, 1-4 words, no punctuation. Examples: "quick question", "noticed something", "idea for [company]"
@@ -71,7 +72,7 @@ DO NOT use: "Let's hop on a call", "Book 15 minutes", "When are you free?"`,
 
   different_value_prop: `FOLLOW-UP 1 (3 days after initial). No reply yet.
 
-STRUCTURE (25-60 words):
+STRUCTURE (50-80 words):
 1. New angle — different value prop, insight, or question
 2. DO NOT say "just checking in", "following up", "bumping this", "circling back"
 3. Treat it as a brand new email with a fresh hook
@@ -81,7 +82,7 @@ SUBJECT LINE: all lowercase, 1-3 words, completely different from first email.`,
 
   social_proof_or_case_study: `FOLLOW-UP 2 (7 days after initial). No reply to two emails.
 
-STRUCTURE (25-50 words):
+STRUCTURE (40-70 words):
 1. One specific result or proof point (number, percentage, company name if available)
 2. Connect it to their situation in one sentence
 3. Soft CTA
@@ -91,7 +92,7 @@ If no case study exists, share one specific industry insight.`,
 
   breakup_final_attempt: `BREAKUP EMAIL (14 days after initial). Final attempt.
 
-STRUCTURE (20-40 words):
+STRUCTURE (30-60 words):
 1. Acknowledge they're busy — no guilt, no passive-aggression
 2. Close the loop cleanly
 3. Leave the door open
@@ -169,7 +170,7 @@ APPROACH:
 APPROACH:
 - Lead with a question about their role or a common industry challenge
 - Keep it curiosity-driven — ask, don't pitch
-- Shorter is better when you have less context (25-40 words)
+- Shorter is better when you have less context (50-60 words)
 - CTA: ask a question, not a meeting request`,
   };
 }
@@ -295,7 +296,9 @@ ${voiceBlock}
 ## ELITE SALES RULES (data-backed — follow strictly)
 
 WORD COUNT:
-- Cold outreach (steps 1-4): 25-75 words. Emails over 75 words drop response rates.
+- Cold outreach (steps 1-4): 50-100 words. Sweet spot is 60-80 words.
+- Under 50 feels incomplete and robotic. Over 100 loses attention on mobile.
+- Every sentence must add value or be cut. 3-4 short sentences max.
 - Reply followup: under 100 words.
 
 READING LEVEL: 5th grade. Short sentences. Simple words. No jargon.
@@ -363,8 +366,9 @@ export async function draftEmail(params: {
       .is("superseded_by", null)
       .order("times_reinforced", { ascending: false })
       .limit(20);
-    workspaceMemories = (data ?? []).map((m) => m.content as string);
-    console.log(`[email-drafter] Fetched ${workspaceMemories.length} memories directly`);
+    const raw = (data ?? []).map((m) => m.content as string);
+    workspaceMemories = filterDealMemories(raw);
+    console.log(`[email-drafter] Fetched ${raw.length} memories, ${workspaceMemories.length} after filtering deal data`);
   }
 
   // Map cadence step to angle (-1 = reply followup)

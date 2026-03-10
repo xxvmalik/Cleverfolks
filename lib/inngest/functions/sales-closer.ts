@@ -12,6 +12,7 @@ import { draftEmail } from "@/lib/skyler/email-drafter";
 import type { LeadContext } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
+import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 
 // ── Sales Closer Workflow ─────────────────────────────────────────────────────
 // Triggered when a lead scores hot (70+). Manages the full outreach lifecycle.
@@ -116,8 +117,9 @@ export const salesCloserWorkflow = inngest.createFunction(
         .order("times_reinforced", { ascending: false })
         .limit(20);
       if (memErr) console.error("[Sales Closer] Memory fetch error:", memErr.message);
-      const result = (memData ?? []).map((m) => m.content as string);
-      console.log(`[Sales Closer] Workspace memories count: ${result.length}`);
+      const rawMemories = (memData ?? []).map((m) => m.content as string);
+      const result = filterDealMemories(rawMemories);
+      console.log(`[Sales Closer] Loaded ${rawMemories.length} memories, ${result.length} after filtering deal data`);
       if (result.length > 0) {
         console.log(`[Sales Closer] First memory: ${result[0].substring(0, 120)}`);
       }
@@ -316,7 +318,8 @@ export const handlePipelineReply = inngest.createFunction(
         .is("superseded_by", null)
         .order("times_reinforced", { ascending: false })
         .limit(20);
-      return (memData ?? []).map((m) => m.content as string);
+      const raw = (memData ?? []).map((m) => m.content as string);
+      return filterDealMemories(raw);
     });
 
     const playbook = await step.run("build-reply-playbook", async () => {

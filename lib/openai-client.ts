@@ -8,7 +8,8 @@
 
 import OpenAI from "openai";
 
-export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const cleanKey = process.env.OPENAI_API_KEY?.trim().replace(/[\r\n]/g, "");
+export const openai = new OpenAI({ apiKey: cleanKey });
 
 /**
  * Helper for simple classification/extraction tasks using GPT-4o-mini.

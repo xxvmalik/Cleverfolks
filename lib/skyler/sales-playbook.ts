@@ -9,6 +9,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { SALES_CLOSER_DEFAULTS } from "@/lib/email/email-sender";
+import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 
 export type SalesPlaybook = {
   company_name: string;
@@ -97,7 +98,15 @@ export async function buildSalesPlaybook(
     return emptyPlaybook();
   }
 
-  const memoriesText = memories
+  // Filter out deal/pipeline data before building playbook
+  const filteredMemories = filterDealMemories(memories);
+  if (filteredMemories.length === 0) {
+    console.warn("[sales-playbook] All memories were deal data — returning empty playbook");
+    return emptyPlaybook();
+  }
+  console.log(`[sales-playbook] Using ${filteredMemories.length}/${memories.length} memories (${memories.length - filteredMemories.length} deal records filtered)`);
+
+  const memoriesText = filteredMemories
     .map((m, i) => `[${i + 1}] ${m}`)
     .join("\n")
     .slice(0, 10000); // Cap for cost control
