@@ -227,6 +227,7 @@ function buildDraftPrompt(params: {
   contactName: string;
   contactEmail: string;
   companyName: string;
+  replyIntent?: string;
 }): string {
   const {
     cadenceStep,
@@ -242,9 +243,45 @@ function buildDraftPrompt(params: {
     senderCompany,
     contactName,
     companyName,
+    replyIntent,
   } = params;
 
   const angleInstructions = CADENCE_ANGLES[cadenceAngle] ?? CADENCE_ANGLES.initial_outreach;
+
+  // Intent-specific instructions for reply mode
+  let intentInstructions = "";
+  if (cadenceAngle === "reply_followup" && replyIntent) {
+    const intentMap: Record<string, string> = {
+      positive_interest: `REPLY INTENT: POSITIVE INTEREST — The prospect is asking questions or showing curiosity.
+
+RESPONSE RULES:
+- Answer their specific question with concrete details from our services
+- Include a specific metric or result if available from the playbook/case studies
+- Advance toward the next step (meeting, demo, or trial)
+- Keep it 50-80 words
+- End with a soft advance: "Want me to walk you through some examples?" or "Happy to share specifics for your niche"
+- Do NOT treat this as an opt-out or removal request`,
+
+      objection: `REPLY INTENT: OBJECTION — The prospect is pushing back but still engaged.
+
+USE THE PQVIR FRAMEWORK:
+- Pause: Don't be defensive. Start with "That makes sense." or similar
+- Question: Ask a clarifying question about their specific concern
+- Validate: Acknowledge their concern as legitimate
+- Isolate: "If we solved that, would anything else hold you back?"
+- Reframe: Offer a new perspective showing how our service addresses it
+- Keep it 50-80 words`,
+
+      meeting_accept: `REPLY INTENT: MEETING ACCEPTANCE — The prospect agreed to a call, meeting, or demo.
+
+RESPONSE RULES:
+- Confirm enthusiasm briefly ("Great, looking forward to it")
+- Propose 2-3 specific time slots or ask for their availability
+- Keep it under 50 words
+- Make it easy for them to confirm`,
+    };
+    intentInstructions = intentMap[replyIntent] ?? "";
+  }
 
   // Detect lead scenario for cold outreach (not replies)
   const { scenarioInstructions } = cadenceAngle !== "reply_followup"
@@ -374,6 +411,7 @@ ${scenarioInstructions}
 
 ## CADENCE STEP
 ${angleInstructions}
+${intentInstructions ? `\n## REPLY CLASSIFICATION\n${intentInstructions}` : ""}
 ${voiceBlock}
 
 ## ELITE SALES RULES (data-backed — follow strictly)
@@ -438,8 +476,9 @@ export async function draftEmail(params: {
   knowledgeProfile?: Record<string, unknown> | null;
   senderName?: string;
   senderCompany?: string;
+  replyIntent?: string;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany, replyIntent } = params;
   let workspaceMemories = params.workspaceMemories;
 
   // Fallback: fetch memories directly if none were passed and no playbook
@@ -483,6 +522,7 @@ export async function draftEmail(params: {
     contactName: pipelineRecord.contact_name,
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,
+    replyIntent,
   });
 
   console.log(`[email-drafter] Drafting step ${cadenceStep} (${cadenceAngle}) for ${pipelineRecord.contact_name}`);

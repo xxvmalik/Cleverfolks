@@ -24,6 +24,7 @@ import {
   Star,
   Pencil,
   Trash2,
+  MessageSquare,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -95,6 +96,22 @@ function unescapeHtml(html: string): string {
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'");
+}
+
+/** Parse email body from chunk_text format — strip metadata headers if present. */
+function parseEmailBody(content: string): string {
+  // If content starts with "From:" header, find the double-newline separator
+  // and return everything after it (the actual email body)
+  if (content.startsWith("From:")) {
+    const bodyStart = content.indexOf("\n\n");
+    if (bodyStart !== -1) {
+      return content.slice(bodyStart + 2).trim();
+    }
+  }
+
+  // Strip HTML tags for display
+  const stripped = content.replace(/<[^>]+>/g, "").trim();
+  return stripped || content;
 }
 
 // ── Conversation Item (with star / rename / delete) ──────────────────────────
@@ -343,6 +360,14 @@ type PendingAction = {
 
 // ── Sales Closer types ───────────────────────────────────────────────────────
 
+type ConvoThreadEntry = {
+  role: string;
+  content: string;
+  subject?: string;
+  timestamp: string;
+  status?: string;
+};
+
 type PipelineRecord = {
   id: string;
   contact_name: string;
@@ -355,6 +380,7 @@ type PipelineRecord = {
   cadence_step: number;
   resolution: string | null;
   updated_at: string;
+  conversation_thread: ConvoThreadEntry[];
   pending_actions: Array<{
     id: string;
     description: string;
@@ -385,6 +411,7 @@ const STAGE_COLORS: Record<string, string> = {
   follow_up_1: "#FB923C",
   follow_up_2: "#FB923C",
   follow_up_3: "#FB923C",
+  replied: "#4ADE80",
   negotiation: "#F2903D",
   demo_booked: "#7C3AED",
   payment_secured: "#4ADE80",
@@ -459,6 +486,7 @@ export function SkylerClient({
   const [pipelineLoading, setPipelineLoading] = useState(false);
   const [previewActionId, setPreviewActionId] = useState<string | null>(null);
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
+  const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -1191,6 +1219,65 @@ export function SkylerClient({
                               </p>
                             </div>
                           </div>
+
+                          {/* Convo Thread toggle */}
+                          {rec.conversation_thread && rec.conversation_thread.length > 0 && (
+                            <div className="mt-2">
+                              <button
+                                onClick={() => setThreadOpenId(threadOpenId === rec.id ? null : rec.id)}
+                                className="flex items-center gap-1.5 px-2.5 py-1 bg-[#3A89FF]/10 text-[#3A89FF] rounded-lg text-xs font-medium hover:bg-[#3A89FF]/20 transition-colors"
+                              >
+                                <MessageSquare className="w-3 h-3" />
+                                {threadOpenId === rec.id ? "Hide" : "Convo Thread"} ({rec.conversation_thread.length})
+                              </button>
+
+                              {threadOpenId === rec.id && (
+                                <div className="mt-2 space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                                  {rec.conversation_thread
+                                    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                                    .map((entry, idx) => {
+                                      const isSkyler = entry.role === "skyler";
+                                      const displayContent = parseEmailBody(entry.content);
+                                      return (
+                                        <div
+                                          key={idx}
+                                          className={cn(
+                                            "rounded-lg p-3 text-xs",
+                                            isSkyler
+                                              ? "bg-[#1A1A1A] border border-[#2A2D35]"
+                                              : "bg-[#1A2A1A] border border-[#2A3D2A]"
+                                          )}
+                                        >
+                                          <div className="flex items-center justify-between mb-1.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className={cn("font-semibold", isSkyler ? "text-[#3A89FF]" : "text-[#4ADE80]")}>
+                                                {isSkyler ? "You" : rec.contact_name || rec.contact_email}
+                                              </span>
+                                              <span
+                                                className={cn(
+                                                  "px-1.5 py-0.5 rounded text-[9px] font-medium",
+                                                  isSkyler ? "bg-[#3A89FF]/15 text-[#3A89FF]" : "bg-[#4ADE80]/15 text-[#4ADE80]"
+                                                )}
+                                              >
+                                                {isSkyler ? "Sent" : "Received"}
+                                              </span>
+                                            </div>
+                                            <span className="text-[#555A63] text-[10px]">
+                                              {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
+                                              {new Date(entry.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                                            </span>
+                                          </div>
+                                          {entry.subject && (
+                                            <p className="text-[#8B8F97] text-[10px] mb-1">Subject: {entry.subject}</p>
+                                          )}
+                                          <p className="text-[#E0E0E0] leading-relaxed whitespace-pre-wrap">{displayContent}</p>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                           {/* Pending email drafts */}
                           {rec.pending_actions.length > 0 && (

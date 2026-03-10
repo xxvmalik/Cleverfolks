@@ -4,6 +4,7 @@
  * APPROVAL MODE ONLY: all emails are drafted for user approval before sending.
  */
 
+import Anthropic from "@anthropic-ai/sdk";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { researchCompany } from "@/lib/skyler/company-research";
@@ -13,6 +14,11 @@ import type { LeadContext } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
+import { parseAIJson } from "@/lib/utils/parse-ai-json";
+
+// Reply intent classification type
+type ReplyIntent = "positive_interest" | "objection" | "meeting_accept" | "opt_out";
+type ReplyClassification = { intent: ReplyIntent; reasoning: string };
 
 // ── Sales Closer Workflow ─────────────────────────────────────────────────────
 // Triggered when a lead scores hot (70+). Manages the full outreach lifecycle.
@@ -314,7 +320,7 @@ export const salesCloserWorkflow = inngest.createFunction(
 
 // ── Handle Pipeline Reply ────────────────────────────────────────────────────
 // Triggered when an incoming email matches an active pipeline record.
-// Drafts a contextual reply for user approval.
+// Classifies the reply intent, then drafts a contextual response for approval.
 
 export const handlePipelineReply = inngest.createFunction(
   {
@@ -323,7 +329,7 @@ export const handlePipelineReply = inngest.createFunction(
   },
   { event: "skyler/pipeline.reply.received" },
   async ({ event, step }) => {
-    const { pipelineId, contactEmail, workspaceId, replyContent, stage } = event.data as {
+    const { pipelineId, contactEmail, workspaceId, replyContent } = event.data as {
       pipelineId: string;
       contactEmail: string;
       workspaceId: string;
@@ -331,12 +337,9 @@ export const handlePipelineReply = inngest.createFunction(
       stage: string;
     };
 
-    // Step 1: Update pipeline record with the reply
-    const pipeline = await step.run("update-pipeline-with-reply", async () => {
+    // Step 1: Dedup guard + fetch pipeline — skip if reply already processed
+    const pipeline = await step.run("dedup-and-fetch-pipeline", async () => {
       const db = createAdminSupabaseClient();
-      const now = new Date().toISOString();
-
-      // Fetch current pipeline record
       const { data: current } = await db
         .from("skyler_sales_pipeline")
         .select("*")
@@ -345,32 +348,115 @@ export const handlePipelineReply = inngest.createFunction(
 
       if (!current) throw new Error(`Pipeline record ${pipelineId} not found`);
 
-      // Append reply to conversation thread
-      const thread = (current.conversation_thread ?? []) as Array<Record<string, unknown>>;
-      thread.push({
-        role: "prospect",
-        content: replyContent,
-        timestamp: now,
-        status: "received",
-      });
+      // Dedup: if last_reply_at was within the last 5 minutes, this is a duplicate event
+      if (current.last_reply_at) {
+        const lastReply = new Date(current.last_reply_at as string).getTime();
+        if (Date.now() - lastReply < 5 * 60 * 1000) {
+          console.log(`[Pipeline Reply] Duplicate reply event for ${pipelineId} — skipping`);
+          return null;
+        }
+      }
 
-      // Update pipeline: mark as replied, update stage
-      await db
-        .from("skyler_sales_pipeline")
-        .update({
-          awaiting_reply: false,
-          last_reply_at: now,
-          stage: "replied",
-          conversation_thread: thread,
-          updated_at: now,
-        })
-        .eq("id", pipelineId);
+      // If resolution is already set, skip
+      if (current.resolution) {
+        console.log(`[Pipeline Reply] Pipeline ${pipelineId} already resolved (${current.resolution}) — skipping`);
+        return null;
+      }
 
-      console.log(`[Pipeline Reply] Updated pipeline ${pipelineId} with reply from ${contactEmail}`);
-      return { ...current, conversation_thread: thread };
+      return current;
     });
 
-    // Step 2: Fetch memories and playbook
+    if (!pipeline) {
+      return { status: "skipped", reason: "duplicate_or_resolved" };
+    }
+
+    // Step 2: Classify reply intent using Sonnet
+    const classification = await step.run("classify-reply-intent", async () => {
+      console.log(`[Pipeline Reply] Classifying reply from ${contactEmail}...`);
+
+      const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+      const response = await anthropic.messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 200,
+        messages: [{
+          role: "user",
+          content: `Classify this prospect's email reply intent. Reply ONLY with valid JSON, no markdown fences:
+{"intent": "positive_interest", "reasoning": "one sentence explaining why"}
+
+Possible intents (pick exactly one):
+- positive_interest: prospect is asking questions, wanting more details, showing curiosity, requesting examples or case studies, asking about pricing, asking about results. ANY question about your services is positive interest.
+- objection: prospect is pushing back — too expensive, bad timing, not the right fit, already using a competitor, need to think about it. They're engaged but resistant.
+- meeting_accept: prospect is agreeing to a call, meeting, demo, or next step. They said yes.
+- opt_out: prospect EXPLICITLY says stop emailing, unsubscribe, remove me, don't contact me again, not interested at all. This is ONLY for clear, explicit refusals.
+
+CRITICAL RULES:
+- Questions are NEVER opt_out. "What results do you see?" = positive_interest
+- "Not right now" or "Bad timing" = objection, NOT opt_out
+- "Tell me more" = positive_interest
+- Only use opt_out for EXPLICIT stop/remove/unsubscribe requests
+- When in doubt between positive_interest and objection, choose positive_interest
+
+PROSPECT'S REPLY:
+${replyContent.slice(0, 2000)}`,
+        }],
+      });
+
+      const text = response.content
+        .filter((b): b is Anthropic.TextBlock => b.type === "text")
+        .map((b) => b.text)
+        .join("")
+        .trim();
+
+      try {
+        const result = parseAIJson<ReplyClassification>(text);
+        console.log(`[Pipeline Reply] Classification: ${result.intent} — ${result.reasoning}`);
+        return result;
+      } catch {
+        console.warn(`[Pipeline Reply] Failed to parse classification, defaulting to positive_interest`);
+        return { intent: "positive_interest" as ReplyIntent, reasoning: "Classification parse failed, defaulting to safe option" };
+      }
+    });
+
+    // Step 3: Handle opt_out immediately — no need to draft
+    if (classification.intent === "opt_out") {
+      await step.run("handle-opt-out", async () => {
+        const db = createAdminSupabaseClient();
+        const now = new Date().toISOString();
+
+        // Append opt-out response to thread
+        const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            resolution: "disqualified",
+            resolution_notes: `Opt-out: ${classification.reasoning}`,
+            resolved_at: now,
+            stage: "disqualified",
+            awaiting_reply: false,
+            next_followup_at: null,
+            conversation_thread: thread,
+            updated_at: now,
+          })
+          .eq("id", pipelineId);
+
+        // Store a brief opt-out acknowledgement for approval
+        await draftOutreachEmail(db, {
+          workspaceId,
+          pipelineId,
+          to: contactEmail,
+          subject: `Re: ${getLastSubject(thread)}`,
+          htmlBody: "<p>Understood, I'll remove you from our outreach. Thanks for your time.</p>",
+          textBody: "Understood, I'll remove you from our outreach. Thanks for your time.",
+        });
+
+        console.log(`[Pipeline Reply] Opt-out processed for ${contactEmail} — pipeline marked disqualified`);
+      });
+
+      return { status: "opt_out_processed", pipeline_id: pipelineId };
+    }
+
+    // Step 4: Fetch business context for drafting
     const memories = await step.run("fetch-reply-context", async () => {
       const db = createAdminSupabaseClient();
       const { data: memData } = await db
@@ -400,7 +486,6 @@ export const handlePipelineReply = inngest.createFunction(
       return await buildSalesPlaybook(db, workspaceId, memories, replyKnowledgeProfile);
     });
 
-    // Step 3: Research company (use cache if available)
     const research = await step.run("research-for-reply", async () => {
       const db = createAdminSupabaseClient();
       return await researchCompany({
@@ -415,7 +500,6 @@ export const handlePipelineReply = inngest.createFunction(
       });
     });
 
-    // Step 4: Learn sales voice
     const voice = await step.run("learn-reply-voice", async () => {
       const db = createAdminSupabaseClient();
       const existing = await getSalesVoice(db, workspaceId);
@@ -423,7 +507,6 @@ export const handlePipelineReply = inngest.createFunction(
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 5: Load sender identity for reply
     const replySender = await step.run("load-reply-sender", async () => {
       const db = createAdminSupabaseClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -444,7 +527,7 @@ export const handlePipelineReply = inngest.createFunction(
       return { senderName: name, senderCompany: company };
     });
 
-    // Step 6: Draft reply email (cadenceStep -1 = reply mode)
+    // Step 5: Draft intent-aware reply email
     const thread = (pipeline.conversation_thread ?? []) as Array<{
       role: string;
       content: string;
@@ -453,7 +536,8 @@ export const handlePipelineReply = inngest.createFunction(
     }>;
 
     const draft = await step.run("draft-reply-email", async () => {
-      console.log("[Pipeline Reply] Drafting reply email...");
+      console.log(`[Pipeline Reply] Drafting ${classification.intent} reply for ${contactEmail}...`);
+
       return await draftEmail({
         workspaceId,
         pipelineRecord: {
@@ -474,6 +558,7 @@ export const handlePipelineReply = inngest.createFunction(
         knowledgeProfile: replyKnowledgeProfile,
         senderName: replySender.senderName ?? undefined,
         senderCompany: replySender.senderCompany ?? undefined,
+        replyIntent: classification.intent,
       });
     });
 
@@ -490,10 +575,23 @@ export const handlePipelineReply = inngest.createFunction(
       });
     });
 
-    console.log(`[Pipeline Reply] Reply draft stored for approval: ${action.actionId}`);
-    return { status: "reply_draft_pending", pipeline_id: pipelineId, action_id: action.actionId };
+    console.log(`[Pipeline Reply] ${classification.intent} reply draft stored for approval: ${action.actionId}`);
+    return {
+      status: "reply_draft_pending",
+      pipeline_id: pipelineId,
+      action_id: action.actionId,
+      intent: classification.intent,
+    };
   }
 );
+
+/** Extract the last subject line from a conversation thread. */
+function getLastSubject(thread: Array<Record<string, unknown>>): string {
+  for (let i = thread.length - 1; i >= 0; i--) {
+    if (thread[i].subject) return thread[i].subject as string;
+  }
+  return "our conversation";
+}
 
 // ── Trigger Sales Closer on Hot Lead ──────────────────────────────────────────
 // Listens for contact scored events and triggers the workflow for hot leads.

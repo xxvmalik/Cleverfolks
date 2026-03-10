@@ -5,6 +5,9 @@
  * Checks if an incoming email sender matches an active pipeline contact.
  * If matched, updates the pipeline record and fires an Inngest event
  * so the sales closer workflow can draft a contextual reply.
+ *
+ * Dedup: skips if the pipeline was already updated within the last 5 minutes
+ * (prevents double events from duplicate chunks or re-syncs).
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -45,7 +48,7 @@ export async function detectPipelineReply(
     // that arrive while a follow-up draft is pending approval
     const { data: pipeline } = await db
       .from("skyler_sales_pipeline")
-      .select("id, contact_email, stage, awaiting_reply, conversation_thread")
+      .select("id, contact_email, stage, awaiting_reply, emails_replied, conversation_thread, last_reply_at")
       .eq("workspace_id", workspaceId)
       .eq("contact_email", senderEmail)
       .is("resolution", null)
@@ -53,11 +56,23 @@ export async function detectPipelineReply(
 
     if (!pipeline) return { is_reply: false };
 
+    // Dedup guard: skip if last_reply_at was within the last 5 minutes
+    // Prevents double events from duplicate chunks or re-syncs
+    if (pipeline.last_reply_at) {
+      const lastReply = new Date(pipeline.last_reply_at as string).getTime();
+      if (Date.now() - lastReply < 5 * 60 * 1000) {
+        console.log(
+          `[reply-detector] Skipping duplicate reply from ${senderEmail} — last reply ${Math.round((Date.now() - lastReply) / 1000)}s ago`
+        );
+        return { is_reply: false };
+      }
+    }
+
     console.log(
       `[reply-detector] Reply detected from ${senderEmail} for pipeline ${pipeline.id} (stage: ${pipeline.stage})`
     );
 
-    // Update pipeline record with the reply
+    // Update pipeline record IMMEDIATELY with reply data
     const now = new Date().toISOString();
     const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
     thread.push({
@@ -77,13 +92,19 @@ export async function detectPipelineReply(
       .update({
         awaiting_reply: false,
         last_reply_at: now,
+        next_followup_at: null, // Cancel follow-up cadence immediately
+        emails_replied: ((pipeline.emails_replied as number) ?? 0) + 1,
         stage: newStage,
         conversation_thread: thread,
         updated_at: now,
       })
       .eq("id", pipeline.id);
 
-    // Fire Inngest event for the sales closer to draft a reply
+    console.log(
+      `[reply-detector] Pipeline ${pipeline.id} updated — emails_replied: ${((pipeline.emails_replied as number) ?? 0) + 1}, stage: ${newStage}`
+    );
+
+    // Fire Inngest event for the sales closer to classify + draft a reply
     try {
       await inngest.send({
         name: "skyler/pipeline.reply.received",
