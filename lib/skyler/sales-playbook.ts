@@ -38,9 +38,14 @@ These memories contain everything the business has taught the system about who t
 
 Extract and organise this information into a structured JSON sales playbook.
 
-IMPORTANT:
-- Only include information that is EXPLICITLY stated in the memories. Do NOT invent services, pricing, or claims.
+CRITICAL FILTERING RULES:
+- ONLY include information that is EXPLICITLY described as something the business SELLS or OFFERS to customers.
+- IGNORE any deal names, deal amounts, pipeline stages, or contact records — those are CRM sales pipeline data, NOT product information.
+- If you see entries like "TechStartup Lagos - API Reseller Access: ₦1,200,000" or "Monthly Bulk Plan: ₦150,000" — those are DEALS (prospects being worked on), NOT service offerings. Do NOT include them as services or pricing.
+- Deal names often follow the pattern "[Company Name] - [Description]: [Currency][Amount]" — these are ALWAYS deals, never products.
+- Real service/product descriptions talk about what the service DOES, its features, and benefits. Deals talk about who is buying and how much.
 - If a field has no relevant data, use an empty string or empty array.
+- Do NOT invent services, pricing, or claims not explicitly stated.
 - The playbook will be used by an AI sales agent to write personalised outreach emails, so accuracy is critical.
 
 Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.

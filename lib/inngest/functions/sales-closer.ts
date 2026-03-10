@@ -9,6 +9,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { researchCompany } from "@/lib/skyler/company-research";
 import { learnSalesVoice, getSalesVoice } from "@/lib/skyler/voice-learner";
 import { draftEmail } from "@/lib/skyler/email-drafter";
+import type { LeadContext } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 
@@ -155,9 +156,57 @@ export const salesCloserWorkflow = inngest.createFunction(
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 6: Draft initial outreach email (using playbook)
+    // Step 6: Load lead context from HubSpot (deal data, notes)
+    const leadContext = await step.run("load-lead-context", async () => {
+      console.log("[Sales Closer] Step 6: Loading lead context...");
+      const db = createAdminSupabaseClient();
+      const ctx: LeadContext = { source: "scored" };
+
+      // Look for HubSpot deal data in document_chunks
+      const email = pipeline.contact_email || contactEmail;
+      const name = pipeline.contact_name || contactName;
+      const company = pipeline.company_name || companyName;
+
+      // Search for deal records mentioning this contact
+      const { data: dealChunks } = await db
+        .from("document_chunks")
+        .select("chunk_text, metadata")
+        .eq("workspace_id", workspaceId)
+        .eq("metadata->>source_type", "hubspot_deal")
+        .or(`chunk_text.ilike.%${email}%,chunk_text.ilike.%${name}%,chunk_text.ilike.%${company}%`)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (dealChunks && dealChunks.length > 0) {
+        const firstDeal = dealChunks[0];
+        const meta = (firstDeal.metadata ?? {}) as Record<string, string>;
+        ctx.hubspot_deal_stage = meta.deal_stage ?? meta.dealstage ?? undefined;
+        ctx.hubspot_deal_amount = meta.amount ?? undefined;
+        ctx.hubspot_deal_name = meta.name ?? meta.dealname ?? undefined;
+        console.log(`[Sales Closer] Found ${dealChunks.length} HubSpot deal chunks for ${email}`);
+      }
+
+      // Search for notes mentioning this contact
+      const { data: noteChunks } = await db
+        .from("document_chunks")
+        .select("chunk_text")
+        .eq("workspace_id", workspaceId)
+        .in("metadata->>source_type", ["hubspot_note", "note"])
+        .or(`chunk_text.ilike.%${email}%,chunk_text.ilike.%${name}%`)
+        .order("created_at", { ascending: false })
+        .limit(3);
+
+      if (noteChunks && noteChunks.length > 0) {
+        ctx.hubspot_notes = noteChunks.map((n) => (n.chunk_text as string).slice(0, 300));
+        console.log(`[Sales Closer] Found ${noteChunks.length} notes for ${email}`);
+      }
+
+      return ctx;
+    });
+
+    // Step 7: Draft initial outreach email (using playbook + lead context)
     const draft = await step.run("draft-initial-email", async () => {
-      console.log("[Sales Closer] Step 6: Drafting initial email...");
+      console.log("[Sales Closer] Step 7: Drafting initial email...");
 
       return await draftEmail({
         workspaceId,
@@ -176,10 +225,11 @@ export const salesCloserWorkflow = inngest.createFunction(
         conversationThread: [],
         workspaceMemories: memories,
         salesPlaybook: playbook,
+        leadContext,
       });
     });
 
-    // Step 7: Store draft for approval
+    // Step 8: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
       console.log("[Sales Closer] Step 7: Storing draft for approval...");
       const db = createAdminSupabaseClient();

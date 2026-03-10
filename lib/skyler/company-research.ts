@@ -16,6 +16,7 @@ export type CompanyResearch = {
   summary: string;
   industry: string;
   estimated_size: string;
+  trigger_event: string;
   recent_news: string[];
   pain_points: string[];
   decision_makers: string[];
@@ -27,26 +28,53 @@ export type CompanyResearch = {
 
 function buildResearchPrompt(businessContext: string, playbookText?: string): string {
   const ourContext = playbookText || businessContext || "No business context provided yet.";
-  return `You are analysing web search results about a PROSPECT company to prepare for a sales outreach email.
+  return `Research this PROSPECT company for sales outreach. Find information in this EXACT priority order:
 
-IMPORTANT CONTEXT — Who we are (the company doing the selling):
+1. TRIGGER EVENTS (most important — 5x higher conversion when referenced in outreach):
+   - Recent funding rounds
+   - New executive hires or leadership changes
+   - Product launches or expansions
+   - Mergers, acquisitions, partnerships
+   - Office openings or geographic expansion
+   - Earnings announcements or growth milestones
+   If you find a trigger event, it becomes the PRIMARY talking point.
+
+2. COMPANY OVERVIEW:
+   - What they do (1-2 sentences)
+   - Size and growth stage
+   - Industry
+
+3. PAIN POINTS:
+   - Specific challenges they might face that OUR services could help with
+   - Industry-wide challenges affecting companies like them
+
+4. KEY PEOPLE:
+   - Decision makers if findable
+   - The contact we're reaching out to — their role and influence level
+
+WHO WE ARE (the company doing the selling):
 ${ourContext}
 
-Produce a structured JSON response with these fields:
-- summary: 2-3 sentence overview of the PROSPECT (what THEY do, where they're based, rough size)
-- industry: the PROSPECT's primary industry
-- estimated_size: one of "1-10", "11-50", "51-200", "201-1000", "1000+"
-- recent_news: array of up to 3 relevant recent news items about the PROSPECT (one sentence each)
-- pain_points: array of 2-4 potential business problems the PROSPECT might have that OUR services could solve
-- decision_makers: array of key people at the PROSPECT mentioned (name and role)
-- talking_points: array of 3-5 specific hooks for personalised outreach to the PROSPECT
-- service_alignment_points: array of 2-3 specific ways OUR services could help THIS PROSPECT (connect our actual services to their actual needs). If no business context is available, leave empty.
-- website_insights: one paragraph about the PROSPECT's online presence
+RULES:
+- Do NOT make up information. If you can't find something, use empty string or empty array.
+- Do NOT confuse our company with theirs.
+- The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve.
+- Do NOT describe what the PROSPECT sells as if we are selling it.
 
-CRITICAL: The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve. Do NOT describe what the PROSPECT sells as if we are selling it.
+Respond with ONLY valid JSON. Do NOT wrap in markdown code fences.
 
-Respond with ONLY valid JSON. Do NOT wrap in markdown code fences. Do NOT include \`\`\`json or \`\`\` markers.
-If information is not available for a field, use an empty string or empty array.
+{
+  "summary": "2-3 sentence overview of the PROSPECT",
+  "industry": "their primary industry",
+  "estimated_size": "one of: 1-10, 11-50, 51-200, 201-1000, 1000+",
+  "trigger_event": "the most recent/relevant trigger event found, or empty string if none",
+  "recent_news": ["up to 3 relevant news items, one sentence each"],
+  "pain_points": ["2-4 business problems they might have that OUR services solve"],
+  "decision_makers": ["key people mentioned (name and role)"],
+  "talking_points": ["3-5 specific hooks for outreach — lead with trigger event if found"],
+  "service_alignment_points": ["2-3 specific ways OUR services help THIS prospect"],
+  "website_insights": "one paragraph about their online presence"
+}
 
 PROSPECT Company: {company_name}
 PROSPECT Contact: {contact_name} ({contact_email})
@@ -118,6 +146,7 @@ export async function researchCompany(params: {
       summary: `Limited information available for ${companyName}.`,
       industry: "Unknown",
       estimated_size: "Unknown",
+      trigger_event: "",
       recent_news: [],
       pain_points: [],
       decision_makers: [],
@@ -146,6 +175,7 @@ export async function researchCompany(params: {
     const parsed = parseAIJson<CompanyResearch>(text);
     parsed.researched_at = new Date().toISOString();
     if (!parsed.service_alignment_points) parsed.service_alignment_points = [];
+    if (!parsed.trigger_event) parsed.trigger_event = "";
 
     // Cache in pipeline record
     if (db && pipelineId) {
@@ -167,6 +197,7 @@ export async function researchCompany(params: {
       summary: `Research completed for ${companyName} but analysis failed.`,
       industry: "Unknown",
       estimated_size: "Unknown",
+      trigger_event: "",
       recent_news: [],
       pain_points: [],
       decision_makers: [],
