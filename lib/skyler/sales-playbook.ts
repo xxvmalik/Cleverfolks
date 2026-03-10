@@ -34,8 +34,13 @@ export type SalesPlaybook = {
   built_at: string;
 };
 
-const PLAYBOOK_PROMPT = `You are building a structured sales playbook from a company's workspace memories.
-These memories contain everything the business has taught the system about who they are, what they sell, their pricing, customers, and processes.
+const PLAYBOOK_PROMPT = `You are building a structured sales playbook from two data sources:
+
+1. KNOWLEDGE PROFILE (PRIMARY — authoritative source for what this business does, its team, patterns, and topics)
+2. WORKSPACE MEMORIES (SUPPLEMENTARY — operational details, specific service descriptions, pricing, customer info)
+
+The knowledge profile tells you WHAT the business does. The memories fill in specifics about services, pricing, and differentiators.
+If the knowledge profile and memories contradict each other, trust the knowledge profile.
 
 Extract and organise this information into a structured JSON sales playbook.
 
@@ -87,36 +92,64 @@ Workspace memories:
 export async function buildSalesPlaybook(
   db: SupabaseClient,
   workspaceId: string,
-  memories: string[]
+  memories: string[],
+  knowledgeProfile?: Record<string, unknown> | null
 ): Promise<SalesPlaybook> {
   // Check for cached playbook (less than 30 days old)
   const cached = await getCachedPlaybook(db, workspaceId);
   if (cached) return cached;
 
-  if (!memories || memories.length === 0) {
-    console.warn("[sales-playbook] No workspace memories — returning empty playbook");
+  const hasMemories = memories && memories.length > 0;
+  const hasProfile = knowledgeProfile && Object.keys(knowledgeProfile).length > 0;
+
+  if (!hasMemories && !hasProfile) {
+    console.warn("[sales-playbook] No workspace memories or knowledge profile — returning empty playbook");
     return emptyPlaybook();
   }
 
   // Filter out deal/pipeline data before building playbook
-  const filteredMemories = filterDealMemories(memories);
-  if (filteredMemories.length === 0) {
-    console.warn("[sales-playbook] All memories were deal data — returning empty playbook");
-    return emptyPlaybook();
-  }
-  console.log(`[sales-playbook] Using ${filteredMemories.length}/${memories.length} memories (${memories.length - filteredMemories.length} deal records filtered)`);
+  const filteredMemories = hasMemories ? filterDealMemories(memories) : [];
+  console.log(`[sales-playbook] Sources: knowledge profile=${hasProfile ? "yes" : "no"}, memories=${filteredMemories.length}/${memories.length}`);
 
-  const memoriesText = filteredMemories
-    .map((m, i) => `[${i + 1}] ${m}`)
-    .join("\n")
-    .slice(0, 10000); // Cap for cost control
+  // Build the combined input: knowledge profile first (primary), then memories (supplementary)
+  const inputParts: string[] = [];
+
+  if (hasProfile) {
+    inputParts.push("=== KNOWLEDGE PROFILE (PRIMARY SOURCE) ===");
+    const kp = knowledgeProfile!;
+    if (kp.business_patterns && (kp.business_patterns as string[]).length > 0) {
+      inputParts.push(`Business Patterns:\n${(kp.business_patterns as string[]).map((p) => `- ${p}`).join("\n")}`);
+    }
+    if (kp.key_topics && (kp.key_topics as string[]).length > 0) {
+      inputParts.push(`Key Topics:\n${(kp.key_topics as string[]).map((t) => `- ${t}`).join("\n")}`);
+    }
+    if (kp.terminology && Object.keys(kp.terminology as Record<string, string>).length > 0) {
+      inputParts.push(`Terminology:\n${Object.entries(kp.terminology as Record<string, string>).map(([k, v]) => `- ${k}: ${v}`).join("\n")}`);
+    }
+    if (kp.team_members && (kp.team_members as Array<Record<string, unknown>>).length > 0) {
+      const members = kp.team_members as Array<{ name?: string; detected_role?: string }>;
+      inputParts.push(`Team:\n${members.filter((m) => m.name).map((m) => `- ${m.name}: ${m.detected_role ?? "unknown"}`).join("\n")}`);
+    }
+    inputParts.push("");
+  }
+
+  if (filteredMemories.length > 0) {
+    inputParts.push("=== WORKSPACE MEMORIES (SUPPLEMENTARY) ===");
+    inputParts.push(
+      filteredMemories
+        .map((m, i) => `[${i + 1}] ${m}`)
+        .join("\n")
+    );
+  }
+
+  const combinedInput = inputParts.join("\n").slice(0, 12000); // Cap for cost control
 
   try {
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
-      messages: [{ role: "user", content: PLAYBOOK_PROMPT + memoriesText }],
+      messages: [{ role: "user", content: PLAYBOOK_PROMPT + "\n\n" + combinedInput }],
     });
 
     const text = response.content

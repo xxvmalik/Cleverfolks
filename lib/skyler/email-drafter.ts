@@ -221,6 +221,7 @@ function buildDraftPrompt(params: {
   workspaceMemories: string[];
   salesPlaybook?: SalesPlaybook | null;
   leadContext?: LeadContext | null;
+  knowledgeProfile?: Record<string, unknown> | null;
   contactName: string;
   contactEmail: string;
   companyName: string;
@@ -233,6 +234,7 @@ function buildDraftPrompt(params: {
     workspaceMemories,
     salesPlaybook,
     leadContext,
+    knowledgeProfile,
     contactName,
     companyName,
   } = params;
@@ -261,6 +263,29 @@ ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.j
           .map((e) => `[${e.role}] (${e.timestamp}): ${e.content.slice(0, 300)}`)
           .join("\n")}\n`
       : "";
+
+  // Build knowledge profile summary (authoritative business context)
+  let knowledgeBlock = "";
+  if (knowledgeProfile && Object.keys(knowledgeProfile).length > 0) {
+    const parts: string[] = [];
+    const kp = knowledgeProfile;
+    if (kp.business_patterns && (kp.business_patterns as string[]).length > 0) {
+      parts.push(`What we do: ${(kp.business_patterns as string[]).join("; ")}`);
+    }
+    if (kp.key_topics && (kp.key_topics as string[]).length > 0) {
+      parts.push(`Core focus areas: ${(kp.key_topics as string[]).join(", ")}`);
+    }
+    if (kp.terminology && Object.keys(kp.terminology as Record<string, string>).length > 0) {
+      const terms = Object.entries(kp.terminology as Record<string, string>)
+        .slice(0, 5)
+        .map(([k, v]) => `${k} (${v})`)
+        .join(", ");
+      parts.push(`Key terms: ${terms}`);
+    }
+    if (parts.length > 0) {
+      knowledgeBlock = `\nBUSINESS INTELLIGENCE (verified):\n${parts.join("\n")}`;
+    }
+  }
 
   // Prefer structured playbook over raw memories
   let ourBusinessBlock: string;
@@ -303,7 +328,7 @@ ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.j
   return `You are Skyler, an elite sales representative. You write like the top 1% of SDRs — short, specific, human.
 
 ## YOUR COMPANY (what you sell)
-${ourBusinessBlock}
+${ourBusinessBlock}${knowledgeBlock}
 
 You sell ONLY these services. If a service is not listed above, do NOT offer it.
 
@@ -386,8 +411,9 @@ export async function draftEmail(params: {
   workspaceMemories: string[];
   salesPlaybook?: SalesPlaybook | null;
   leadContext?: LeadContext | null;
+  knowledgeProfile?: Record<string, unknown> | null;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile } = params;
   let workspaceMemories = params.workspaceMemories;
 
   // Fallback: fetch memories directly if none were passed and no playbook
@@ -425,6 +451,7 @@ export async function draftEmail(params: {
     workspaceMemories,
     salesPlaybook,
     leadContext,
+    knowledgeProfile,
     contactName: pipelineRecord.contact_name,
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,

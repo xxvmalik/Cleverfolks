@@ -126,16 +126,36 @@ export const salesCloserWorkflow = inngest.createFunction(
       return result;
     });
 
-    // Step 3: Build structured sales playbook from memories
-    const playbook = await step.run("build-sales-playbook", async () => {
-      console.log("[Sales Closer] Step 3: Building sales playbook...");
+    // Step 3: Load knowledge profile (authoritative source for what the business does)
+    const knowledgeProfile = await step.run("load-knowledge-profile", async () => {
+      console.log("[Sales Closer] Step 3: Loading knowledge profile...");
       const db = createAdminSupabaseClient();
-      return await buildSalesPlaybook(db, workspaceId, memories);
+      const { data } = await db
+        .from("knowledge_profiles")
+        .select("profile, status")
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+
+      if (!data?.profile || !["ready", "pending_review"].includes(data.status ?? "")) {
+        console.log(`[Sales Closer] No usable knowledge profile (status: ${data?.status ?? "none"})`);
+        return null;
+      }
+
+      const profile = data.profile as Record<string, unknown>;
+      console.log(`[Sales Closer] Knowledge profile loaded — ${(profile.key_topics as string[] ?? []).length} topics, ${(profile.business_patterns as string[] ?? []).length} patterns`);
+      return profile;
     });
 
-    // Step 4: Research the company (with playbook for alignment)
+    // Step 4: Build structured sales playbook from knowledge profile + memories
+    const playbook = await step.run("build-sales-playbook", async () => {
+      console.log("[Sales Closer] Step 4: Building sales playbook...");
+      const db = createAdminSupabaseClient();
+      return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile);
+    });
+
+    // Step 5: Research the company (with playbook for alignment)
     const research = await step.run("research-company", async () => {
-      console.log("[Sales Closer] Step 4: Researching company...");
+      console.log("[Sales Closer] Step 5: Researching company...");
       const db = createAdminSupabaseClient();
       return await researchCompany({
         companyName: pipeline.company_name || companyName,
@@ -149,18 +169,18 @@ export const salesCloserWorkflow = inngest.createFunction(
       });
     });
 
-    // Step 5: Learn sales voice (if not already learned)
+    // Step 6: Learn sales voice (if not already learned)
     const voice = await step.run("learn-sales-voice", async () => {
-      console.log("[Sales Closer] Step 5: Learning sales voice...");
+      console.log("[Sales Closer] Step 6: Learning sales voice...");
       const db = createAdminSupabaseClient();
       const existing = await getSalesVoice(db, workspaceId);
       if (existing) return existing;
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 6: Load lead context from HubSpot (deal data, notes)
+    // Step 7: Load lead context from HubSpot (deal data, notes)
     const leadContext = await step.run("load-lead-context", async () => {
-      console.log("[Sales Closer] Step 6: Loading lead context...");
+      console.log("[Sales Closer] Step 7: Loading lead context...");
       const db = createAdminSupabaseClient();
       const ctx: LeadContext = { source: "scored" };
 
@@ -206,9 +226,9 @@ export const salesCloserWorkflow = inngest.createFunction(
       return ctx;
     });
 
-    // Step 7: Draft initial outreach email (using playbook + lead context)
+    // Step 8: Draft initial outreach email (using playbook + lead context)
     const draft = await step.run("draft-initial-email", async () => {
-      console.log("[Sales Closer] Step 7: Drafting initial email...");
+      console.log("[Sales Closer] Step 8: Drafting initial email...");
 
       return await draftEmail({
         workspaceId,
@@ -228,10 +248,11 @@ export const salesCloserWorkflow = inngest.createFunction(
         workspaceMemories: memories,
         salesPlaybook: playbook,
         leadContext,
+        knowledgeProfile,
       });
     });
 
-    // Step 8: Store draft for approval
+    // Step 9: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
       console.log("[Sales Closer] Step 7: Storing draft for approval...");
       const db = createAdminSupabaseClient();
@@ -322,9 +343,20 @@ export const handlePipelineReply = inngest.createFunction(
       return filterDealMemories(raw);
     });
 
+    const replyKnowledgeProfile = await step.run("load-reply-knowledge-profile", async () => {
+      const db = createAdminSupabaseClient();
+      const { data } = await db
+        .from("knowledge_profiles")
+        .select("profile, status")
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+      if (!data?.profile || !["ready", "pending_review"].includes(data.status ?? "")) return null;
+      return data.profile as Record<string, unknown>;
+    });
+
     const playbook = await step.run("build-reply-playbook", async () => {
       const db = createAdminSupabaseClient();
-      return await buildSalesPlaybook(db, workspaceId, memories);
+      return await buildSalesPlaybook(db, workspaceId, memories, replyKnowledgeProfile);
     });
 
     // Step 3: Research company (use cache if available)
@@ -377,6 +409,7 @@ export const handlePipelineReply = inngest.createFunction(
         conversationThread: thread,
         workspaceMemories: memories,
         salesPlaybook: playbook,
+        knowledgeProfile: replyKnowledgeProfile,
       });
     });
 
