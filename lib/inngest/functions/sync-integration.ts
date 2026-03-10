@@ -250,6 +250,8 @@ export const syncIntegrationFunction = inngest.createFunction(
     id: "sync-integration",
     name: "Sync Integration",
     retries: 2,
+    // Dedup: only one sync per connection per 2-hour window
+    idempotency: "event.data.connectionId + '-' + event.data.windowKey",
   },
   { event: "integration/sync.requested" },
   async ({ event, step }) => {
@@ -258,6 +260,7 @@ export const syncIntegrationFunction = inngest.createFunction(
       integrationId: string;
       provider: string;
       connectionId: string;
+      windowKey?: string;
     };
 
     console.log(`[inngest] sync-integration started — provider=${provider} integrationId=${integrationId} connectionId=${connectionId}`);

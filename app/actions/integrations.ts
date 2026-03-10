@@ -66,7 +66,7 @@ export async function connectIntegrationAction(
   // Fire the first sync immediately as a background job
   await inngest.send({
     name: "integration/sync.requested",
-    data: { workspaceId, integrationId, provider, connectionId: nangoConnectionId },
+    data: { workspaceId, integrationId, provider, connectionId: nangoConnectionId, windowKey: String(Math.floor(Date.now() / (2 * 60 * 60 * 1000))) },
   });
 
   return { error: null, integrationId };
