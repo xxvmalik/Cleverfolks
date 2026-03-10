@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle } from "lucide-react";
+import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle, Flame, Sprout, Archive } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -25,11 +25,15 @@ type WorkflowSettings = {
   routingRules: RoutingRule[];
   notifications: {
     slack: boolean;
+    slackChannel: string;
     email: boolean;
+    emailAddress: string;
     taskCreation: boolean;
+    taskAssignee: string;
   };
   escalationRules: {
     dealValueExceedsThreshold: boolean;
+    dealValueThreshold: number;
     vipAccount: boolean;
     negativeSentiment: boolean;
     firstContact: boolean;
@@ -55,6 +59,19 @@ type WorkflowSettings = {
 };
 
 type SettingsTab = "global-rules" | "lead-qualification" | "sales-closer";
+
+// ── Colours for weight distribution bar segments ────────────────────────────
+
+const DIMENSION_COLORS = [
+  "#F2903D", // orange
+  "#3A89FF", // blue
+  "#4ADE80", // green
+  "#7C3AED", // purple
+  "#FB923C", // amber
+  "#F87171", // red
+  "#38BDF8", // sky
+  "#FACC15", // yellow
+];
 
 // ── Reusable Sub-components ─────────────────────────────────────────────────
 
@@ -109,7 +126,6 @@ function AutonomyCard({
   );
 }
 
-/** Selectable chip row — single selection from a list of options */
 function ChipSelect({
   options,
   value,
@@ -139,7 +155,6 @@ function ChipSelect({
   );
 }
 
-/** Tag input — add/remove string tags */
 function TagInput({
   tags,
   onChange,
@@ -210,6 +225,73 @@ function TagInput({
   );
 }
 
+/** Weight distribution bar — coloured segments proportional to scoring dimension weights */
+function WeightDistributionBar({ dimensions }: { dimensions: ScoringDimension[] }) {
+  const total = dimensions.reduce((s, d) => s + d.weight, 0);
+  if (total === 0) return null;
+
+  return (
+    <div className="mb-6">
+      <div className="flex h-3 rounded-full overflow-hidden bg-[#2A2D35]">
+        {dimensions.map((dim, i) => {
+          const pct = (dim.weight / total) * 100;
+          return (
+            <div
+              key={i}
+              style={{ width: `${pct}%`, backgroundColor: DIMENSION_COLORS[i % DIMENSION_COLORS.length] }}
+              className="transition-all duration-300"
+              title={`${dim.name}: ${dim.weight}%`}
+            />
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+        {dimensions.map((dim, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <span
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: DIMENSION_COLORS[i % DIMENSION_COLORS.length] }}
+            />
+            <span className="text-[#8B8F97] text-[11px]">{dim.name} ({dim.weight}%)</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Routing card config ─────────────────────────────────────────────────────
+
+const ROUTING_CARD_CONFIG: Record<string, {
+  icon: typeof Flame;
+  bgTint: string;
+  borderTint: string;
+  iconColor: string;
+  labelColor: string;
+}> = {
+  "Hot Lead": {
+    icon: Flame,
+    bgTint: "bg-[#4ADE80]/5",
+    borderTint: "border-[#4ADE80]/20",
+    iconColor: "text-[#4ADE80]",
+    labelColor: "text-[#4ADE80]",
+  },
+  "Nurture": {
+    icon: Sprout,
+    bgTint: "bg-[#FB923C]/5",
+    borderTint: "border-[#FB923C]/20",
+    iconColor: "text-[#FB923C]",
+    labelColor: "text-[#FB923C]",
+  },
+  "Low Priority": {
+    icon: Archive,
+    bgTint: "bg-[#8B8F97]/5",
+    borderTint: "border-[#8B8F97]/20",
+    iconColor: "text-[#8B8F97]",
+    labelColor: "text-[#8B8F97]",
+  },
+};
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
@@ -238,33 +320,33 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     fetchSettings();
   }, [fetchSettings]);
 
-  // Local update — marks dirty, does NOT save
+  function markDirty() {
+    setDirty(true);
+    setSaved(false);
+  }
+
   function updateSettings(partial: Partial<WorkflowSettings>) {
     if (!settings) return;
     setSettings({ ...settings, ...partial });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
-  function updateNotification(key: keyof WorkflowSettings["notifications"], value: boolean) {
+  function updateNotification(key: string, value: unknown) {
     if (!settings) return;
     setSettings({ ...settings, notifications: { ...settings.notifications, [key]: value } });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
-  function updateEscalation(key: keyof WorkflowSettings["escalationRules"], value: boolean) {
+  function updateEscalation(key: string, value: unknown) {
     if (!settings) return;
     setSettings({ ...settings, escalationRules: { ...settings.escalationRules, [key]: value } });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
   function updateAutonomyToggle(key: keyof WorkflowSettings["autonomyToggles"], value: boolean) {
     if (!settings) return;
     setSettings({ ...settings, autonomyToggles: { ...settings.autonomyToggles, [key]: value } });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
   function updateDimension(index: number, dim: ScoringDimension) {
@@ -272,16 +354,14 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     const dims = [...settings.scoringDimensions];
     dims[index] = dim;
     setSettings({ ...settings, scoringDimensions: dims });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
   function addDimension() {
     if (!settings) return;
     const dims = [...settings.scoringDimensions, { name: "New Dimension", weight: 10, description: "Description here." }];
     setSettings({ ...settings, scoringDimensions: dims });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
     setEditingDimension(dims.length - 1);
     setEditDimensionValues(dims[dims.length - 1]);
   }
@@ -290,11 +370,34 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     if (!settings) return;
     const dims = settings.scoringDimensions.filter((_, i) => i !== index);
     setSettings({ ...settings, scoringDimensions: dims });
-    setDirty(true);
-    setSaved(false);
+    markDirty();
   }
 
-  // Manual save
+  /** Update a routing rule boundary and auto-adjust adjacent rules to stay contiguous */
+  function updateRoutingBoundary(ruleIndex: number, field: "minScore" | "maxScore", value: number) {
+    if (!settings) return;
+    const rules = [...settings.routingRules];
+    // Sort by minScore descending (Hot Lead first, Low Priority last)
+    rules.sort((a, b) => b.minScore - a.minScore);
+
+    const clamped = Math.max(0, Math.min(100, value));
+    rules[ruleIndex] = { ...rules[ruleIndex], [field]: clamped };
+
+    // Auto-adjust: make adjacent ranges contiguous
+    // Rules are sorted: [Hot (highest), Nurture (mid), Low (lowest)]
+    for (let i = 0; i < rules.length - 1; i++) {
+      // The next rule's maxScore = current rule's minScore - 1
+      rules[i + 1] = { ...rules[i + 1], maxScore: rules[i].minScore - 1 };
+    }
+    // First rule always ends at 100
+    rules[0] = { ...rules[0], maxScore: 100 };
+    // Last rule always starts at 0
+    rules[rules.length - 1] = { ...rules[rules.length - 1], minScore: 0 };
+
+    setSettings({ ...settings, routingRules: rules });
+    markDirty();
+  }
+
   async function handleSave() {
     if (!settings || !dirty) return;
     setSaving(true);
@@ -329,6 +432,9 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     { id: "lead-qualification", label: "Lead Qualification" },
     { id: "sales-closer", label: "Sales Closer" },
   ];
+
+  // Sort routing rules by minScore descending for display
+  const sortedRoutingRules = [...settings.routingRules].sort((a, b) => b.minScore - a.minScore);
 
   return (
     <div className="max-w-[900px] mx-auto">
@@ -389,23 +495,53 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
             {/* CRM Update & Rep Notification */}
             <div>
               <h3 className="text-white font-semibold text-base mb-4">CRM Update & Rep Notification</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-[#E0E0E0] text-sm">Slack: Real-time alert with lead name, company, score, and qualification reason</p>
+              <div className="space-y-5">
+                {/* Slack */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[#E0E0E0] text-sm">Slack: Real-time alert with lead name, company, score, and qualification reason</p>
+                    <input
+                      type="text"
+                      value={settings.notifications.slackChannel ?? ""}
+                      onChange={(e) => updateNotification("slackChannel", e.target.value)}
+                      placeholder="#sales-alerts"
+                      className="mt-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[200px]"
+                    />
+                  </div>
                   <SettingsToggle
                     enabled={settings.notifications.slack}
                     onToggle={() => updateNotification("slack", !settings.notifications.slack)}
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-[#E0E0E0] text-sm">Email: Detailed brief with full context, talking points, and next steps</p>
+                {/* Email */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[#E0E0E0] text-sm">Email: Detailed brief with full context, talking points, and next steps</p>
+                    <input
+                      type="text"
+                      value={settings.notifications.emailAddress ?? ""}
+                      onChange={(e) => updateNotification("emailAddress", e.target.value)}
+                      placeholder="sales@company.com"
+                      className="mt-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[200px]"
+                    />
+                  </div>
                   <SettingsToggle
                     enabled={settings.notifications.email}
                     onToggle={() => updateNotification("email", !settings.notifications.email)}
                   />
                 </div>
-                <div className="flex items-center justify-between">
-                  <p className="text-[#E0E0E0] text-sm">Task Created: &quot;Follow up with [Lead Name]&quot; assigned with 24h deadline</p>
+                {/* Task Created */}
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[#E0E0E0] text-sm">Task Created: &quot;Follow up with [Lead Name]&quot; assigned with 24h deadline</p>
+                    <input
+                      type="text"
+                      value={settings.notifications.taskAssignee ?? ""}
+                      onChange={(e) => updateNotification("taskAssignee", e.target.value)}
+                      placeholder="Sales Manager"
+                      className="mt-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[200px]"
+                    />
+                  </div>
                   <SettingsToggle
                     enabled={settings.notifications.taskCreation}
                     onToggle={() => updateNotification("taskCreation", !settings.notifications.taskCreation)}
@@ -421,8 +557,28 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                 Conditions where SKYLER must always escalate to you, regardless of autonomy level.
               </p>
               <div className="space-y-4">
+                {/* Deal value — with threshold input */}
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[#E0E0E0] text-sm flex-1">Deal value exceeds escalation threshold</p>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex items-center bg-[#111111] border border-[#2A2D35] rounded-lg overflow-hidden">
+                      <span className="px-2 text-[#8B8F97] text-xs">$</span>
+                      <input
+                        type="number"
+                        value={settings.escalationRules.dealValueThreshold ?? 5000}
+                        onChange={(e) => updateEscalation("dealValueThreshold", Math.max(0, Number(e.target.value)))}
+                        className="w-[72px] bg-transparent py-1.5 pr-2 text-xs text-white text-right outline-none"
+                        min={0}
+                      />
+                    </div>
+                    <SettingsToggle
+                      enabled={settings.escalationRules.dealValueExceedsThreshold}
+                      onToggle={() => updateEscalation("dealValueExceedsThreshold", !settings.escalationRules.dealValueExceedsThreshold)}
+                    />
+                  </div>
+                </div>
+                {/* Other escalation rules */}
                 {([
-                  ["dealValueExceedsThreshold", "Deal value exceeds escalation threshold"],
                   ["vipAccount", "Contact is marked as VIP/key account"],
                   ["negativeSentiment", "Negative sentiment detected in prospect reply"],
                   ["firstContact", "First contact with a new lead"],
@@ -446,8 +602,12 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
           <div className="space-y-8">
             {/* Score Generation */}
             <div>
-              <h3 className="text-white font-semibold text-base mb-1">Score Generation (0-100)</h3>
-              <div className="mt-4 space-y-5">
+              <h3 className="text-white font-semibold text-base mb-4">Score Generation (0-100)</h3>
+
+              {/* Weight distribution bar */}
+              <WeightDistributionBar dimensions={settings.scoringDimensions} />
+
+              <div className="space-y-4">
                 {settings.scoringDimensions.map((dim, i) => {
                   const isEditing = editingDimension === i;
                   return (
@@ -508,24 +668,38 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                           </div>
                         </div>
                       ) : (
-                        <div>
-                          <div className="flex items-center gap-3">
-                            <span className="text-white text-sm font-medium">
-                              {dim.name}{dim.weight > 0 ? ` (${dim.weight}%):` : ":"}
-                            </span>
-                            <span className="px-2.5 py-0.5 border border-[#2A2D35] rounded-md text-white text-xs bg-[#1C1F24]">
-                              {dim.weight}%
-                            </span>
-                            <button
-                              onClick={() => { setEditingDimension(i); setEditDimensionValues({ ...dim }); }}
-                              className="flex items-center gap-1 text-[#F2903D] text-xs font-medium hover:text-[#F2903D]/80"
-                            >
-                              <Pencil className="w-3 h-3" />
-                              Edit
-                            </button>
-                          </div>
-                          <p className="text-[#555A63] text-xs mt-1">{dim.description}</p>
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: DIMENSION_COLORS[i % DIMENSION_COLORS.length] }}
+                          />
+                          <span className="text-white text-sm font-medium min-w-0">{dim.name}</span>
+                          <input
+                            type="number"
+                            value={dim.weight}
+                            onChange={(e) => updateDimension(i, { ...dim, weight: Math.max(0, Math.min(100, Number(e.target.value))) })}
+                            className="w-14 bg-[#111111] border border-[#2A2D35] rounded-md px-2 py-1 text-xs text-white text-center outline-none focus:border-[#F2903D]/50"
+                            min={0}
+                            max={100}
+                          />
+                          <span className="text-[#8B8F97] text-xs">%</span>
+                          <button
+                            onClick={() => { setEditingDimension(i); setEditDimensionValues({ ...dim }); }}
+                            className="flex items-center gap-1 text-[#F2903D] text-xs font-medium hover:text-[#F2903D]/80"
+                          >
+                            <Pencil className="w-3 h-3" />
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => removeDimension(i)}
+                            className="text-[#F87171]/60 hover:text-[#F87171] transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
+                      )}
+                      {editingDimension !== i && (
+                        <p className="text-[#555A63] text-xs mt-0.5 ml-[22px]">{dim.description}</p>
                       )}
                     </div>
                   );
@@ -541,19 +715,55 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
               </div>
             </div>
 
-            {/* Automated Routing Decision */}
+            {/* Automated Routing Decision — editable cards */}
             <div>
               <h3 className="text-white font-semibold text-base mb-4">Automated Routing Decision</h3>
-              <div className="space-y-3">
-                {settings.routingRules.map((rule, i) => (
-                  <div key={i} className="text-sm">
-                    <span className="text-[#E0E0E0]">
-                      Score {rule.minScore}-{rule.maxScore}:
-                    </span>{" "}
-                    <span className="text-[#8B8F97]">{rule.description}</span>
-                  </div>
-                ))}
+              <div className="grid grid-cols-3 gap-3">
+                {sortedRoutingRules.map((rule, displayIdx) => {
+                  // Find actual index in settings.routingRules for updating
+                  const actualIdx = settings.routingRules.findIndex((r) => r.label === rule.label);
+                  const config = ROUTING_CARD_CONFIG[rule.label] ?? ROUTING_CARD_CONFIG["Low Priority"];
+                  const Icon = config.icon;
+
+                  return (
+                    <div
+                      key={rule.label}
+                      className={cn(
+                        "rounded-xl border p-4 transition-all",
+                        config.bgTint,
+                        config.borderTint
+                      )}
+                    >
+                      <Icon className={cn("w-5 h-5 mb-2", config.iconColor)} />
+                      <h4 className={cn("font-semibold text-sm mb-2", config.labelColor)}>{rule.label}</h4>
+                      <div className="flex items-center gap-1.5 mb-2">
+                        <input
+                          type="number"
+                          value={rule.minScore}
+                          onChange={(e) => updateRoutingBoundary(displayIdx, "minScore", Number(e.target.value))}
+                          className="w-12 bg-[#111111] border border-[#2A2D35] rounded-md px-1.5 py-1 text-xs text-white text-center outline-none focus:border-[#F2903D]/50"
+                          min={0}
+                          max={100}
+                        />
+                        <span className="text-[#555A63] text-xs">&mdash;</span>
+                        <input
+                          type="number"
+                          value={rule.maxScore}
+                          onChange={(e) => updateRoutingBoundary(displayIdx, "maxScore", Number(e.target.value))}
+                          className="w-12 bg-[#111111] border border-[#2A2D35] rounded-md px-1.5 py-1 text-xs text-white text-center outline-none focus:border-[#F2903D]/50"
+                          min={0}
+                          max={100}
+                          disabled={displayIdx === 0} // Top card always ends at 100
+                        />
+                      </div>
+                      <p className="text-[#555A63] text-[11px] leading-relaxed">{rule.description}</p>
+                    </div>
+                  );
+                })}
               </div>
+              <p className="text-[#555A63] text-[11px] mt-3 italic">
+                Ranges auto-adjust to stay contiguous. No gaps, no overlaps.
+              </p>
             </div>
           </div>
         )}

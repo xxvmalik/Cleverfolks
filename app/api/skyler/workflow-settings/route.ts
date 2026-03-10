@@ -29,11 +29,15 @@ export type SkylerWorkflowSettings = {
   routingRules: RoutingRule[];
   notifications: {
     slack: boolean;
+    slackChannel: string;
     email: boolean;
+    emailAddress: string;
     taskCreation: boolean;
+    taskAssignee: string;
   };
   escalationRules: {
     dealValueExceedsThreshold: boolean;
+    dealValueThreshold: number;
     vipAccount: boolean;
     negativeSentiment: boolean;
     firstContact: boolean;
@@ -81,11 +85,15 @@ const DEFAULT_SETTINGS: SkylerWorkflowSettings = {
   ],
   notifications: {
     slack: true,
+    slackChannel: "#sales-alerts",
     email: true,
+    emailAddress: "",
     taskCreation: true,
+    taskAssignee: "",
   },
   escalationRules: {
     dealValueExceedsThreshold: true,
+    dealValueThreshold: 5000,
     vipAccount: true,
     negativeSentiment: true,
     firstContact: true,
