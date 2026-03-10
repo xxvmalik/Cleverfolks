@@ -222,6 +222,8 @@ function buildDraftPrompt(params: {
   salesPlaybook?: SalesPlaybook | null;
   leadContext?: LeadContext | null;
   knowledgeProfile?: Record<string, unknown> | null;
+  senderName?: string;
+  senderCompany?: string;
   contactName: string;
   contactEmail: string;
   companyName: string;
@@ -235,6 +237,8 @@ function buildDraftPrompt(params: {
     salesPlaybook,
     leadContext,
     knowledgeProfile,
+    senderName,
+    senderCompany,
     contactName,
     companyName,
   } = params;
@@ -328,7 +332,19 @@ ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.j
       .join("\n")}`;
   }
 
-  return `You are Skyler, an elite sales representative. You write like the top 1% of SDRs — short, specific, human.
+  // Sender identity
+  const senderFirstName = senderName?.split(/\s+/)[0] ?? "";
+  const signatureBlock = senderFirstName
+    ? `\n## SENDER IDENTITY
+You are drafting this email on behalf of ${senderName}${senderCompany ? ` from ${senderCompany}` : ""}.
+Sign the email as:
+${senderFirstName}
+${senderCompany ?? ""}
+NEVER sign as "Skyler". Skyler drafts the email but it sends FROM the user's identity.`
+    : "";
+
+  return `You are an elite sales representative drafting emails on behalf of a real person. You write like the top 1% of SDRs — short, specific, human.
+${signatureBlock}
 
 ## YOUR COMPANY (what you sell)
 ${ourBusinessBlock}${knowledgeBlock}
@@ -398,7 +414,8 @@ Respond with ONLY valid JSON. No markdown fences.
   "htmlBody": "simple HTML — paragraphs and line breaks only, no images or heavy styling"
 }
 
-Use the prospect's first name only. Write like a real person, not a bot.`;
+Use the prospect's first name only. Write like a real person, not a bot.
+${senderFirstName ? `Sign off as "${senderFirstName}" with "${senderCompany ?? ""}" on the next line. NEVER use "Skyler" as the signature.` : ""}`;
 }
 
 /**
@@ -415,8 +432,10 @@ export async function draftEmail(params: {
   salesPlaybook?: SalesPlaybook | null;
   leadContext?: LeadContext | null;
   knowledgeProfile?: Record<string, unknown> | null;
+  senderName?: string;
+  senderCompany?: string;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany } = params;
   let workspaceMemories = params.workspaceMemories;
 
   // Fallback: fetch memories directly if none were passed and no playbook
@@ -455,6 +474,8 @@ export async function draftEmail(params: {
     salesPlaybook,
     leadContext,
     knowledgeProfile,
+    senderName,
+    senderCompany,
     contactName: pipelineRecord.contact_name,
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,

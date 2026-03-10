@@ -126,9 +126,43 @@ export const salesCloserWorkflow = inngest.createFunction(
       return result;
     });
 
-    // Step 3: Load knowledge profile (authoritative source for what the business does)
+    // Step 3: Load sender identity (workspace owner name + company name)
+    const senderIdentity = await step.run("load-sender-identity", async () => {
+      console.log("[Sales Closer] Step 3: Loading sender identity...");
+      const db = createAdminSupabaseClient();
+
+      // Get workspace owner's name from profiles via membership
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: memberData } = await db
+        .from("workspace_memberships")
+        .select("profiles(full_name, email)")
+        .eq("workspace_id", workspaceId)
+        .eq("role", "owner")
+        .limit(1)
+        .single();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const profile = (memberData as any)?.profiles;
+      const ownerName: string | null = Array.isArray(profile)
+        ? profile[0]?.full_name
+        : profile?.full_name ?? null;
+
+      // Get company name from workspace settings
+      const { data: ws } = await db
+        .from("workspaces")
+        .select("settings")
+        .eq("id", workspaceId)
+        .single();
+      const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+      const companyFromSettings = (settings.company_name as string) ?? null;
+
+      console.log(`[Sales Closer] Sender: ${ownerName ?? "unknown"}, Company: ${companyFromSettings ?? "unknown"}`);
+      return { senderName: ownerName, senderCompany: companyFromSettings };
+    });
+
+    // Step 4: Load knowledge profile (authoritative source for what the business does)
     const knowledgeProfile = await step.run("load-knowledge-profile", async () => {
-      console.log("[Sales Closer] Step 3: Loading knowledge profile...");
+      console.log("[Sales Closer] Step 4: Loading knowledge profile...");
       const db = createAdminSupabaseClient();
       const { data } = await db
         .from("knowledge_profiles")
@@ -146,16 +180,16 @@ export const salesCloserWorkflow = inngest.createFunction(
       return profile;
     });
 
-    // Step 4: Build structured sales playbook from knowledge profile + memories
+    // Step 5: Build structured sales playbook from knowledge profile + memories
     const playbook = await step.run("build-sales-playbook", async () => {
-      console.log("[Sales Closer] Step 4: Building sales playbook...");
+      console.log("[Sales Closer] Step 5: Building sales playbook...");
       const db = createAdminSupabaseClient();
       return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile);
     });
 
-    // Step 5: Research the company (with playbook for alignment)
+    // Step 6: Research the company (with playbook for alignment)
     const research = await step.run("research-company", async () => {
-      console.log("[Sales Closer] Step 5: Researching company...");
+      console.log("[Sales Closer] Step 6: Researching company...");
       const db = createAdminSupabaseClient();
       return await researchCompany({
         companyName: pipeline.company_name || companyName,
@@ -169,18 +203,18 @@ export const salesCloserWorkflow = inngest.createFunction(
       });
     });
 
-    // Step 6: Learn sales voice (if not already learned)
+    // Step 7: Learn sales voice (if not already learned)
     const voice = await step.run("learn-sales-voice", async () => {
-      console.log("[Sales Closer] Step 6: Learning sales voice...");
+      console.log("[Sales Closer] Step 7: Learning sales voice...");
       const db = createAdminSupabaseClient();
       const existing = await getSalesVoice(db, workspaceId);
       if (existing) return existing;
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 7: Load lead context from HubSpot (deal data, notes)
+    // Step 8: Load lead context from HubSpot (deal data, notes)
     const leadContext = await step.run("load-lead-context", async () => {
-      console.log("[Sales Closer] Step 7: Loading lead context...");
+      console.log("[Sales Closer] Step 8: Loading lead context...");
       const db = createAdminSupabaseClient();
       const ctx: LeadContext = { source: "scored" };
 
@@ -226,9 +260,14 @@ export const salesCloserWorkflow = inngest.createFunction(
       return ctx;
     });
 
-    // Step 8: Draft initial outreach email (using playbook + lead context)
+    // Derive sender company: prefer knowledge profile, fall back to workspace settings
+    const senderCompany = senderIdentity.senderCompany
+      ?? (knowledgeProfile?.business_summary ? (knowledgeProfile.business_summary as string).split(/[.,]/)[0] : undefined)
+      ?? (playbook?.company_name || undefined);
+
+    // Step 9: Draft initial outreach email (using playbook + lead context)
     const draft = await step.run("draft-initial-email", async () => {
-      console.log("[Sales Closer] Step 8: Drafting initial email...");
+      console.log("[Sales Closer] Step 9: Drafting initial email...");
 
       return await draftEmail({
         workspaceId,
@@ -249,10 +288,12 @@ export const salesCloserWorkflow = inngest.createFunction(
         salesPlaybook: playbook,
         leadContext,
         knowledgeProfile,
+        senderName: senderIdentity.senderName ?? undefined,
+        senderCompany: senderCompany ?? undefined,
       });
     });
 
-    // Step 9: Store draft for approval
+    // Step 10: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
       console.log("[Sales Closer] Step 7: Storing draft for approval...");
       const db = createAdminSupabaseClient();
@@ -382,7 +423,28 @@ export const handlePipelineReply = inngest.createFunction(
       return await learnSalesVoice(db, workspaceId);
     });
 
-    // Step 5: Draft reply email (cadenceStep -1 = reply mode)
+    // Step 5: Load sender identity for reply
+    const replySender = await step.run("load-reply-sender", async () => {
+      const db = createAdminSupabaseClient();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: memberData } = await db
+        .from("workspace_memberships")
+        .select("profiles(full_name)")
+        .eq("workspace_id", workspaceId)
+        .eq("role", "owner")
+        .limit(1)
+        .single();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prof = (memberData as any)?.profiles;
+      const name: string | null = Array.isArray(prof) ? prof[0]?.full_name : prof?.full_name ?? null;
+
+      const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
+      const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+      const company = (settings.company_name as string) ?? playbook?.company_name ?? null;
+      return { senderName: name, senderCompany: company };
+    });
+
+    // Step 6: Draft reply email (cadenceStep -1 = reply mode)
     const thread = (pipeline.conversation_thread ?? []) as Array<{
       role: string;
       content: string;
@@ -410,6 +472,8 @@ export const handlePipelineReply = inngest.createFunction(
         workspaceMemories: memories,
         salesPlaybook: playbook,
         knowledgeProfile: replyKnowledgeProfile,
+        senderName: replySender.senderName ?? undefined,
+        senderCompany: replySender.senderCompany ?? undefined,
       });
     });
 
