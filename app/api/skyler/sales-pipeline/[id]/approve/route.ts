@@ -1,6 +1,6 @@
 /**
  * Approve a pending email draft for a pipeline record.
- * Sends Inngest event + executes the email send.
+ * Sends Inngest event + executes the email send + syncs to HubSpot.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -8,6 +8,7 @@ import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { executeEmailSend } from "@/lib/email/email-sender";
 import { inngest } from "@/lib/inngest/client";
+import { syncEmailSentToHubSpot } from "@/lib/hubspot/crm-sync";
 
 export async function POST(
   req: NextRequest,
@@ -59,6 +60,39 @@ export async function POST(
       });
     } catch (inngestErr) {
       console.error("[approve] Inngest event failed (email still sent):", inngestErr);
+    }
+
+    // Fire-and-forget CRM sync to HubSpot
+    // Fetch pipeline record for context
+    const { data: pipeline } = await db
+      .from("skyler_sales_pipeline")
+      .select("contact_email, contact_name, company_name, cadence_step, stage, hubspot_deal_id")
+      .eq("id", pipelineId)
+      .single();
+
+    if (pipeline) {
+      // Fetch the action's email content
+      const { data: action } = await db
+        .from("skyler_actions")
+        .select("tool_input")
+        .eq("id", targetActionId)
+        .single();
+
+      const emailInput = (action?.tool_input ?? {}) as Record<string, unknown>;
+
+      // Don't await — fire-and-forget
+      syncEmailSentToHubSpot({
+        workspaceId: (await db.from("skyler_sales_pipeline").select("workspace_id").eq("id", pipelineId).single()).data?.workspace_id ?? "",
+        pipelineId,
+        contactEmail: pipeline.contact_email,
+        contactName: pipeline.contact_name ?? pipeline.contact_email,
+        companyName: pipeline.company_name ?? undefined,
+        subject: (emailInput.subject as string) ?? "outreach",
+        body: (emailInput.textBody as string) ?? "",
+        cadenceStep: pipeline.cadence_step ?? 1,
+        pipelineStage: pipeline.stage ?? "initial_outreach",
+        hubspotDealId: pipeline.hubspot_deal_id,
+      }).catch((err) => console.error("[approve] CRM sync failed:", err));
     }
 
     return NextResponse.json({ ok: true, messageId });

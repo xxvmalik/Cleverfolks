@@ -13,6 +13,7 @@ import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { researchCompany } from "@/lib/skyler/company-research";
 import { getSalesVoice, learnSalesVoice } from "@/lib/skyler/voice-learner";
+import { syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
 import { draftEmail } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
@@ -76,7 +77,7 @@ export const salesCadenceScheduler = inngest.createFunction(
 
       const { data: stale } = await db
         .from("skyler_sales_pipeline")
-        .select("id")
+        .select("id, workspace_id, contact_email, contact_name, company_name, hubspot_deal_id")
         .eq("cadence_step", 4)
         .is("resolution", null)
         .eq("awaiting_reply", true)
@@ -98,6 +99,16 @@ export const salesCadenceScheduler = inngest.createFunction(
             updated_at: now,
           })
           .eq("id", record.id);
+
+        // Sync resolution to HubSpot (fire-and-forget)
+        syncResolutionToHubSpot({
+          workspaceId: record.workspace_id,
+          contactEmail: record.contact_email,
+          contactName: record.contact_name ?? record.contact_email,
+          companyName: record.company_name ?? undefined,
+          resolution: "no_response",
+          hubspotDealId: record.hubspot_deal_id ?? undefined,
+        }).catch((err) => console.error(`[cadence-scheduler] CRM sync failed for ${record.id}:`, err));
       }
 
       console.log(`[cadence-scheduler] Closed ${stale.length} stale breakup leads as no_response`);

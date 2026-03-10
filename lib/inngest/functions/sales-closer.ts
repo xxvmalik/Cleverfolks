@@ -15,6 +15,7 @@ import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
+import { syncReplyToHubSpot, syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
 
 // Reply intent classification type
 type ReplyIntent = "positive_interest" | "objection" | "meeting_accept" | "opt_out";
@@ -442,6 +443,16 @@ ${replyContent.slice(0, 2000)}`,
         });
 
         console.log(`[Pipeline Reply] Opt-out processed for ${contactEmail} — pipeline marked disqualified`);
+
+        // Sync resolution to HubSpot
+        await syncResolutionToHubSpot({
+          workspaceId,
+          contactEmail,
+          contactName: pipeline.contact_name as string,
+          companyName: (pipeline.company_name as string) ?? undefined,
+          resolution: "disqualified",
+          hubspotDealId: (pipeline.hubspot_deal_id as string) ?? undefined,
+        });
       });
 
       return { status: "opt_out_processed", pipeline_id: pipelineId };
@@ -563,6 +574,20 @@ ${replyContent.slice(0, 2000)}`,
         subject: draft.subject,
         htmlBody: draft.htmlBody,
         textBody: draft.textBody,
+      });
+    });
+
+    // Step 7: Sync reply to HubSpot (fire-and-forget)
+    await step.run("sync-reply-to-hubspot", async () => {
+      await syncReplyToHubSpot({
+        workspaceId,
+        pipelineId,
+        contactEmail,
+        contactName: pipeline.contact_name as string,
+        companyName: (pipeline.company_name as string) ?? undefined,
+        replyContent: replyContent.substring(0, 500),
+        intent: classification.intent,
+        hubspotDealId: (pipeline.hubspot_deal_id as string) ?? undefined,
       });
     });
 
