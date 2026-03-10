@@ -40,13 +40,15 @@ export async function detectPipelineReply(
 
     if (!senderEmail) return { is_reply: false };
 
-    // Check if this sender has an active pipeline record awaiting reply
+    // Check if this sender has an active pipeline record (unresolved)
+    // Match on resolution IS NULL (not just awaiting_reply) to catch replies
+    // that arrive while a follow-up draft is pending approval
     const { data: pipeline } = await db
       .from("skyler_sales_pipeline")
       .select("id, contact_email, stage, awaiting_reply, conversation_thread")
       .eq("workspace_id", workspaceId)
       .eq("contact_email", senderEmail)
-      .eq("awaiting_reply", true)
+      .is("resolution", null)
       .maybeSingle();
 
     if (!pipeline) return { is_reply: false };

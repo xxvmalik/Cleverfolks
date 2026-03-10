@@ -229,6 +229,7 @@ function buildDraftPrompt(params: {
   companyName: string;
 }): string {
   const {
+    cadenceStep,
     cadenceAngle,
     companyResearch,
     salesVoice,
@@ -261,11 +262,14 @@ ${salesVoice.vocabulary_notes ? `- Vocabulary: ${salesVoice.vocabulary_notes}` :
 ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.join(", ")}` : ""}`
     : "";
 
+  // For follow-ups (steps 2-4), show previous emails so the AI drafts a fresh angle
+  const isFollowUp = cadenceStep >= 2 && cadenceStep <= 4;
   const threadBlock =
     conversationThread.length > 0
       ? `\nPREVIOUS EMAILS IN THIS THREAD:\n${conversationThread
-          .map((e) => `[${e.role}] (${e.timestamp}): ${e.content.slice(0, 300)}`)
-          .join("\n")}\n`
+          .map((e) => `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}): ${e.content.slice(0, 300)}`)
+          .join("\n")}
+${isFollowUp ? "\nIMPORTANT: Do NOT reference or mention any of the previous emails. Write a completely fresh email with a new subject line, new hook, and new angle. The prospect should not feel like they are getting a follow-up — it should read like a standalone email." : ""}\n`
       : "";
 
   // Build knowledge profile summary (authoritative business context)

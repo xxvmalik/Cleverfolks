@@ -19,12 +19,13 @@ export type EmailDraftParams = {
   fromName?: string;
 };
 
-// Default follow-up cadence (hardcoded for now)
+// Default follow-up cadence — delay_days is relative to the PREVIOUS step's send.
+// After step 1: wait 3d → step 2. After step 2: wait 4d → step 3. After step 3: wait 7d → step 4.
 export const DEFAULT_CADENCE = [
   { step: 1, delay_days: 0, angle: "initial_outreach" as const },
   { step: 2, delay_days: 3, angle: "different_value_prop" as const },
-  { step: 3, delay_days: 7, angle: "social_proof_or_case_study" as const },
-  { step: 4, delay_days: 14, angle: "breakup_final_attempt" as const },
+  { step: 3, delay_days: 4, angle: "social_proof_or_case_study" as const },
+  { step: 4, delay_days: 7, angle: "breakup_final_attempt" as const },
 ];
 
 export const SALES_CLOSER_DEFAULTS = {

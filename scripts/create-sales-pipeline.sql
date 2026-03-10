@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS skyler_sales_pipeline (
   stage TEXT NOT NULL DEFAULT 'initial_outreach'
     CHECK (stage IN (
       'initial_outreach', 'follow_up_1', 'follow_up_2', 'follow_up_3',
-      'negotiation', 'demo_booked', 'payment_secured', 'closed_won', 'disqualified', 'stalled'
+      'replied', 'negotiation', 'demo_booked', 'payment_secured', 'closed_won', 'disqualified', 'stalled'
     )),
 
   -- Scoring reference
