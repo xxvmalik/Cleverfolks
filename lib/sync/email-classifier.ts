@@ -69,7 +69,18 @@ export async function classifyNewEmails(
   }
 
   for (const record of emailRecords) {
-    // Layer 0: Skip already-processed documents
+    // Reply detection runs FIRST on EVERY email — before any filtering.
+    // This is a pure DB lookup (zero AI cost) and must not be gated by
+    // prefilter/keyword filters because prospect replies are often very
+    // short ("I'm interested", "sure", "not now") and would be skipped
+    // by the too_short prefilter otherwise.
+    const replyResult = await detectPipelineReply(db, workspaceId, {
+      content: record.content,
+      metadata: record.metadata,
+    });
+    if (replyResult.is_reply) stats.repliesDetected++;
+
+    // Layer 0: Skip already-processed documents (referral classification only)
     if (processedSet.has(record.documentId)) {
       stats.alreadyProcessed++;
       continue;
@@ -129,13 +140,6 @@ export async function classifyNewEmails(
         },
       })
       .eq("id", record.documentId);
-
-    // Reply detection (pure DB lookup — zero AI cost) runs for ALL emails
-    const replyResult = await detectPipelineReply(db, workspaceId, {
-      content: record.content,
-      metadata: record.metadata,
-    });
-    if (replyResult.is_reply) stats.repliesDetected++;
   }
 
   // Log pipeline summary

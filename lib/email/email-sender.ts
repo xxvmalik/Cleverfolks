@@ -133,16 +133,21 @@ type ThreadingInfo = {
   references: string[];
   originalSubject: string | null;
   isReplyThread: boolean;
+  lastOutlookMessageId: string | null;
 };
 
 function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo {
   const messageIds: string[] = [];
   let originalSubject: string | null = null;
   let hasProspectReply = false;
+  let lastOutlookMessageId: string | null = null;
 
   for (const entry of thread) {
     if (entry.internet_message_id) {
       messageIds.push(entry.internet_message_id as string);
+    }
+    if (entry.outlook_message_id && entry.role === "skyler") {
+      lastOutlookMessageId = entry.outlook_message_id as string;
     }
     if (!originalSubject && entry.subject && entry.role === "skyler") {
       originalSubject = entry.subject as string;
@@ -157,6 +162,7 @@ function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo
     references: messageIds,
     originalSubject,
     isReplyThread: hasProspectReply,
+    lastOutlookMessageId,
   };
 }
 
@@ -234,6 +240,46 @@ async function sendViaGmail(params: {
 
 // ── Outlook send ────────────────────────────────────────────────────────────
 
+/**
+ * Query Sent Items to capture the Outlook message ID and internetMessageId
+ * of the most recently sent email. Called right after sendMail.
+ */
+async function captureSentItemIds(
+  nango: Nango,
+  connectionId: string
+): Promise<{ outlookMessageId: string | null; internetMessageId: string | null }> {
+  try {
+    // Small delay to allow Outlook to process the send
+    await new Promise((r) => setTimeout(r, 2000));
+
+    const response = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: "/v1.0/me/mailFolders/SentItems/messages?$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId,conversationId",
+      connectionId,
+      providerConfigKey: "outlook",
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messages = (response as any)?.data?.value;
+    if (messages && messages.length > 0) {
+      const msg = messages[0];
+      console.log(`[email-sender] Captured Sent Item: outlookId=${msg.id}, internetMessageId=${msg.internetMessageId}`);
+      return {
+        outlookMessageId: msg.id ?? null,
+        internetMessageId: msg.internetMessageId ?? null,
+      };
+    }
+  } catch (err) {
+    console.warn(`[email-sender] Could not capture Sent Item IDs:`, err);
+  }
+  return { outlookMessageId: null, internetMessageId: null };
+}
+
+/**
+ * Send initial outreach via Outlook using sendMail, then capture the
+ * Outlook message ID from Sent Items for future /reply threading.
+ */
 async function sendViaOutlook(params: {
   to: string;
   subject: string;
@@ -241,7 +287,7 @@ async function sendViaOutlook(params: {
   connectionId: string;
   inReplyTo?: string | null;
   references?: string[];
-}): Promise<{ messageId: string; internetMessageId: string | null }> {
+}): Promise<{ messageId: string; internetMessageId: string | null; outlookMessageId: string | null }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
   // Build threading headers for Outlook (Microsoft Graph)
@@ -270,7 +316,7 @@ async function sendViaOutlook(params: {
   }
 
   // Use sendMail (requires only Mail.Send scope, not Mail.ReadWrite)
-  const response = await nango.proxy({
+  await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
     endpoint: "/v1.0/me/sendMail",
@@ -279,11 +325,51 @@ async function sendViaOutlook(params: {
     data: { message },
   });
 
-  // sendMail returns 202 with no body — generate a tracking ID
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messageId = (response as any)?.data?.id ?? `outlook-${Date.now()}`;
-  console.log(`[email-sender] Outlook send success: ${messageId}`);
-  return { messageId, internetMessageId: null };
+  // Query Sent Items to capture the Outlook message ID for future /reply calls
+  const sentIds = await captureSentItemIds(nango, params.connectionId);
+
+  const messageId = sentIds.outlookMessageId ?? `outlook-${Date.now()}`;
+  console.log(`[email-sender] Outlook sendMail success: ${messageId}`);
+  return {
+    messageId,
+    internetMessageId: sentIds.internetMessageId,
+    outlookMessageId: sentIds.outlookMessageId,
+  };
+}
+
+/**
+ * Reply to an existing Outlook thread using POST /v1.0/me/messages/{id}/reply.
+ * Only requires Mail.Send scope. Outlook automatically handles threading.
+ */
+async function replyViaOutlook(params: {
+  outlookMessageId: string;
+  htmlBody: string;
+  connectionId: string;
+}): Promise<{ messageId: string; internetMessageId: string | null; outlookMessageId: string | null }> {
+  const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+
+  // POST /v1.0/me/messages/{id}/reply — Outlook threads the reply automatically
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${params.outlookMessageId}/reply`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {
+      comment: params.htmlBody,
+    },
+  });
+
+  // Capture the reply's Outlook message ID from Sent Items
+  const sentIds = await captureSentItemIds(nango, params.connectionId);
+
+  const messageId = sentIds.outlookMessageId ?? `outlook-reply-${Date.now()}`;
+  console.log(`[email-sender] Outlook reply success: ${messageId} (replying to ${params.outlookMessageId})`);
+  return {
+    messageId,
+    internetMessageId: sentIds.internetMessageId,
+    outlookMessageId: sentIds.outlookMessageId,
+  };
 }
 
 // ── Execute approved send ───────────────────────────────────────────────────
@@ -348,6 +434,7 @@ export async function executeEmailSend(
   // Send through the connected provider with threading headers
   let messageId: string;
   let internetMessageId: string | null = null;
+  let outlookMessageId: string | null = null;
   try {
     if (emailProvider.provider === "google-mail") {
       const result = await sendViaGmail({
@@ -361,7 +448,18 @@ export async function executeEmailSend(
       });
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
+    } else if (threading.lastOutlookMessageId && existingThread.length > 0) {
+      // Follow-up/reply: use Graph /reply endpoint for proper threading
+      const result = await replyViaOutlook({
+        outlookMessageId: threading.lastOutlookMessageId,
+        htmlBody: input.htmlBody as string,
+        connectionId: emailProvider.connectionId,
+      });
+      messageId = result.messageId;
+      internetMessageId = result.internetMessageId;
+      outlookMessageId = result.outlookMessageId;
     } else {
+      // Initial outreach via sendMail
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
@@ -372,6 +470,7 @@ export async function executeEmailSend(
       });
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
+      outlookMessageId = result.outlookMessageId;
     }
   } catch (sendErr) {
     // Leave action as 'pending' so it stays visible for retry
@@ -418,7 +517,7 @@ export async function executeEmailSend(
     4: "follow_up_3",
   };
 
-  // Append to conversation thread with internet_message_id for threading
+  // Append to conversation thread with internet_message_id + outlook_message_id for threading
   const thread = (pipeline?.conversation_thread ?? []) as Array<Record<string, unknown>>;
   thread.push({
     role: "skyler",
@@ -427,6 +526,7 @@ export async function executeEmailSend(
     timestamp: now,
     message_id: messageId,
     internet_message_id: internetMessageId,
+    outlook_message_id: outlookMessageId,
     provider: emailProvider.provider,
     status: "sent",
   });
