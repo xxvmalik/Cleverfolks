@@ -1,11 +1,16 @@
 /**
  * Company research for Skyler Sales Closer.
- * Uses Tavily web search + GPT-4o-mini to produce structured company intelligence
- * before drafting any outreach email.
+ * Uses Tavily web search + website extraction + GPT-4o-mini to produce
+ * structured company intelligence before drafting any outreach email.
+ *
+ * Research priority:
+ * 1. User-provided context (highest trust — the user told us directly)
+ * 2. Company website (most authoritative automated source)
+ * 3. Web search results (supplementary)
  */
 
 import { classifyWithGPT4oMini } from "@/lib/openai-client";
-import { searchWeb } from "@/lib/web-search";
+import { searchWeb, extractWebsite } from "@/lib/web-search";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { SALES_CLOSER_DEFAULTS } from "@/lib/email/email-sender";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
@@ -24,31 +29,58 @@ export type CompanyResearch = {
   service_alignment_points: string[];
   website_insights: string;
   researched_at: string;
+  confidence: "high" | "medium" | "low";
+  confidence_reason: string;
 };
 
-function buildResearchPrompt(businessContext: string, playbookText?: string): string {
-  const ourContext = playbookText || businessContext || "No business context provided yet.";
-  return `Research this PROSPECT company for sales outreach. Find information in this EXACT priority order:
+function buildResearchPrompt(params: {
+  businessContext: string;
+  playbookText?: string;
+  userContext?: string;
+  websiteContent?: string;
+}): string {
+  const ourContext = params.playbookText || params.businessContext || "No business context provided yet.";
 
-1. TRIGGER EVENTS (most important — 5x higher conversion when referenced in outreach):
-   - Recent funding rounds
-   - New executive hires or leadership changes
-   - Product launches or expansions
+  const userContextBlock = params.userContext
+    ? `\nUSER-PROVIDED CONTEXT (HIGHEST TRUST — the user told us this directly):\n${params.userContext}\n\nThis context is authoritative. Trust it completely over web search results.`
+    : "";
+
+  const websiteBlock = params.websiteContent
+    ? `\nCOMPANY WEBSITE CONTENT (HIGH TRUST — extracted from their actual website):\n${params.websiteContent.slice(0, 4000)}\n\nThe website is the most authoritative automated source for what the business does. Trust it over web search snippets.`
+    : "";
+
+  return `Research this PROSPECT company for sales outreach. You MUST determine what this business actually does.
+
+CRITICAL RULES:
+- If user-provided context exists, trust it COMPLETELY — the user knows this lead
+- If a website is provided, the website content is the MOST authoritative automated source
+- NEVER assume what a business does based on the company name alone
+- "Digital" in a company name does NOT mean digital marketing
+- "Solutions" does NOT mean consulting
+- If the website and web search give conflicting info, trust the website
+- If you genuinely cannot determine what the business does, set confidence to "low"
+${userContextBlock}${websiteBlock}
+
+Find in this EXACT priority order:
+
+1. WHAT THEY ACTUALLY DO (from user context / website / search):
+   - Their core business, products, or services
+   - This is the MOST important field — get it right
+
+2. TRIGGER EVENTS (5x higher conversion when referenced in outreach):
+   - Recent funding rounds, new hires, product launches, expansions
    - Mergers, acquisitions, partnerships
-   - Office openings or geographic expansion
-   - Earnings announcements or growth milestones
    If you find a trigger event, it becomes the PRIMARY talking point.
 
-2. COMPANY OVERVIEW:
-   - What they do (1-2 sentences)
+3. COMPANY OVERVIEW:
    - Size and growth stage
    - Industry
 
-3. PAIN POINTS:
+4. PAIN POINTS:
    - Specific challenges they might face that OUR services could help with
    - Industry-wide challenges affecting companies like them
 
-4. KEY PEOPLE:
+5. KEY PEOPLE:
    - Decision makers if findable
    - The contact we're reaching out to — their role and influence level
 
@@ -59,7 +91,11 @@ RULES:
 - Do NOT make up information. If you can't find something, use empty string or empty array.
 - Do NOT confuse our company with theirs.
 - The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve.
-- Do NOT describe what the PROSPECT sells as if we are selling it.
+
+CONFIDENCE SCORING:
+- "high": You have strong evidence of what the business does (website content, user context, or multiple corroborating search results)
+- "medium": You have some evidence but not fully certain (only search snippets, partial info)
+- "low": You cannot confidently determine what the business does (no website, no user context, minimal/conflicting search results, or you're guessing based on the name)
 
 Respond with ONLY valid JSON. Do NOT wrap in markdown code fences.
 
@@ -73,7 +109,9 @@ Respond with ONLY valid JSON. Do NOT wrap in markdown code fences.
   "decision_makers": ["key people mentioned (name and role)"],
   "talking_points": ["3-5 specific hooks for outreach — lead with trigger event if found"],
   "service_alignment_points": ["2-3 specific ways OUR services help THIS prospect"],
-  "website_insights": "one paragraph about their online presence"
+  "website_insights": "one paragraph about their online presence",
+  "confidence": "high or medium or low",
+  "confidence_reason": "one sentence explaining why this confidence level"
 }
 
 PROSPECT Company: {company_name}
@@ -84,7 +122,16 @@ Web search results:
 }
 
 /**
- * Research a company using Tavily web search and GPT-4o-mini analysis.
+ * Normalise a website URL — add https:// if missing.
+ */
+function normaliseUrl(url: string): string {
+  const trimmed = url.trim();
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+/**
+ * Research a company using website extraction + Tavily web search + GPT-4o-mini analysis.
  * Caches results in the pipeline record's company_research field.
  */
 export async function researchCompany(params: {
@@ -92,13 +139,14 @@ export async function researchCompany(params: {
   companyWebsite?: string;
   contactName?: string;
   contactEmail?: string;
+  userContext?: string;
   workspaceId: string;
   pipelineId?: string;
   db?: SupabaseClient;
   businessContext?: string;
   salesPlaybook?: SalesPlaybook | null;
 }): Promise<CompanyResearch> {
-  const { companyName, companyWebsite, contactName, contactEmail, workspaceId, pipelineId, db, businessContext, salesPlaybook } = params;
+  const { companyName, companyWebsite, contactName, contactEmail, userContext, workspaceId, pipelineId, db, businessContext, salesPlaybook } = params;
 
   // Check for cached research (less than 7 days old)
   if (db && pipelineId) {
@@ -118,12 +166,26 @@ export async function researchCompany(params: {
     }
   }
 
-  // Run web searches in parallel
+  // Priority 1: Browse the company website if provided
+  let websiteContent: string | null = null;
+  if (companyWebsite) {
+    const url = normaliseUrl(companyWebsite);
+    console.log(`[company-research] Browsing website: ${url}`);
+    websiteContent = await extractWebsite(url);
+    if (websiteContent) {
+      console.log(`[company-research] Extracted ${websiteContent.length} chars from ${url}`);
+    } else {
+      console.warn(`[company-research] Failed to extract content from ${url}`);
+    }
+  }
+
+  // Priority 2: Run web searches in parallel
   const queries = [
     `${companyName} company overview`,
     `${companyName} recent news ${new Date().getFullYear()}`,
   ];
-  if (companyWebsite) {
+  if (companyWebsite && !websiteContent) {
+    // Website extraction failed — try searching for the site
     queries.push(`site:${companyWebsite} about`);
   }
   if (contactName) {
@@ -138,10 +200,11 @@ export async function researchCompany(params: {
   const combinedText = allResults
     .map((r) => `[${r.title}] (${r.url})\n${r.content}`)
     .join("\n\n")
-    .slice(0, 6000); // Cap input for cost control
+    .slice(0, 6000);
 
-  if (!combinedText.trim()) {
-    console.warn(`[company-research] No web results found for ${companyName}`);
+  // If we have no data at all, return a low-confidence fallback
+  if (!combinedText.trim() && !websiteContent && !userContext) {
+    console.warn(`[company-research] No data found for ${companyName}`);
     const fallback: CompanyResearch = {
       summary: `Limited information available for ${companyName}.`,
       industry: "Unknown",
@@ -154,13 +217,20 @@ export async function researchCompany(params: {
       service_alignment_points: [],
       website_insights: "No website data available.",
       researched_at: new Date().toISOString(),
+      confidence: "low",
+      confidence_reason: "No website, user context, or web search results found for this company.",
     };
     return fallback;
   }
 
-  // Analyse with GPT-4o-mini — prefer playbook over raw context
+  // Analyse with GPT-4o-mini — include website content and user context
   const playbookText = salesPlaybook ? formatPlaybookForPrompt(salesPlaybook) : undefined;
-  const systemPrompt = buildResearchPrompt(businessContext ?? "", playbookText)
+  const systemPrompt = buildResearchPrompt({
+    businessContext: businessContext ?? "",
+    playbookText,
+    userContext: userContext ?? undefined,
+    websiteContent: websiteContent ?? undefined,
+  })
     .replace("{company_name}", companyName)
     .replace("{contact_name}", contactName ?? "Unknown")
     .replace("{contact_email}", contactEmail ?? "Unknown");
@@ -168,7 +238,7 @@ export async function researchCompany(params: {
   try {
     const text = await classifyWithGPT4oMini({
       systemPrompt,
-      userContent: combinedText,
+      userContent: combinedText || "(No web search results — rely on website content and user context above)",
       maxTokens: 2000,
     });
 
@@ -176,6 +246,8 @@ export async function researchCompany(params: {
     parsed.researched_at = new Date().toISOString();
     if (!parsed.service_alignment_points) parsed.service_alignment_points = [];
     if (!parsed.trigger_event) parsed.trigger_event = "";
+    if (!parsed.confidence) parsed.confidence = "medium";
+    if (!parsed.confidence_reason) parsed.confidence_reason = "";
 
     // Cache in pipeline record
     if (db && pipelineId) {
@@ -189,7 +261,7 @@ export async function researchCompany(params: {
         .eq("id", pipelineId);
     }
 
-    console.log(`[company-research] Researched ${companyName} (GPT-4o-mini): ${parsed.summary.slice(0, 100)}`);
+    console.log(`[company-research] Researched ${companyName} (confidence: ${parsed.confidence}): ${parsed.summary.slice(0, 100)}`);
     return parsed;
   } catch (err) {
     console.error("[company-research] Analysis failed:", err instanceof Error ? err.message : String(err));
@@ -205,6 +277,8 @@ export async function researchCompany(params: {
       service_alignment_points: [],
       website_insights: allResults.map((r) => r.content).join(" ").slice(0, 500),
       researched_at: new Date().toISOString(),
+      confidence: "low",
+      confidence_reason: "Research analysis failed — could not parse results.",
     };
   }
 }

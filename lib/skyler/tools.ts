@@ -243,7 +243,7 @@ const SKYLER_SALES_CLOSER_TOOLS: Anthropic.Tool[] = [
   {
     name: "move_to_sales_closer",
     description:
-      "Manually move a qualified lead into the Sales Closer pipeline for active outreach. Use when the user says 'start outreach to [contact]', 'add [contact] to sales closer', or 'work this lead'.",
+      "Manually move a qualified lead into the Sales Closer pipeline for active outreach. Use when the user says 'start outreach to [contact]', 'add [contact] to sales closer', or 'work this lead'. IMPORTANT: Extract ALL context the user provides — website URLs, descriptions of what the business does, any background info. This context dramatically improves research and email quality.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -251,6 +251,8 @@ const SKYLER_SALES_CLOSER_TOOLS: Anthropic.Tool[] = [
         contact_email: { type: "string", description: "Contact's email address (required for outreach)" },
         contact_name: { type: "string", description: "Contact's full name" },
         company_name: { type: "string", description: "Contact's company name" },
+        website: { type: "string", description: "Company website URL (e.g. 'prominess.com'). Extract from user message if they mention a website." },
+        user_context: { type: "string", description: "Any additional context the user provides about the lead — what the business does, their role, relationship, etc. Capture everything that isn't name/email/company." },
       },
       required: ["contact_email"],
     },

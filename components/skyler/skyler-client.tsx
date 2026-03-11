@@ -385,6 +385,14 @@ type ConvoThreadEntry = {
   status?: string;
 };
 
+type SkylerNote = {
+  type: string;
+  message: string;
+  created_at: string;
+  resolved: boolean;
+  resolved_at?: string;
+};
+
 type PipelineRecord = {
   id: string;
   contact_name: string;
@@ -398,6 +406,7 @@ type PipelineRecord = {
   resolution: string | null;
   updated_at: string;
   conversation_thread: ConvoThreadEntry[];
+  skyler_note?: SkylerNote | null;
   pending_actions: Array<{
     id: string;
     description: string;
@@ -435,6 +444,7 @@ const STAGE_COLORS: Record<string, string> = {
   closed_won: "#4ADE80",
   disqualified: "#F87171",
   stalled: "#8B8F97",
+  pending_clarification: "#FBB040",
 };
 
 function formatStage(stage: string): string {
@@ -1333,6 +1343,40 @@ export function SkylerClient({
                                     })}
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {/* Skyler Note (low confidence / clarification needed) */}
+                          {rec.skyler_note && !rec.skyler_note.resolved && (
+                            <div className="mt-3 rounded-lg bg-[#1A1A1A] border-l-[3px] border-l-[#FBB040] border border-[#2A2D35] p-3">
+                              <div className="flex items-center gap-1.5 mb-2">
+                                <MessageSquare className="w-3.5 h-3.5 text-[#FBB040]" />
+                                <span className="text-[#FBB040] text-xs font-semibold">Skyler Note</span>
+                              </div>
+                              <p className="text-[#E0E0E0] text-xs leading-relaxed mb-3">
+                                {rec.skyler_note.message}
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setPinnedContext({
+                                    pipelineId: rec.id,
+                                    contactName: rec.contact_name || rec.contact_email,
+                                    companyName: rec.company_name ?? "",
+                                    email: {
+                                      role: "skyler",
+                                      subject: "Clarification needed",
+                                      content: rec.skyler_note!.message,
+                                      timestamp: rec.skyler_note!.created_at,
+                                      status: "clarification_needed",
+                                    },
+                                  });
+                                  setTimeout(() => textareaRef.current?.focus(), 50);
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FBB040]/10 text-[#FBB040] rounded-lg text-xs font-medium hover:bg-[#FBB040]/20 transition-colors"
+                              >
+                                <CornerUpLeft className="w-3 h-3" />
+                                Reply to Skyler
+                              </button>
                             </div>
                           )}
 

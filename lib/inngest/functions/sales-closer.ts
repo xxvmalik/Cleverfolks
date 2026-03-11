@@ -41,6 +41,8 @@ export const salesCloserWorkflow = inngest.createFunction(
       leadScoreId,
       leadScore,
       pipelineId: existingPipelineId,
+      website: eventWebsite,
+      userContext: eventUserContext,
     } = event.data as {
       contactId: string;
       contactEmail: string;
@@ -51,6 +53,8 @@ export const salesCloserWorkflow = inngest.createFunction(
       leadScoreId?: string;
       leadScore?: number;
       pipelineId?: string;
+      website?: string;
+      userContext?: string;
     };
 
     if (!contactEmail) {
@@ -195,13 +199,19 @@ export const salesCloserWorkflow = inngest.createFunction(
     });
 
     // Step 6: Research the company (with playbook for alignment)
+    // Pull website/user_context from pipeline record (may have been set via chat tool)
+    const pipelineWebsite = (pipeline.website as string) ?? eventWebsite ?? undefined;
+    const pipelineUserContext = (pipeline.user_context as string) ?? eventUserContext ?? undefined;
+
     const research = await step.run("research-company", async () => {
       console.log("[Sales Closer] Step 6: Researching company...");
       const db = createAdminSupabaseClient();
       return await researchCompany({
         companyName: pipeline.company_name || companyName,
+        companyWebsite: pipelineWebsite,
         contactName: pipeline.contact_name || contactName,
         contactEmail: pipeline.contact_email || contactEmail,
+        userContext: pipelineUserContext,
         workspaceId: pipeline.workspace_id || workspaceId,
         pipelineId: pipeline.id,
         db,
@@ -209,6 +219,30 @@ export const salesCloserWorkflow = inngest.createFunction(
         salesPlaybook: playbook,
       });
     });
+
+    // Low confidence check: pause and ask user instead of guessing
+    if (research.confidence === "low") {
+      await step.run("request-clarification", async () => {
+        console.log(`[Sales Closer] Low confidence for ${companyName} — pausing for clarification`);
+        const db = createAdminSupabaseClient();
+        const message = `I researched ${pipeline.company_name || companyName} but wasn't able to confidently determine what they do.${research.confidence_reason ? ` ${research.confidence_reason}` : ""} Can you tell me more about their business so I can draft a better, more relevant email?`;
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            skyler_note: {
+              type: "clarification_needed",
+              message,
+              created_at: new Date().toISOString(),
+              resolved: false,
+            },
+            stage: "pending_clarification",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", pipeline.id);
+      });
+
+      return { status: "pending_clarification", pipeline_id: pipeline.id };
+    }
 
     // Step 7: Learn sales voice (if not already learned)
     const voice = await step.run("learn-sales-voice", async () => {
@@ -506,8 +540,10 @@ ${replyContent.slice(0, 2000)}`,
       const db = createAdminSupabaseClient();
       return await researchCompany({
         companyName: pipeline.company_name as string,
+        companyWebsite: (pipeline.website as string) ?? undefined,
         contactEmail: pipeline.contact_email as string,
         contactName: pipeline.contact_name as string,
+        userContext: (pipeline.user_context as string) ?? undefined,
         workspaceId,
         pipelineId,
         db,
@@ -693,5 +729,72 @@ export const triggerSalesCloserOnHotLead = inngest.createFunction(
     });
 
     return { status: "triggered" };
+  }
+);
+
+// ── Handle Clarification Received ────────────────────────────────────────────
+// Triggered when the user provides context for a low-confidence pipeline record.
+// Resumes the sales closer workflow from research with the new user_context.
+
+export const handleClarificationReceived = inngest.createFunction(
+  {
+    id: "handle-clarification-received",
+    retries: 1,
+  },
+  { event: "skyler/pipeline.clarification.received" },
+  async ({ event, step }) => {
+    const { pipelineId, workspaceId, userContext } = event.data as {
+      pipelineId: string;
+      workspaceId: string;
+      userContext: string;
+    };
+
+    // Step 1: Fetch pipeline and update with user context
+    const pipeline = await step.run("update-pipeline-context", async () => {
+      const db = createAdminSupabaseClient();
+      const { data: current } = await db
+        .from("skyler_sales_pipeline")
+        .select("*")
+        .eq("id", pipelineId)
+        .single();
+
+      if (!current) throw new Error(`Pipeline record ${pipelineId} not found`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const existingNote = (current.skyler_note ?? {}) as Record<string, any>;
+
+      await db
+        .from("skyler_sales_pipeline")
+        .update({
+          user_context: userContext,
+          skyler_note: { ...existingNote, resolved: true, resolved_at: new Date().toISOString() },
+          stage: "initial_outreach",
+          company_research: null, // Force fresh research with new context
+          research_updated_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pipelineId);
+
+      return current;
+    });
+
+    // Step 2: Re-trigger the full sales closer workflow with updated context
+    await step.sendEvent("resume-sales-closer", {
+      name: "skyler/lead.qualified.hot",
+      data: {
+        contactId: pipeline.contact_id,
+        contactEmail: pipeline.contact_email,
+        contactName: pipeline.contact_name,
+        companyName: pipeline.company_name,
+        companyId: pipeline.company_id ?? undefined,
+        workspaceId,
+        pipelineId,
+        userContext,
+        website: pipeline.website ?? undefined,
+      },
+    });
+
+    console.log(`[Clarification] Resumed sales closer for pipeline ${pipelineId} with user context`);
+    return { status: "resumed", pipeline_id: pipelineId };
   }
 );

@@ -277,6 +277,42 @@ Bad memory: "User said don't mention refill guarantees"
 `;
   }
 
+  // ── Handle clarification replies (low-confidence research pause) ─────────
+  const isClarification = pipelineContext?.referenced_email?.status === "clarification_needed";
+  if (isClarification && pipelineContext?.pipeline_id) {
+    const clarificationPipelineId = pipelineContext.pipeline_id as string;
+
+    systemPrompt += `\n\n## CLARIFICATION CONTEXT
+The user is replying to a Skyler Note asking for more context about a lead.
+Pipeline: ${pipelineContext.contact_name} at ${pipelineContext.company_name} (ID: ${clarificationPipelineId})
+
+The user's message contains context about what this business does.
+1. Acknowledge the information warmly and briefly
+2. Confirm you'll use it to draft a better email
+3. DO NOT draft the email in this chat — the Sales Closer workflow will handle it automatically
+
+IMPORTANT: After you respond, the system will automatically resume the Sales Closer workflow with this new context.
+`;
+
+    // Fire clarification event in after() callback
+    after(async () => {
+      try {
+        const { inngest } = await import("@/lib/inngest/client");
+        await inngest.send({
+          name: "skyler/pipeline.clarification.received",
+          data: {
+            pipelineId: clarificationPipelineId,
+            workspaceId,
+            userContext: message,
+          },
+        });
+        console.log(`[skyler-chat] Fired clarification event for pipeline ${clarificationPipelineId}`);
+      } catch (err) {
+        console.error("[skyler-chat] Clarification event failed:", err);
+      }
+    });
+  }
+
   let conversationId: string | null = inputConversationId ?? null;
   let isNewConversation = false;
 

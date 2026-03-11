@@ -757,6 +757,9 @@ async function handleSalesCloserTool(
       return { results: [], summary: `${contactEmail} is already in the sales pipeline at stage: ${existing.stage}` };
     }
 
+    const website = (input.website as string) ?? null;
+    const userContext = (input.user_context as string) ?? null;
+
     const { data, error } = await adminSupabase
       .from("skyler_sales_pipeline")
       .insert({
@@ -765,6 +768,8 @@ async function handleSalesCloserTool(
         contact_name: (input.contact_name as string) ?? contactEmail,
         contact_email: contactEmail,
         company_name: (input.company_name as string) ?? null,
+        website,
+        user_context: userContext,
         stage: "initial_outreach",
       })
       .select("id")
@@ -781,6 +786,8 @@ async function handleSalesCloserTool(
         contactEmail,
         contactName: (input.contact_name as string) ?? contactEmail,
         companyName: (input.company_name as string) ?? null,
+        website,
+        userContext,
         workspaceId,
         leadScoreId: null,
         pipelineId: data!.id,

@@ -27,3 +27,22 @@ export async function searchWeb(
     return [];
   }
 }
+
+/**
+ * Extract content from a specific URL using Tavily extract API.
+ * Returns the extracted text or null on failure.
+ */
+export async function extractWebsite(url: string): Promise<string | null> {
+  try {
+    const client = tavily({ apiKey: process.env.TAVILY_API_KEY! });
+    const response = await client.extract([url]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results = (response as any).results ?? [];
+    if (results.length === 0) return null;
+    const text = results[0].rawContent ?? results[0].text ?? "";
+    return text ? String(text).slice(0, 8000) : null;
+  } catch (err) {
+    console.error(`[web-search] Tavily extract failed for ${url}:`, err);
+    return null;
+  }
+}
