@@ -133,21 +133,16 @@ type ThreadingInfo = {
   references: string[];
   originalSubject: string | null;
   isReplyThread: boolean;
-  lastOutlookMessageId: string | null;
 };
 
 function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo {
   const messageIds: string[] = [];
   let originalSubject: string | null = null;
   let hasProspectReply = false;
-  let lastOutlookMessageId: string | null = null;
 
   for (const entry of thread) {
     if (entry.internet_message_id) {
       messageIds.push(entry.internet_message_id as string);
-    }
-    if (entry.outlook_message_id && entry.role === "skyler") {
-      lastOutlookMessageId = entry.outlook_message_id as string;
     }
     if (!originalSubject && entry.subject && entry.role === "skyler") {
       originalSubject = entry.subject as string;
@@ -162,7 +157,6 @@ function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo
     references: messageIds,
     originalSubject,
     isReplyThread: hasProspectReply,
-    lastOutlookMessageId,
   };
 }
 
@@ -337,127 +331,6 @@ async function sendViaOutlook(params: {
   };
 }
 
-/**
- * Reply to an existing Outlook thread using createReply → PATCH → send.
- * createReply inherits conversationId and threading headers from the original.
- * We then PATCH the draft to set our body and correct recipient (since the
- * original message was sent BY us, /reply would reply to ourselves).
- */
-async function replyViaOutlook(params: {
-  outlookMessageId: string;
-  htmlBody: string;
-  recipientEmail: string;
-  connectionId: string;
-}): Promise<{ messageId: string; internetMessageId: string | null; outlookMessageId: string | null }> {
-  const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-
-  // Step 1: Create a reply draft (inherits threading from original message)
-  const draftResponse = await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: `/v1.0/me/messages/${params.outlookMessageId}/createReply`,
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: {},
-  });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const draftId = (draftResponse as any)?.data?.id;
-  if (!draftId) {
-    throw new Error("Failed to create Outlook reply draft — no draft ID returned");
-  }
-
-  // Step 2: Update the draft with our content and correct recipient
-  await nango.proxy({
-    method: "PATCH",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: `/v1.0/me/messages/${draftId}`,
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: {
-      body: {
-        contentType: "HTML",
-        content: params.htmlBody,
-      },
-      toRecipients: [
-        {
-          emailAddress: {
-            address: params.recipientEmail,
-          },
-        },
-      ],
-    },
-  });
-
-  // Step 3: Send the draft
-  await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: `/v1.0/me/messages/${draftId}/send`,
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: {},
-  });
-
-  // Capture the sent message's Outlook ID from Sent Items
-  const sentIds = await captureSentItemIds(nango, params.connectionId);
-
-  const messageId = sentIds.outlookMessageId ?? `outlook-reply-${Date.now()}`;
-  console.log(`[email-sender] Outlook reply success: ${messageId} (replying to ${params.outlookMessageId})`);
-  return {
-    messageId,
-    internetMessageId: sentIds.internetMessageId,
-    outlookMessageId: sentIds.outlookMessageId,
-  };
-}
-
-/**
- * Search Outlook Sent Items by subject + recipient to find a previous message ID.
- * Used when the conversation thread lacks an outlook_message_id (e.g. emails sent
- * before we started capturing Sent Item IDs).
- */
-async function findOutlookSentMessage(params: {
-  subject: string;
-  recipientEmail: string;
-  connectionId: string;
-}): Promise<{ outlookMessageId: string; internetMessageId: string | null } | null> {
-  try {
-    const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-
-    // Escape single quotes in subject for OData filter
-    const safeSubject = params.subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
-    const safeEmail = params.recipientEmail.toLowerCase();
-
-    const filter = `subject eq '${safeSubject}' and toRecipients/any(r: r/emailAddress/address eq '${safeEmail}')`;
-    const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId`;
-
-    const response = await nango.proxy({
-      method: "GET",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messages = (response as any)?.data?.value;
-    if (messages && messages.length > 0) {
-      const msg = messages[0];
-      console.log(`[email-sender] Found Sent Item by subject+recipient: outlookId=${msg.id}`);
-      return {
-        outlookMessageId: msg.id,
-        internetMessageId: msg.internetMessageId ?? null,
-      };
-    }
-
-    console.log(`[email-sender] No Sent Item found for subject="${safeSubject}" to=${safeEmail}`);
-    return null;
-  } catch (err) {
-    console.warn(`[email-sender] Sent Items search failed:`, err);
-    return null;
-  }
-}
-
 // ── Execute approved send ───────────────────────────────────────────────────
 
 /**
@@ -534,50 +407,9 @@ export async function executeEmailSend(
       });
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
-    } else if (existingThread.length > 0) {
-      // Follow-up/reply: use Graph /reply endpoint for proper threading
-      let replyToId = threading.lastOutlookMessageId;
-
-      // If no outlook_message_id in thread, search Sent Items by subject + recipient
-      if (!replyToId) {
-        const searchSubject = threading.originalSubject ?? rawSubject;
-        const found = await findOutlookSentMessage({
-          subject: searchSubject,
-          recipientEmail: input.to as string,
-          connectionId: emailProvider.connectionId,
-        });
-        if (found) {
-          replyToId = found.outlookMessageId;
-        }
-      }
-
-      if (replyToId) {
-        const result = await replyViaOutlook({
-          outlookMessageId: replyToId,
-          htmlBody: input.htmlBody as string,
-          recipientEmail: input.to as string,
-          connectionId: emailProvider.connectionId,
-        });
-        messageId = result.messageId;
-        internetMessageId = result.internetMessageId;
-        outlookMessageId = result.outlookMessageId;
-      } else {
-        // Last resort: no Sent Item found, fall back to sendMail with threading headers
-        console.warn(`[email-sender] No Outlook message ID found for reply — falling back to sendMail`);
-        const result = await sendViaOutlook({
-          to: input.to as string,
-          subject,
-          htmlBody: input.htmlBody as string,
-          connectionId: emailProvider.connectionId,
-          inReplyTo: threading.inReplyTo,
-          references: threading.references,
-        });
-        messageId = result.messageId;
-        internetMessageId = result.internetMessageId;
-        outlookMessageId = result.outlookMessageId;
-      }
     } else {
-      // Initial outreach via sendMail
+      // Outlook: always use sendMail with threading headers (In-Reply-To + References)
+      // Threading headers ensure the recipient's mail client groups the conversation
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
