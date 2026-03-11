@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
         integrationId: integration.id,
         provider: providerConfigKey ?? "",
         connectionId,
-        windowKey: String(Math.floor(Date.now() / (2 * 60 * 60 * 1000))),
+        windowKey: String(Math.floor(Date.now() / (15 * 60 * 1000))),
       },
     });
 

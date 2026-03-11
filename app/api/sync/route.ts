@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
       integrationId,
       provider:     integration.provider,
       connectionId: integration.nango_connection_id,
-      windowKey:    String(Math.floor(Date.now() / (2 * 60 * 60 * 1000))),
+      windowKey:    String(Math.floor(Date.now() / (15 * 60 * 1000))),
     },
   });
 
