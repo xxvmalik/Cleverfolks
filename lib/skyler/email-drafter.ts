@@ -477,8 +477,9 @@ export async function draftEmail(params: {
   senderName?: string;
   senderCompany?: string;
   replyIntent?: string;
+  userFeedback?: string;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany, replyIntent } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany, replyIntent, userFeedback } = params;
   let workspaceMemories = params.workspaceMemories;
 
   // Fallback: fetch memories directly if none were passed and no playbook
@@ -525,13 +526,18 @@ export async function draftEmail(params: {
     replyIntent,
   });
 
-  console.log(`[email-drafter] Drafting step ${cadenceStep} (${cadenceAngle}) for ${pipelineRecord.contact_name}`);
+  // Inject user feedback as additional drafting instruction
+  const finalPrompt = userFeedback
+    ? prompt + `\n\n## USER FEEDBACK (MUST FOLLOW)\nThe user reviewed a previous draft and gave this feedback. Apply it to this redraft:\n"${userFeedback}"\n\nThis feedback takes priority over other instructions. Incorporate it naturally.`
+    : prompt;
+
+  console.log(`[email-drafter] Drafting step ${cadenceStep} (${cadenceAngle}) for ${pipelineRecord.contact_name}${userFeedback ? " [with user feedback]" : ""}`);
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 800,
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content: finalPrompt }],
   });
 
   const text = response.content

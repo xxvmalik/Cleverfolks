@@ -25,6 +25,7 @@ import {
   Pencil,
   Trash2,
   MessageSquare,
+  CornerUpLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -359,6 +360,21 @@ type PendingAction = {
   description: string;
 };
 
+// ── Pinned context type (reply-to-email feedback) ───────────────────────────
+
+type PinnedEmailContext = {
+  pipelineId: string;
+  contactName: string;
+  companyName: string;
+  email: {
+    role: string;
+    subject?: string;
+    content: string;
+    timestamp: string;
+    status?: string;
+  };
+};
+
 // ── Sales Closer types ───────────────────────────────────────────────────────
 
 type ConvoThreadEntry = {
@@ -488,6 +504,7 @@ export function SkylerClient({
   const [previewActionId, setPreviewActionId] = useState<string | null>(null);
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
+  const [pinnedContext, setPinnedContext] = useState<PinnedEmailContext | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -654,6 +671,10 @@ export function SkylerClient({
       textareaRef.current.style.height = "auto";
     }
 
+    // Capture and clear pinned context before sending
+    const currentPinnedContext = pinnedContext;
+    setPinnedContext(null);
+
     // Add user message to chat
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -668,14 +689,26 @@ export function SkylerClient({
     let currentConversationId = activeConversationId;
 
     try {
+      // Build request body — include pipeline context if pinned
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const chatBody: Record<string, any> = {
+        message: trimmed,
+        workspaceId,
+        conversationId: activeConversationId ?? undefined,
+      };
+      if (currentPinnedContext) {
+        chatBody.pipelineContext = {
+          pipeline_id: currentPinnedContext.pipelineId,
+          contact_name: currentPinnedContext.contactName,
+          company_name: currentPinnedContext.companyName,
+          referenced_email: currentPinnedContext.email,
+        };
+      }
+
       const res = await fetch("/api/skyler/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmed,
-          workspaceId,
-          conversationId: activeConversationId ?? undefined,
-        }),
+        body: JSON.stringify(chatBody),
       });
 
       if (!res.ok || !res.body) {
@@ -1243,12 +1276,35 @@ export function SkylerClient({
                                         <div
                                           key={idx}
                                           className={cn(
-                                            "rounded-lg p-3 text-xs",
+                                            "group/thread rounded-lg p-3 text-xs relative",
                                             isSkyler
                                               ? "bg-[#1A1A1A] border border-[#2A2D35]"
                                               : "bg-[#1A2A1A] border border-[#2A3D2A]"
                                           )}
                                         >
+                                          {/* Prompt button — appears on hover */}
+                                          <button
+                                            onClick={() => {
+                                              setPinnedContext({
+                                                pipelineId: rec.id,
+                                                contactName: rec.contact_name || rec.contact_email,
+                                                companyName: rec.company_name ?? "",
+                                                email: {
+                                                  role: entry.role,
+                                                  subject: entry.subject,
+                                                  content: entry.content,
+                                                  timestamp: entry.timestamp,
+                                                  status: entry.status ?? (isSkyler ? "sent" : "received"),
+                                                },
+                                              });
+                                              setTimeout(() => textareaRef.current?.focus(), 50);
+                                            }}
+                                            className="absolute top-2 right-2 opacity-0 group-hover/thread:opacity-100 p-1 rounded-md bg-white/5 hover:bg-white/10 text-[#8B8F97] hover:text-[#F2903D] transition-all"
+                                            title="Give feedback on this email"
+                                          >
+                                            <CornerUpLeft className="w-3 h-3" />
+                                          </button>
+
                                           <div className="flex items-center justify-between mb-1.5">
                                             <div className="flex items-center gap-2">
                                               <span className={cn("font-semibold", isSkyler ? "text-[#3A89FF]" : "text-[#4ADE80]")}>
@@ -1263,7 +1319,7 @@ export function SkylerClient({
                                                 {isSkyler ? "Sent" : "Received"}
                                               </span>
                                             </div>
-                                            <span className="text-[#555A63] text-[10px]">
+                                            <span className="text-[#555A63] text-[10px] mr-5">
                                               {new Date(entry.timestamp).toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
                                               {new Date(entry.timestamp).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
                                             </span>
@@ -1460,12 +1516,38 @@ export function SkylerClient({
                   </div>
                   {/* Input bar */}
                   <div className="px-4 pb-4">
+                    {/* Pinned context card (reply-to-email) */}
+                    {pinnedContext && (
+                      <div
+                        className={cn(
+                          "mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] px-3 py-2.5 flex items-start gap-2",
+                          pinnedContext.email.role === "skyler" ? "border-l-[#F2903D]" : "border-l-[#4ADE80]"
+                        )}
+                      >
+                        <CornerUpLeft className="w-3.5 h-3.5 text-[#8B8F97] flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-white text-xs font-medium truncate">
+                            Replying to: {pinnedContext.email.subject ? `"${pinnedContext.email.subject}"` : pinnedContext.contactName}
+                          </p>
+                          <p className="text-[#8B8F97] text-[11px] truncate mt-0.5">
+                            {parseEmailBody(pinnedContext.email.content).slice(0, 80)}
+                            {pinnedContext.email.content.length > 80 ? "..." : ""}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => setPinnedContext(null)}
+                          className="text-[#555A63] hover:text-white transition-colors flex-shrink-0"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
                     <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#F2903D]/50 transition-all">
                       <textarea
                         value={inputValue}
                         onChange={(e) => { setInputValue(e.target.value); resizeTextarea(e.target); }}
                         onKeyDown={handleKeyDown}
-                        placeholder="Ask Skyler about outreach..."
+                        placeholder={pinnedContext ? "Give Skyler feedback on this email..." : "Ask Skyler about outreach..."}
                         rows={1}
                         disabled={isStreaming}
                         className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
@@ -1724,6 +1806,32 @@ export function SkylerClient({
 
               {/* Input bar */}
               <div className="px-4 pb-4">
+                {/* Pinned context card (reply-to-email) */}
+                {pinnedContext && (
+                  <div
+                    className={cn(
+                      "mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] px-3 py-2.5 flex items-start gap-2",
+                      pinnedContext.email.role === "skyler" ? "border-l-[#F2903D]" : "border-l-[#4ADE80]"
+                    )}
+                  >
+                    <CornerUpLeft className="w-3.5 h-3.5 text-[#8B8F97] flex-shrink-0 mt-0.5" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white text-xs font-medium truncate">
+                        Replying to: {pinnedContext.email.subject ? `"${pinnedContext.email.subject}"` : pinnedContext.contactName}
+                      </p>
+                      <p className="text-[#8B8F97] text-[11px] truncate mt-0.5">
+                        {parseEmailBody(pinnedContext.email.content).slice(0, 80)}
+                        {pinnedContext.email.content.length > 80 ? "..." : ""}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setPinnedContext(null)}
+                      className="text-[#555A63] hover:text-white transition-colors flex-shrink-0"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
                 <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#F2903D]/50 transition-all">
                   <button type="button" className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
                     <Image
@@ -1745,7 +1853,7 @@ export function SkylerClient({
                       resizeTextarea(e.target);
                     }}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask Skyler about your pipeline..."
+                    placeholder={pinnedContext ? "Give Skyler feedback on this email..." : "Ask Skyler about your pipeline..."}
                     rows={1}
                     disabled={isStreaming}
                     className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"

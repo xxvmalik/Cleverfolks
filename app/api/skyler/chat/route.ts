@@ -142,7 +142,8 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Parse body ────────────────────────────────────────────────────────
-  let body: { message?: string; workspaceId?: string; conversationId?: string };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: { message?: string; workspaceId?: string; conversationId?: string; pipelineContext?: any };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -152,7 +153,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const { message, workspaceId, conversationId: inputConversationId } = body;
+  const { message, workspaceId, conversationId: inputConversationId, pipelineContext } = body;
   if (!message?.trim() || !workspaceId) {
     return new Response(
       JSON.stringify({ error: "message and workspaceId are required" }),
@@ -235,7 +236,7 @@ export async function POST(request: NextRequest) {
     console.log(`[skyler-chat] No conversationId provided — cannot fetch pending actions`);
   }
 
-  const systemPrompt = buildSkylerSystemPrompt(
+  let systemPrompt = buildSkylerSystemPrompt(
     workspaceRow as WorkspaceRow | null,
     onboardingRow as OnboardingRow | null,
     profileRow as KnowledgeProfileRow | null,
@@ -244,6 +245,37 @@ export async function POST(request: NextRequest) {
     autonomyLevel,
     pendingActions
   );
+
+  // ── Inject pipeline feedback context if present ────────────────────────
+  if (pipelineContext?.referenced_email) {
+    const ctx = pipelineContext;
+    const email = ctx.referenced_email;
+    const emailStatus = email.status ?? (email.role === "skyler" ? "sent" : "received");
+    const isPending = emailStatus === "pending";
+
+    systemPrompt += `\n\n## PIPELINE EMAIL FEEDBACK CONTEXT
+The user is giving feedback on a specific email from the Sales Closer pipeline.
+
+Pipeline: ${ctx.contact_name} at ${ctx.company_name} (ID: ${ctx.pipeline_id})
+Email referenced (${emailStatus}):
+Subject: ${email.subject ?? "(no subject)"}
+Content:
+${email.content}
+
+${isPending ? `This email has NOT been sent yet — it is a pending draft awaiting approval.
+- Acknowledge the feedback
+- Ask if they want you to redraft incorporating their feedback
+- If they say yes, redraft the email with their corrections applied
+- Store the feedback as a workspace memory for future leads` : `This email was already sent.
+- Acknowledge the feedback and confirm you'll apply it to future leads
+- Store the feedback as a workspace memory so it applies to ALL future emails
+- If there's a follow-up pending for this lead, offer to incorporate the feedback in the next draft`}
+
+IMPORTANT: Always store the user's feedback as an actionable, generalised workspace memory.
+Good memory: "When emailing fitness businesses, don't mention refill guarantees unless the prospect asks about follower drops"
+Bad memory: "User said don't mention refill guarantees"
+`;
+  }
 
   let conversationId: string | null = inputConversationId ?? null;
   let isNewConversation = false;
