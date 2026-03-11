@@ -362,6 +362,20 @@ export const handlePipelineReply = inngest.createFunction(
       return { status: "skipped", reason: "resolved" };
     }
 
+    // Safety net: check if this exact reply content is already in the thread
+    // (prevents duplicate processing if the reply-detector dedup was bypassed)
+    const existingThread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+    const duplicateReply = existingThread.filter(
+      (entry) =>
+        entry.role === "prospect" &&
+        typeof entry.content === "string" &&
+        (entry.content as string).slice(0, 200) === replyContent.slice(0, 200)
+    );
+    if (duplicateReply.length > 1) {
+      console.log(`[Pipeline Reply] Duplicate reply content detected (${duplicateReply.length} copies) — skipping`);
+      return { status: "skipped", reason: "duplicate_content" };
+    }
+
     // Step 2: Classify reply intent using Sonnet
     const classification = await step.run("classify-reply-intent", async () => {
       console.log(`[Pipeline Reply] Classifying reply from ${contactEmail}...`);

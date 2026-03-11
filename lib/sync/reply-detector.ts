@@ -54,13 +54,31 @@ export async function detectPipelineReply(
 
     if (!pipeline) return { is_reply: false };
 
+    // Content dedup: check if this reply already exists in the conversation thread.
+    // The sync processor recreates chunks every cycle, so the same email will be
+    // re-detected after the 5-minute atomic lock expires. Compare content to prevent duplicates.
+    const existingThread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+    const replyContent = record.content.slice(0, 3000);
+    const isDuplicate = existingThread.some(
+      (entry) =>
+        entry.role === "prospect" &&
+        typeof entry.content === "string" &&
+        (entry.content as string).slice(0, 200) === replyContent.slice(0, 200)
+    );
+    if (isDuplicate) {
+      console.log(
+        `[reply-detector] Skipping duplicate reply from ${senderEmail} — content already in thread for pipeline ${pipeline.id}`
+      );
+      return { is_reply: false };
+    }
+
     // Atomic dedup: only proceed if last_reply_at is old enough (>5 min) or null.
     // This prevents two concurrent chunks of the same email from both firing events.
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const now = new Date().toISOString();
 
     // Build the new conversation thread with the prospect's reply
-    const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+    const thread = existingThread;
     // Find the last subject from Skyler's emails for context
     let lastSubject = "";
     for (let i = thread.length - 1; i >= 0; i--) {

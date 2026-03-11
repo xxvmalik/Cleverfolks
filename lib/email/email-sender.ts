@@ -6,6 +6,7 @@
  */
 
 import { Nango } from "@nangohq/node";
+import { randomUUID } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type EmailDraftParams = {
@@ -125,6 +126,54 @@ async function getUserEmail(
   return Array.isArray(profile) ? profile[0]?.email : profile?.email ?? null;
 }
 
+// ── Threading helpers ────────────────────────────────────────────────────────
+
+type ThreadingInfo = {
+  inReplyTo: string | null;
+  references: string[];
+  originalSubject: string | null;
+  isReplyThread: boolean;
+};
+
+function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo {
+  const messageIds: string[] = [];
+  let originalSubject: string | null = null;
+  let hasProspectReply = false;
+
+  for (const entry of thread) {
+    if (entry.internet_message_id) {
+      messageIds.push(entry.internet_message_id as string);
+    }
+    if (!originalSubject && entry.subject && entry.role === "skyler") {
+      originalSubject = entry.subject as string;
+    }
+    if (entry.role === "prospect" || entry.role === "contact") {
+      hasProspectReply = true;
+    }
+  }
+
+  return {
+    inReplyTo: messageIds.length > 0 ? messageIds[messageIds.length - 1] : null,
+    references: messageIds,
+    originalSubject,
+    isReplyThread: hasProspectReply,
+  };
+}
+
+/** Ensure reply subjects keep the "Re:" thread prefix. */
+function enforceReplySubject(subject: string, originalSubject: string | null, isReply: boolean): string {
+  if (!isReply || !originalSubject) return subject;
+  // Strip any existing Re:/RE:/re: prefixes from the original for clean comparison
+  const baseOriginal = originalSubject.replace(/^re:\s*/i, "").trim();
+  const baseCurrent = subject.replace(/^re:\s*/i, "").trim();
+  // If the AI already set the right Re: subject, keep it
+  if (baseCurrent.toLowerCase() === baseOriginal.toLowerCase() && /^re:\s/i.test(subject)) {
+    return subject;
+  }
+  // Force "Re: {original subject}"
+  return `Re: ${baseOriginal}`;
+}
+
 // ── Gmail send ──────────────────────────────────────────────────────────────
 
 async function sendViaGmail(params: {
@@ -133,19 +182,33 @@ async function sendViaGmail(params: {
   htmlBody: string;
   fromEmail: string;
   connectionId: string;
-}): Promise<string> {
+  inReplyTo?: string | null;
+  references?: string[];
+}): Promise<{ messageId: string; internetMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // Build RFC 2822 email
-  const rawEmail = [
+  // Generate a Message-ID for threading
+  const domain = params.fromEmail.split("@")[1] ?? "cleverfolks.com";
+  const generatedMessageId = `<${randomUUID()}@${domain}>`;
+
+  // Build RFC 2822 email with threading headers
+  const headers: string[] = [
     `From: ${params.fromEmail}`,
     `To: ${params.to}`,
     `Subject: ${params.subject}`,
     `MIME-Version: 1.0`,
     `Content-Type: text/html; charset=UTF-8`,
-    "",
-    params.htmlBody,
-  ].join("\r\n");
+    `Message-ID: ${generatedMessageId}`,
+  ];
+
+  if (params.inReplyTo) {
+    headers.push(`In-Reply-To: ${params.inReplyTo}`);
+  }
+  if (params.references && params.references.length > 0) {
+    headers.push(`References: ${params.references.join(" ")}`);
+  }
+
+  const rawEmail = [...headers, "", params.htmlBody].join("\r\n");
 
   // Base64url encode (Gmail API requirement)
   const encodedEmail = Buffer.from(rawEmail)
@@ -165,8 +228,8 @@ async function sendViaGmail(params: {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messageId = (response as any)?.data?.id ?? "sent";
-  console.log(`[email-sender] Gmail send success: ${messageId}`);
-  return messageId;
+  console.log(`[email-sender] Gmail send success: ${messageId} (Message-ID: ${generatedMessageId})`);
+  return { messageId, internetMessageId: generatedMessageId };
 }
 
 // ── Outlook send ────────────────────────────────────────────────────────────
@@ -176,33 +239,66 @@ async function sendViaOutlook(params: {
   subject: string;
   htmlBody: string;
   connectionId: string;
-}): Promise<string> {
+  inReplyTo?: string | null;
+  references?: string[];
+}): Promise<{ messageId: string; internetMessageId: string | null }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  const response = await nango.proxy({
+  // Build threading headers for Outlook (Microsoft Graph)
+  const internetMessageHeaders: Array<{ name: string; value: string }> = [];
+  if (params.inReplyTo) {
+    internetMessageHeaders.push({ name: "In-Reply-To", value: params.inReplyTo });
+  }
+  if (params.references && params.references.length > 0) {
+    internetMessageHeaders.push({ name: "References", value: params.references.join(" ") });
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messagePayload: Record<string, any> = {
+    subject: params.subject,
+    body: {
+      contentType: "HTML",
+      content: params.htmlBody,
+    },
+    toRecipients: [
+      { emailAddress: { address: params.to } },
+    ],
+  };
+
+  if (internetMessageHeaders.length > 0) {
+    messagePayload.internetMessageHeaders = internetMessageHeaders;
+  }
+
+  // Step 1: Create draft to capture internetMessageId
+  const draftResponse = await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/sendMail",
+    endpoint: "/v1.0/me/messages",
     connectionId: params.connectionId,
     providerConfigKey: "outlook",
-    data: {
-      message: {
-        subject: params.subject,
-        body: {
-          contentType: "HTML",
-          content: params.htmlBody,
-        },
-        toRecipients: [
-          { emailAddress: { address: params.to } },
-        ],
-      },
-    },
+    data: messagePayload,
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messageId = (response as any)?.data?.id ?? "sent";
-  console.log(`[email-sender] Outlook send success: ${messageId}`);
-  return messageId;
+  const draft = (draftResponse as any)?.data;
+  const draftId = draft?.id;
+  const internetMessageId: string | null = draft?.internetMessageId ?? null;
+
+  if (!draftId) {
+    throw new Error("Failed to create Outlook draft message");
+  }
+
+  // Step 2: Send the draft
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}/send`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+  });
+
+  console.log(`[email-sender] Outlook send success: ${draftId} (internetMessageId: ${internetMessageId})`);
+  return { messageId: draftId, internetMessageId };
 }
 
 // ── Execute approved send ───────────────────────────────────────────────────
@@ -250,24 +346,47 @@ export async function executeEmailSend(
     throw new Error("Could not determine sender email address");
   }
 
-  // Send through the connected provider
+  // Extract threading info from existing conversation
+  const { data: pipelineForThread } = await db
+    .from("skyler_sales_pipeline")
+    .select("conversation_thread")
+    .eq("id", pipelineId)
+    .single();
+
+  const existingThread = (pipelineForThread?.conversation_thread ?? []) as Array<Record<string, unknown>>;
+  const threading = getThreadingInfo(existingThread);
+
+  // Enforce "Re:" subject for reply threads (prospect has replied)
+  const rawSubject = input.subject as string;
+  const subject = enforceReplySubject(rawSubject, threading.originalSubject, threading.isReplyThread);
+
+  // Send through the connected provider with threading headers
   let messageId: string;
+  let internetMessageId: string | null = null;
   try {
     if (emailProvider.provider === "google-mail") {
-      messageId = await sendViaGmail({
+      const result = await sendViaGmail({
         to: input.to as string,
-        subject: input.subject as string,
+        subject,
         htmlBody: input.htmlBody as string,
         fromEmail,
         connectionId: emailProvider.connectionId,
+        inReplyTo: threading.inReplyTo,
+        references: threading.references,
       });
+      messageId = result.messageId;
+      internetMessageId = result.internetMessageId;
     } else {
-      messageId = await sendViaOutlook({
+      const result = await sendViaOutlook({
         to: input.to as string,
-        subject: input.subject as string,
+        subject,
         htmlBody: input.htmlBody as string,
         connectionId: emailProvider.connectionId,
+        inReplyTo: threading.inReplyTo,
+        references: threading.references,
       });
+      messageId = result.messageId;
+      internetMessageId = result.internetMessageId;
     }
   } catch (sendErr) {
     // Leave action as 'pending' so it stays visible for retry
@@ -314,14 +433,15 @@ export async function executeEmailSend(
     4: "follow_up_3",
   };
 
-  // Append to conversation thread
+  // Append to conversation thread with internet_message_id for threading
   const thread = (pipeline?.conversation_thread ?? []) as Array<Record<string, unknown>>;
   thread.push({
     role: "skyler",
     content: input.textBody,
-    subject: input.subject,
+    subject,
     timestamp: now,
     message_id: messageId,
+    internet_message_id: internetMessageId,
     provider: emailProvider.provider,
     status: "sent",
   });
