@@ -254,7 +254,7 @@ async function sendViaOutlook(params: {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messagePayload: Record<string, any> = {
+  const message: Record<string, any> = {
     subject: params.subject,
     body: {
       contentType: "HTML",
@@ -266,39 +266,24 @@ async function sendViaOutlook(params: {
   };
 
   if (internetMessageHeaders.length > 0) {
-    messagePayload.internetMessageHeaders = internetMessageHeaders;
+    message.internetMessageHeaders = internetMessageHeaders;
   }
 
-  // Step 1: Create draft to capture internetMessageId
-  const draftResponse = await nango.proxy({
+  // Use sendMail (requires only Mail.Send scope, not Mail.ReadWrite)
+  const response = await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/messages",
+    endpoint: "/v1.0/me/sendMail",
     connectionId: params.connectionId,
     providerConfigKey: "outlook",
-    data: messagePayload,
+    data: { message },
   });
 
+  // sendMail returns 202 with no body — generate a tracking ID
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const draft = (draftResponse as any)?.data;
-  const draftId = draft?.id;
-  const internetMessageId: string | null = draft?.internetMessageId ?? null;
-
-  if (!draftId) {
-    throw new Error("Failed to create Outlook draft message");
-  }
-
-  // Step 2: Send the draft
-  await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: `/v1.0/me/messages/${draftId}/send`,
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-  });
-
-  console.log(`[email-sender] Outlook send success: ${draftId} (internetMessageId: ${internetMessageId})`);
-  return { messageId: draftId, internetMessageId };
+  const messageId = (response as any)?.data?.id ?? `outlook-${Date.now()}`;
+  console.log(`[email-sender] Outlook send success: ${messageId}`);
+  return { messageId, internetMessageId: null };
 }
 
 // ── Execute approved send ───────────────────────────────────────────────────
