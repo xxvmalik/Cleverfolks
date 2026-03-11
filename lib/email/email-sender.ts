@@ -338,29 +338,68 @@ async function sendViaOutlook(params: {
 }
 
 /**
- * Reply to an existing Outlook thread using POST /v1.0/me/messages/{id}/reply.
- * Only requires Mail.Send scope. Outlook automatically handles threading.
+ * Reply to an existing Outlook thread using createReply → PATCH → send.
+ * createReply inherits conversationId and threading headers from the original.
+ * We then PATCH the draft to set our body and correct recipient (since the
+ * original message was sent BY us, /reply would reply to ourselves).
  */
 async function replyViaOutlook(params: {
   outlookMessageId: string;
   htmlBody: string;
+  recipientEmail: string;
   connectionId: string;
 }): Promise<{ messageId: string; internetMessageId: string | null; outlookMessageId: string | null }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // POST /v1.0/me/messages/{id}/reply — Outlook threads the reply automatically
-  await nango.proxy({
+  // Step 1: Create a reply draft (inherits threading from original message)
+  const draftResponse = await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: `/v1.0/me/messages/${params.outlookMessageId}/reply`,
+    endpoint: `/v1.0/me/messages/${params.outlookMessageId}/createReply`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {},
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const draftId = (draftResponse as any)?.data?.id;
+  if (!draftId) {
+    throw new Error("Failed to create Outlook reply draft — no draft ID returned");
+  }
+
+  // Step 2: Update the draft with our content and correct recipient
+  await nango.proxy({
+    method: "PATCH",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}`,
     connectionId: params.connectionId,
     providerConfigKey: "outlook",
     data: {
-      comment: params.htmlBody,
+      body: {
+        contentType: "HTML",
+        content: params.htmlBody,
+      },
+      toRecipients: [
+        {
+          emailAddress: {
+            address: params.recipientEmail,
+          },
+        },
+      ],
     },
   });
 
-  // Capture the reply's Outlook message ID from Sent Items
+  // Step 3: Send the draft
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}/send`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {},
+  });
+
+  // Capture the sent message's Outlook ID from Sent Items
   const sentIds = await captureSentItemIds(nango, params.connectionId);
 
   const messageId = sentIds.outlookMessageId ?? `outlook-reply-${Date.now()}`;
@@ -516,6 +555,7 @@ export async function executeEmailSend(
         const result = await replyViaOutlook({
           outlookMessageId: replyToId,
           htmlBody: input.htmlBody as string,
+          recipientEmail: input.to as string,
           connectionId: emailProvider.connectionId,
         });
         messageId = result.messageId;
