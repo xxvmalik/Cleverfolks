@@ -26,6 +26,8 @@ import {
   Trash2,
   MessageSquare,
   CornerUpLeft,
+  Lightbulb,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -391,6 +393,7 @@ type SkylerNote = {
   created_at: string;
   resolved: boolean;
   resolved_at?: string;
+  action?: string;
 };
 
 type PipelineRecord = {
@@ -1346,39 +1349,97 @@ export function SkylerClient({
                             </div>
                           )}
 
-                          {/* Skyler Note (low confidence / clarification needed) */}
-                          {rec.skyler_note && !rec.skyler_note.resolved && (
-                            <div className="mt-3 rounded-lg bg-[#1A1A1A] border-l-[3px] border-l-[#FBB040] border border-[#2A2D35] p-3">
-                              <div className="flex items-center gap-1.5 mb-2">
-                                <MessageSquare className="w-3.5 h-3.5 text-[#FBB040]" />
-                                <span className="text-[#FBB040] text-xs font-semibold">Skyler Note</span>
+                          {/* Skyler Note (proactive intelligence / clarification needed) */}
+                          {rec.skyler_note && !rec.skyler_note.resolved && (() => {
+                            const noteType = rec.skyler_note.type;
+                            const isActionRequired = noteType === "action_required";
+                            const isClarification = noteType === "clarification_needed";
+                            const NoteIcon = isActionRequired ? AlertTriangle : isClarification ? MessageSquare : Lightbulb;
+                            const noteLabel = isActionRequired ? "Action Required" : isClarification ? "Skyler Note" : "Skyler Suggestion";
+                            return (
+                              <div className="mt-3 rounded-lg bg-[#1A1A1A] border-l-[3px] border-l-[#FBB040] border border-[#2A2D35] p-3">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-1.5">
+                                    <NoteIcon className="w-3.5 h-3.5 text-[#FBB040]" />
+                                    <span className="text-[#FBB040] text-xs font-semibold">{noteLabel}</span>
+                                  </div>
+                                  {!isClarification && (
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          await fetch(`/api/skyler/sales-pipeline/${rec.id}`, {
+                                            method: "PATCH",
+                                            headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ dismiss_note: true }),
+                                          });
+                                          setPipelineRecords((prev) =>
+                                            prev.map((r) =>
+                                              r.id === rec.id
+                                                ? { ...r, skyler_note: { ...r.skyler_note!, resolved: true, resolved_at: new Date().toISOString() } }
+                                                : r
+                                            )
+                                          );
+                                        } catch { /* ignore */ }
+                                      }}
+                                      className="text-[#8B8F97] hover:text-[#E0E0E0] transition-colors"
+                                      title="Dismiss"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="text-[#E0E0E0] text-xs leading-relaxed mb-3">
+                                  {rec.skyler_note.message}
+                                </p>
+                                {isClarification ? (
+                                  <button
+                                    onClick={() => {
+                                      setPinnedContext({
+                                        pipelineId: rec.id,
+                                        contactName: rec.contact_name || rec.contact_email,
+                                        companyName: rec.company_name ?? "",
+                                        email: {
+                                          role: "skyler",
+                                          subject: "Clarification needed",
+                                          content: rec.skyler_note!.message,
+                                          timestamp: rec.skyler_note!.created_at,
+                                          status: "clarification_needed",
+                                        },
+                                      });
+                                      setTimeout(() => textareaRef.current?.focus(), 50);
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FBB040]/10 text-[#FBB040] rounded-lg text-xs font-medium hover:bg-[#FBB040]/20 transition-colors"
+                                  >
+                                    <CornerUpLeft className="w-3 h-3" />
+                                    Reply to Skyler
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        await fetch(`/api/skyler/sales-pipeline/${rec.id}`, {
+                                          method: "PATCH",
+                                          headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ dismiss_note: true }),
+                                        });
+                                        setPipelineRecords((prev) =>
+                                          prev.map((r) =>
+                                            r.id === rec.id
+                                              ? { ...r, skyler_note: { ...r.skyler_note!, resolved: true, resolved_at: new Date().toISOString() } }
+                                              : r
+                                          )
+                                        );
+                                      } catch { /* ignore */ }
+                                    }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FBB040]/10 text-[#FBB040] rounded-lg text-xs font-medium hover:bg-[#FBB040]/20 transition-colors"
+                                  >
+                                    <Eye className="w-3 h-3" />
+                                    Dismiss
+                                  </button>
+                                )}
                               </div>
-                              <p className="text-[#E0E0E0] text-xs leading-relaxed mb-3">
-                                {rec.skyler_note.message}
-                              </p>
-                              <button
-                                onClick={() => {
-                                  setPinnedContext({
-                                    pipelineId: rec.id,
-                                    contactName: rec.contact_name || rec.contact_email,
-                                    companyName: rec.company_name ?? "",
-                                    email: {
-                                      role: "skyler",
-                                      subject: "Clarification needed",
-                                      content: rec.skyler_note!.message,
-                                      timestamp: rec.skyler_note!.created_at,
-                                      status: "clarification_needed",
-                                    },
-                                  });
-                                  setTimeout(() => textareaRef.current?.focus(), 50);
-                                }}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#FBB040]/10 text-[#FBB040] rounded-lg text-xs font-medium hover:bg-[#FBB040]/20 transition-colors"
-                              >
-                                <CornerUpLeft className="w-3 h-3" />
-                                Reply to Skyler
-                              </button>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Pending email drafts */}
                           {rec.pending_actions.length > 0 && (

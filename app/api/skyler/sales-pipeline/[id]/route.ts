@@ -62,7 +62,7 @@ export async function PATCH(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { stage, resolution, resolution_notes } = body;
+  const { stage, resolution, resolution_notes, dismiss_note } = body;
 
   const db = createAdminSupabaseClient();
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
@@ -73,6 +73,18 @@ export async function PATCH(
     updates.resolved_at = new Date().toISOString();
   }
   if (resolution_notes) updates.resolution_notes = resolution_notes;
+
+  // Dismiss skyler_note: mark as resolved
+  if (dismiss_note) {
+    const { data: current } = await db
+      .from("skyler_sales_pipeline")
+      .select("skyler_note")
+      .eq("id", id)
+      .single();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const existingNote = (current?.skyler_note ?? {}) as Record<string, any>;
+    updates.skyler_note = { ...existingNote, resolved: true, resolved_at: new Date().toISOString() };
+  }
 
   const { error } = await db
     .from("skyler_sales_pipeline")

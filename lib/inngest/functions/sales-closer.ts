@@ -457,7 +457,106 @@ ${replyContent.slice(0, 2000)}`,
       }
     });
 
-    // Step 3: Handle opt_out immediately — no need to draft
+    // Step 3: Proactive intelligence — surface actionable notes based on reply intent
+    const proactiveNote = await step.run("check-proactive-actions", async () => {
+      const db = createAdminSupabaseClient();
+      const contactName = pipeline.contact_name as string;
+
+      // Meeting signals: explicit accept OR meeting-related keywords
+      if (
+        classification.intent === "meeting_accept" ||
+        /\b(tomorrow|let'?s chat|schedule|call me|let'?s meet|book a time|works for me|i'?m free)\b/i.test(replyContent)
+      ) {
+        // Check if calendar integration is connected
+        const { data: connections } = await db
+          .from("integrations")
+          .select("provider")
+          .eq("workspace_id", workspaceId)
+          .eq("status", "connected")
+          .in("provider", ["google-calendar", "outlook-calendar"]);
+
+        const hasCalendar = connections && connections.length > 0;
+
+        if (!hasCalendar) {
+          return {
+            type: "action_required" as const,
+            message: `${contactName} wants to meet! Connect your Google Calendar or Outlook Calendar in Connectors so I can book meetings directly and never miss a booking opportunity. For now, send them a manual calendar link.`,
+            action: "connect_calendar",
+          };
+        } else {
+          return {
+            type: "suggestion" as const,
+            message: `${contactName} confirmed a meeting. Want me to book it in your calendar?`,
+            action: "book_meeting",
+          };
+        }
+      }
+
+      // Strong buying signals: pricing, signup, getting started
+      if (
+        classification.intent === "positive_interest" &&
+        /\b(sign up|get started|pricing|how (?:do|can) (?:i|we)|order|subscribe|buy|purchase|pay|cost|rate|plan)\b/i.test(replyContent)
+      ) {
+        return {
+          type: "suggestion" as const,
+          message: `${contactName} is showing strong buying signals. Consider sending your order link or jumping in personally to close this deal.`,
+          action: "close_deal",
+        };
+      }
+
+      // Prospect asking something Skyler can't confidently answer
+      if (
+        classification.intent === "positive_interest" &&
+        /\b(specific|technical|custom|legal|compliance|contract|sla|guarantee|api|integration with|support for)\b/i.test(replyContent)
+      ) {
+        return {
+          type: "clarification_needed" as const,
+          message: `${contactName} is asking about something I don't have enough context to answer properly. Can you reply with details so I can respond accurately?`,
+          action: "needs_context",
+        };
+      }
+
+      // Fast-moving deal: multiple positive replies (check thread for recent prospect replies)
+      const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+      const recentProspectReplies = thread.filter((entry) => {
+        if (entry.role !== "prospect") return false;
+        const ts = entry.timestamp as string | undefined;
+        if (!ts) return false;
+        const age = Date.now() - new Date(ts).getTime();
+        return age < 48 * 60 * 60 * 1000; // Within 48 hours
+      });
+
+      if (recentProspectReplies.length >= 2 && classification.intent === "positive_interest") {
+        return {
+          type: "suggestion" as const,
+          message: `This deal is moving fast — ${contactName} has replied ${recentProspectReplies.length} times in the last 48 hours. Consider jumping in personally to close it.`,
+          action: "fast_deal",
+        };
+      }
+
+      return null;
+    });
+
+    // Store proactive note on pipeline card if applicable
+    if (proactiveNote) {
+      await step.run("store-proactive-note", async () => {
+        const db = createAdminSupabaseClient();
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            skyler_note: {
+              ...proactiveNote,
+              created_at: new Date().toISOString(),
+              resolved: false,
+            },
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", pipelineId);
+        console.log(`[Pipeline Reply] Proactive note stored: ${proactiveNote.action} for ${pipeline.contact_name}`);
+      });
+    }
+
+    // Step 4: Handle opt_out immediately — no need to draft
     if (classification.intent === "opt_out") {
       await step.run("handle-opt-out", async () => {
         const db = createAdminSupabaseClient();
@@ -506,7 +605,7 @@ ${replyContent.slice(0, 2000)}`,
       return { status: "opt_out_processed", pipeline_id: pipelineId };
     }
 
-    // Step 4: Fetch business context for drafting
+    // Step 5: Fetch business context for drafting
     const memories = await step.run("fetch-reply-context", async () => {
       const db = createAdminSupabaseClient();
       const { data: memData } = await db
@@ -579,7 +678,7 @@ ${replyContent.slice(0, 2000)}`,
       return { senderName: name, senderCompany: company };
     });
 
-    // Step 5: Draft intent-aware reply email
+    // Step 6: Draft intent-aware reply email
     const thread = (pipeline.conversation_thread ?? []) as Array<{
       role: string;
       content: string;
@@ -614,7 +713,7 @@ ${replyContent.slice(0, 2000)}`,
       });
     });
 
-    // Step 6: Store reply draft for approval
+    // Step 7: Store reply draft for approval
     const action = await step.run("store-reply-draft", async () => {
       const db = createAdminSupabaseClient();
       return await draftOutreachEmail(db, {
@@ -627,7 +726,7 @@ ${replyContent.slice(0, 2000)}`,
       });
     });
 
-    // Step 7: Sync reply to HubSpot (fire-and-forget)
+    // Step 8: Sync reply to HubSpot (fire-and-forget)
     await step.run("sync-reply-to-hubspot", async () => {
       await syncReplyToHubSpot({
         workspaceId,
