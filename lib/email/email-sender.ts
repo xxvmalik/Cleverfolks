@@ -372,6 +372,53 @@ async function replyViaOutlook(params: {
   };
 }
 
+/**
+ * Search Outlook Sent Items by subject + recipient to find a previous message ID.
+ * Used when the conversation thread lacks an outlook_message_id (e.g. emails sent
+ * before we started capturing Sent Item IDs).
+ */
+async function findOutlookSentMessage(params: {
+  subject: string;
+  recipientEmail: string;
+  connectionId: string;
+}): Promise<{ outlookMessageId: string; internetMessageId: string | null } | null> {
+  try {
+    const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+
+    // Escape single quotes in subject for OData filter
+    const safeSubject = params.subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
+    const safeEmail = params.recipientEmail.toLowerCase();
+
+    const filter = `subject eq '${safeSubject}' and toRecipients/any(r: r/emailAddress/address eq '${safeEmail}')`;
+    const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId`;
+
+    const response = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
+      connectionId: params.connectionId,
+      providerConfigKey: "outlook",
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messages = (response as any)?.data?.value;
+    if (messages && messages.length > 0) {
+      const msg = messages[0];
+      console.log(`[email-sender] Found Sent Item by subject+recipient: outlookId=${msg.id}`);
+      return {
+        outlookMessageId: msg.id,
+        internetMessageId: msg.internetMessageId ?? null,
+      };
+    }
+
+    console.log(`[email-sender] No Sent Item found for subject="${safeSubject}" to=${safeEmail}`);
+    return null;
+  } catch (err) {
+    console.warn(`[email-sender] Sent Items search failed:`, err);
+    return null;
+  }
+}
+
 // ── Execute approved send ───────────────────────────────────────────────────
 
 /**
@@ -448,16 +495,47 @@ export async function executeEmailSend(
       });
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
-    } else if (threading.lastOutlookMessageId && existingThread.length > 0) {
+    } else if (existingThread.length > 0) {
       // Follow-up/reply: use Graph /reply endpoint for proper threading
-      const result = await replyViaOutlook({
-        outlookMessageId: threading.lastOutlookMessageId,
-        htmlBody: input.htmlBody as string,
-        connectionId: emailProvider.connectionId,
-      });
-      messageId = result.messageId;
-      internetMessageId = result.internetMessageId;
-      outlookMessageId = result.outlookMessageId;
+      let replyToId = threading.lastOutlookMessageId;
+
+      // If no outlook_message_id in thread, search Sent Items by subject + recipient
+      if (!replyToId) {
+        const searchSubject = threading.originalSubject ?? rawSubject;
+        const found = await findOutlookSentMessage({
+          subject: searchSubject,
+          recipientEmail: input.to as string,
+          connectionId: emailProvider.connectionId,
+        });
+        if (found) {
+          replyToId = found.outlookMessageId;
+        }
+      }
+
+      if (replyToId) {
+        const result = await replyViaOutlook({
+          outlookMessageId: replyToId,
+          htmlBody: input.htmlBody as string,
+          connectionId: emailProvider.connectionId,
+        });
+        messageId = result.messageId;
+        internetMessageId = result.internetMessageId;
+        outlookMessageId = result.outlookMessageId;
+      } else {
+        // Last resort: no Sent Item found, fall back to sendMail with threading headers
+        console.warn(`[email-sender] No Outlook message ID found for reply — falling back to sendMail`);
+        const result = await sendViaOutlook({
+          to: input.to as string,
+          subject,
+          htmlBody: input.htmlBody as string,
+          connectionId: emailProvider.connectionId,
+          inReplyTo: threading.inReplyTo,
+          references: threading.references,
+        });
+        messageId = result.messageId;
+        internetMessageId = result.internetMessageId;
+        outlookMessageId = result.outlookMessageId;
+      }
     } else {
       // Initial outreach via sendMail
       const result = await sendViaOutlook({
