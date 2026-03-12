@@ -173,6 +173,7 @@ export function buildSkylerSystemPrompt(
     const terminology = memories.filter((m) => m.type === "terminology");
     const patterns = memories.filter((m) => m.type === "pattern");
     const learnings = memories.filter((m) => m.type === "learning");
+    const resources = memories.filter((m) => m.type === "resource");
 
     const mandatoryRules: string[] = [];
     if (terminology.length > 0 || corrections.length > 0) {
@@ -208,6 +209,12 @@ Always use the correct term from your VERY FIRST mention.\n\n`
       sections.push(
         "AGENT LEARNINGS:\n" +
           learnings.map((m) => `- ${m.content}`).join("\n")
+      );
+    }
+    if (resources.length > 0) {
+      sections.push(
+        "SAVED RESOURCES (booking links, URLs, templates — use these when relevant):\n" +
+          resources.map((m) => `- ${m.content}`).join("\n")
       );
     }
 

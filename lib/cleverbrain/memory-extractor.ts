@@ -2,7 +2,7 @@ import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 export interface ExtractedMemory {
-  type: "correction" | "preference" | "terminology" | "pattern" | "learning";
+  type: "correction" | "preference" | "terminology" | "pattern" | "learning" | "resource";
   scope: "workspace" | "user" | "agent";
   content: string;
   confidence: "high" | "medium" | "low";
@@ -29,6 +29,10 @@ Types of things to extract:
 
 5. LEARNINGS (scope: agent) — Things about how the AI should behave better
    Examples: "Competitor queries need specific brand names not categories", "Always check Outlook for calendar events", "This workspace has no Google Calendar"
+
+6. RESOURCES (scope: workspace) — URLs, links, booking links, templates, tools, or reusable assets the user shares
+   Examples: "Meeting booking link: https://calendly.com/doubra/30min", "Proposal template: https://docs.google.com/...", "Use pricing page https://acme.com/pricing in outreach emails", "Company pitch deck link: https://..."
+   Note: ALWAYS extract these with HIGH confidence. If the user shares a URL or link for any purpose, save it. These are critical for future use across all conversations and leads.
 
 Rules:
 - Return ONLY a JSON array of objects. No markdown, no explanation, no preamble.
@@ -82,7 +86,7 @@ export async function extractMemories(
           "scope" in m &&
           "content" in m &&
           "confidence" in m &&
-          ["correction", "preference", "terminology", "pattern", "learning"].includes(
+          ["correction", "preference", "terminology", "pattern", "learning", "resource"].includes(
             (m as ExtractedMemory).type
           ) &&
           ["workspace", "user", "agent"].includes(

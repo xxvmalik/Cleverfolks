@@ -164,7 +164,7 @@ async function fetchFoundationalMemories(
     )
     .eq("workspace_id", workspaceId)
     .is("superseded_by", null)
-    .in("type", ["terminology", "correction"])
+    .in("type", ["terminology", "correction", "resource"])
     .or(
       `scope.eq.workspace,scope.eq.agent${userId ? `,and(scope.eq.user,user_id.eq.${userId})` : ""}`
     )
