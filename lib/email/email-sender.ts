@@ -495,37 +495,18 @@ async function replyViaOutlook(params: {
   // This makes Outlook thread the email correctly even without createReply.
   const replySubject = params.subject.startsWith("Re:") ? params.subject : `Re: ${params.subject}`;
 
-  let internetMessageId: string | null = null;
-  try {
-    const msgResponse = await nango.proxy({
-      method: "GET",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages/${params.outlookMessageId}?$select=internetMessageId`,
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    internetMessageId = (msgResponse as any)?.data?.internetMessageId ?? null;
-    console.log(`[email-sender] Fetched threading info: internetMessageId=${internetMessageId}`);
-  } catch (fetchErr) {
-    console.warn(`[email-sender] Could not fetch original message for threading headers:`, fetchErr instanceof Error ? fetchErr.message : fetchErr);
-  }
+  // sendMail doesn't support setting In-Reply-To/References headers
+  // (Graph API rejects standard MIME headers via internetMessageHeaders with 400).
+  // Threading via sendMail relies on "Re:" subject only.
+  // For proper threading, the Outlook connection needs Mail.ReadWrite scope so createReply works.
+  console.log(`[email-sender] sendMail fallback — threading via Re: subject only (add Mail.ReadWrite scope for proper createReply threading)`);
 
-  // Build message with threading headers (conversationId is read-only — only use internetMessageHeaders)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messagePayload: Record<string, any> = {
     subject: replySubject,
     body: { contentType: "HTML", content: params.htmlBody },
     toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
   };
-
-  if (internetMessageId) {
-    messagePayload.internetMessageHeaders = [
-      { name: "In-Reply-To", value: internetMessageId },
-      { name: "References", value: internetMessageId },
-    ];
-    console.log(`[email-sender] sendMail with threading headers: In-Reply-To=${internetMessageId}`);
-  }
 
   await nango.proxy({
     method: "POST",
@@ -656,27 +637,8 @@ export async function executeEmailSend(
         const originalSubject = threading.originalSubject ?? rawSubject;
 
         // Try to find any sent message with this subject for threading headers
-        let threadInternetMessageId: string | null = null;
-        try {
-          const safeSubject = originalSubject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''").replace(/[\\"%&+#]/g, "");
-          const filter = `contains(subject,'${safeSubject}')`;
-          const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId`;
-          const searchResponse = await nango2.proxy({
-            method: "GET",
-            baseUrlOverride: "https://graph.microsoft.com",
-            endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
-            connectionId: emailProvider.connectionId,
-            providerConfigKey: "outlook",
-          });
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const msgs = (searchResponse as any)?.data?.value;
-          if (msgs && msgs.length > 0) {
-            threadInternetMessageId = msgs[0].internetMessageId ?? null;
-            console.log(`[email-sender] Found sent message for threading: internetMessageId=${threadInternetMessageId}`);
-          }
-        } catch (searchErr) {
-          console.warn(`[email-sender] Subject search for threading failed:`, searchErr instanceof Error ? searchErr.message : searchErr);
-        }
+        // sendMail fallback — "Re:" subject only (no internetMessageHeaders, Graph rejects them)
+        console.log(`[email-sender] No stored message ID — sending via sendMail with Re: subject`);
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const fallbackPayload: Record<string, any> = {
@@ -684,12 +646,6 @@ export async function executeEmailSend(
           body: { contentType: "HTML", content: input.htmlBody as string },
           toRecipients: [{ emailAddress: { address: input.to as string } }],
         };
-        if (threadInternetMessageId) {
-          fallbackPayload.internetMessageHeaders = [
-            { name: "In-Reply-To", value: threadInternetMessageId },
-            { name: "References", value: threadInternetMessageId },
-          ];
-        }
 
         await nango2.proxy({
           method: "POST",
