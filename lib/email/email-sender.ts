@@ -133,12 +133,15 @@ type ThreadingInfo = {
   references: string[];
   originalSubject: string | null;
   isReplyThread: boolean;
+  /** The last stored Outlook message ID from the thread — used for direct createReply (no search needed) */
+  lastOutlookMessageId: string | null;
 };
 
 function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo {
   const messageIds: string[] = [];
   let originalSubject: string | null = null;
   let hasProspectReply = false;
+  let lastOutlookMessageId: string | null = null;
 
   for (const entry of thread) {
     if (entry.internet_message_id) {
@@ -150,6 +153,10 @@ function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo
     if (entry.role === "prospect" || entry.role === "contact") {
       hasProspectReply = true;
     }
+    // Track the most recent Outlook message ID (from either side)
+    if (entry.outlook_message_id) {
+      lastOutlookMessageId = entry.outlook_message_id as string;
+    }
   }
 
   return {
@@ -157,6 +164,7 @@ function getThreadingInfo(thread: Array<Record<string, unknown>>): ThreadingInfo
     references: messageIds,
     originalSubject,
     isReplyThread: hasProspectReply,
+    lastOutlookMessageId,
   };
 }
 
@@ -235,36 +243,50 @@ async function sendViaGmail(params: {
 // ── Outlook send ────────────────────────────────────────────────────────────
 
 /**
- * Send initial outreach via Outlook using sendMail.
- * Used only for the FIRST email — no threading needed.
+ * Send via Outlook using draft → send pattern.
+ * Creates a draft first (which gives us the real Outlook message ID),
+ * then sends it. The stored ID is used for threading all future replies.
  */
 async function sendViaOutlook(params: {
   to: string;
   subject: string;
   htmlBody: string;
   connectionId: string;
-}): Promise<{ messageId: string }> {
+}): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  await nango.proxy({
+  // Step 1: Create draft — returns the message object with its real ID
+  const draftResponse = await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/sendMail",
+    endpoint: "/v1.0/me/messages",
     connectionId: params.connectionId,
     providerConfigKey: "outlook",
     data: {
-      message: {
-        subject: params.subject,
-        body: { contentType: "HTML", content: params.htmlBody },
-        toRecipients: [{ emailAddress: { address: params.to } }],
-      },
-      saveToSentItems: true,
+      subject: params.subject,
+      body: { contentType: "HTML", content: params.htmlBody },
+      toRecipients: [{ emailAddress: { address: params.to } }],
     },
   });
 
-  const messageId = `outlook-${Date.now()}`;
-  console.log(`[email-sender] Outlook sendMail success: ${messageId}`);
-  return { messageId };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const draftId = (draftResponse as any)?.data?.id;
+  if (!draftId) {
+    throw new Error("Failed to create Outlook draft — no ID returned");
+  }
+
+  // Step 2: Send the draft
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}/send`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {},
+  });
+
+  console.log(`[email-sender] Outlook draft→send success: ${draftId}`);
+  return { messageId: draftId, outlookMessageId: draftId };
 }
 
 /**
@@ -285,8 +307,15 @@ async function findOutlookThreadMessage(
   subject: string,
   recipientEmail: string
 ): Promise<string | null> {
-  const baseSubject = subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
-  const safeEmail = recipientEmail.toLowerCase();
+  // Escape for OData: single quotes doubled, strip any characters that break $filter
+  const baseSubject = subject
+    .replace(/^re:\s*/i, "")
+    .trim()
+    .replace(/'/g, "''")
+    .replace(/[\\"%&+#]/g, ""); // Strip chars that break OData filters
+  const safeEmail = recipientEmail.toLowerCase().replace(/'/g, "''");
+
+  console.log(`[email-sender] Thread search: subject="${baseSubject}" recipient=${safeEmail}`);
 
   // Step 1: Search ALL folders for the most recent message FROM the prospect (received)
   try {
@@ -353,7 +382,7 @@ async function replyViaOutlook(params: {
   recipientEmail: string;
   htmlBody: string;
   connectionId: string;
-}): Promise<{ messageId: string }> {
+}): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
   // Step 1: Create a reply draft (inherits threading from original message)
@@ -395,9 +424,8 @@ async function replyViaOutlook(params: {
     data: {},
   });
 
-  const messageId = `outlook-reply-${Date.now()}`;
-  console.log(`[email-sender] Outlook reply success: ${messageId} (thread from ${params.outlookMessageId})`);
-  return { messageId };
+  console.log(`[email-sender] Outlook reply success: ${draftId} (thread from ${params.outlookMessageId})`);
+  return { messageId: draftId, outlookMessageId: draftId };
 }
 
 // ── Execute approved send ───────────────────────────────────────────────────
@@ -462,6 +490,7 @@ export async function executeEmailSend(
   // Send through the connected provider with threading headers
   let messageId: string;
   let internetMessageId: string | null = null;
+  let outlookMessageId: string | null = null;
   try {
     if (emailProvider.provider === "google-mail") {
       const result = await sendViaGmail({
@@ -476,27 +505,36 @@ export async function executeEmailSend(
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
     } else if (existingThread.length > 0) {
-      // Outlook follow-up: find best message to reply to for threading on both sides
-      const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-      const originalSubject = threading.originalSubject ?? rawSubject;
-      const sentMessageId = await findOutlookThreadMessage(
-        nango,
-        emailProvider.connectionId,
-        originalSubject,
-        input.to as string
-      );
+      // Outlook follow-up — use stored ID first, fall back to search
+      let replyToId: string | null = threading.lastOutlookMessageId;
 
-      if (sentMessageId) {
+      if (replyToId) {
+        console.log(`[email-sender] Using stored outlook_message_id for threading: ${replyToId}`);
+      } else {
+        // No stored ID — fall back to search (for old threads before this fix)
+        console.log(`[email-sender] No stored outlook_message_id — searching for thread message`);
+        const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+        const originalSubject = threading.originalSubject ?? rawSubject;
+        replyToId = await findOutlookThreadMessage(
+          nango,
+          emailProvider.connectionId,
+          originalSubject,
+          input.to as string
+        );
+      }
+
+      if (replyToId) {
         const result = await replyViaOutlook({
-          outlookMessageId: sentMessageId,
+          outlookMessageId: replyToId,
           recipientEmail: input.to as string,
           htmlBody: input.htmlBody as string,
           connectionId: emailProvider.connectionId,
         });
         messageId = result.messageId;
+        outlookMessageId = result.outlookMessageId;
       } else {
-        // No previous sent message found — fall back to sendMail
-        console.warn(`[email-sender] No Sent Item found for threading — using sendMail`);
+        // No thread message found at all — fall back to draft→send (new thread)
+        console.warn(`[email-sender] No thread message found — sending as new email`);
         const result = await sendViaOutlook({
           to: input.to as string,
           subject,
@@ -504,9 +542,10 @@ export async function executeEmailSend(
           connectionId: emailProvider.connectionId,
         });
         messageId = result.messageId;
+        outlookMessageId = result.outlookMessageId;
       }
     } else {
-      // Outlook initial outreach: plain sendMail
+      // Outlook initial outreach: draft → send
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
@@ -514,6 +553,7 @@ export async function executeEmailSend(
         connectionId: emailProvider.connectionId,
       });
       messageId = result.messageId;
+      outlookMessageId = result.outlookMessageId;
     }
   } catch (sendErr) {
     // Leave action as 'pending' so it stays visible for retry
@@ -560,7 +600,7 @@ export async function executeEmailSend(
     4: "follow_up_3",
   };
 
-  // Append to conversation thread with internet_message_id for threading
+  // Append to conversation thread — store outlook_message_id for deterministic threading
   const thread = (pipeline?.conversation_thread ?? []) as Array<Record<string, unknown>>;
   thread.push({
     role: "skyler",
@@ -569,6 +609,7 @@ export async function executeEmailSend(
     timestamp: now,
     message_id: messageId,
     internet_message_id: internetMessageId,
+    outlook_message_id: outlookMessageId,
     provider: emailProvider.provider,
     status: "sent",
   });
