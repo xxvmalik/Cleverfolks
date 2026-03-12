@@ -523,6 +523,8 @@ export function SkylerClient({
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
   const [pinnedContext, setPinnedContext] = useState<PinnedEmailContext | null>(null);
+  // Persists pipeline tag across all user messages in the same conversation
+  const [conversationPipelineTag, setConversationPipelineTag] = useState<ChatMessage["pipelineTag"] | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -693,18 +695,23 @@ export function SkylerClient({
     const currentPinnedContext = pinnedContext;
     setPinnedContext(null);
 
-    // Add user message to chat — attach pipeline tag if context was pinned
+    // Persist pipeline tag for the whole conversation once set
+    let activeTag = conversationPipelineTag;
+    if (currentPinnedContext && !activeTag) {
+      activeTag = {
+        contactName: currentPinnedContext.contactName,
+        companyName: currentPinnedContext.companyName,
+        subject: currentPinnedContext.email.subject,
+      };
+      setConversationPipelineTag(activeTag);
+    }
+
+    // Add user message to chat — attach pipeline tag (first message or follow-ups)
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
-      ...(currentPinnedContext && {
-        pipelineTag: {
-          contactName: currentPinnedContext.contactName,
-          companyName: currentPinnedContext.companyName,
-          subject: currentPinnedContext.email.subject,
-        },
-      }),
+      ...(activeTag && { pipelineTag: activeTag }),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setIsStreaming(true);
@@ -855,6 +862,7 @@ export function SkylerClient({
   function handleNewChat() {
     setActiveConversationId(null);
     setChatMessages([]);
+    setConversationPipelineTag(null);
     setStreamingContent("");
     setActivityLabel(null);
     setMessageActions({});
@@ -865,6 +873,7 @@ export function SkylerClient({
   async function loadConversation(convId: string) {
     setActiveConversationId(convId);
     setChatMessages([]);
+    setConversationPipelineTag(null);
     setStreamingContent("");
     setMessageActions({});
     try {
@@ -927,6 +936,7 @@ export function SkylerClient({
     if (activeConversationId === id) {
       setActiveConversationId(null);
       setChatMessages([]);
+      setConversationPipelineTag(null);
     }
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
   }

@@ -352,10 +352,19 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
           conversationId = newConvId as string;
         }
 
+        // Save user message — embed pipeline context so it persists in history
+        // for follow-up messages in the same conversation
+        let savedUserContent = message;
+        if (pipelineContext?.referenced_email) {
+          const ctx = pipelineContext;
+          const email = ctx.referenced_email;
+          savedUserContent = `[Pipeline context: ${ctx.contact_name} at ${ctx.company_name} (pipeline_id: ${ctx.pipeline_id}, email: ${email.subject ?? "no subject"})]\n\n${message}`;
+        }
+
         await db.rpc("create_chat_message", {
           p_conversation_id: conversationId,
           p_role: "user",
-          p_content: message,
+          p_content: savedUserContent,
           p_sources: null,
         });
 
@@ -392,6 +401,54 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
           }
         } catch (histErr) {
           console.error("[skyler-chat] Failed to load history:", histErr);
+        }
+
+        // ── Step 2b: Re-inject pipeline context from history ────────────
+        // If this is a follow-up message (no pipelineContext in request body)
+        // but a previous message embedded [Pipeline context: ...], recover it
+        // and inject into the system prompt so Skyler remembers the lead.
+        if (!pipelineContext?.referenced_email && history.length > 0) {
+          const pipelineMarkerRegex = /\[Pipeline context: (.+?) at (.+?) \(pipeline_id: ([a-f0-9-]+), email: (.+?)\)\]/;
+          // Scan history backwards to find the most recent pipeline context marker
+          let parsedCtx: { contactName: string; companyName: string; pipelineId: string; emailSubject: string } | null = null;
+          for (let i = history.length - 1; i >= 0; i--) {
+            const match = history[i].content.match(pipelineMarkerRegex);
+            if (match) {
+              parsedCtx = {
+                contactName: match[1],
+                companyName: match[2],
+                pipelineId: match[3],
+                emailSubject: match[4],
+              };
+              break;
+            }
+          }
+
+          if (parsedCtx) {
+            console.log(`[skyler-chat] Re-injecting pipeline context from history: ${parsedCtx.contactName} at ${parsedCtx.companyName} (${parsedCtx.pipelineId})`);
+            // Fetch pipeline record to get contact email and current state
+            const { data: pipelineRecord } = await db
+              .from("skyler_sales_pipeline")
+              .select("contact_email, contact_name, company_name, stage, conversation_thread")
+              .eq("id", parsedCtx.pipelineId)
+              .single();
+
+            if (pipelineRecord) {
+              systemPrompt += `\n\n## ACTIVE PIPELINE CONTEXT (from conversation history)
+You are currently discussing a specific lead from the Sales Closer pipeline.
+Pipeline ID: ${parsedCtx.pipelineId}
+Contact: ${pipelineRecord.contact_name ?? parsedCtx.contactName} at ${pipelineRecord.company_name ?? parsedCtx.companyName}
+Contact Email: ${pipelineRecord.contact_email ?? "unknown"}
+Stage: ${pipelineRecord.stage ?? "unknown"}
+Last Email Subject: ${parsedCtx.emailSubject}
+
+IMPORTANT: You already have all the context about this lead from the conversation. When the user asks you to re-draft, send a correction email, or take any action on this lead:
+- Use pipeline_id: "${parsedCtx.pipelineId}"
+- Use contact email: "${pipelineRecord.contact_email ?? ""}"
+- Do NOT ask the user for the pipeline_id or email — you already have them.
+`;
+            }
+          }
         }
 
         // ── Step 3: Run agent loop (reusing CleverBrain's) ──────────────
