@@ -265,46 +265,54 @@ Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}`;
       }
     }
 
-    systemPrompt += `\n\n## TAGGED LEAD CONTEXT
-The user has tagged a specific lead into this conversation.
+    systemPrompt += `\n\n## HIGHLIGHTED LEAD CONTEXT
+The user highlighted this lead. Their message is about this lead — they might be asking for updates, requesting actions, or anything else. Read their message and respond using the context below.
+
 Lead: ${ctx.contact_name} at ${ctx.company_name}
 ${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}
 ${ctx.contact_email ? `Contact Email: ${ctx.contact_email}` : ""}${pipelineExtra}
 
-All messages in this conversation are about this lead. When the user asks you to take actions (draft emails, create tasks, update records), use the info above — do NOT ask them for details you already have.
+You have full context about this lead. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
 `;
   }
 
-  // Case 2: Email-level tag — user is giving feedback on a specific email
+  // Case 2: Email-level highlight — user highlighted a specific email from a thread
   if (pipelineContext?.referenced_email) {
     const ctx = pipelineContext;
     const email = ctx.referenced_email;
     const emailStatus = email.status ?? (email.role === "skyler" ? "sent" : "received");
     const isPending = emailStatus === "pending";
 
-    systemPrompt += `\n\n## PIPELINE EMAIL FEEDBACK CONTEXT
-The user is giving feedback on a specific email from the Sales Closer pipeline.
+    // Fetch full pipeline record for complete context
+    let pipelineExtra = "";
+    if (ctx.pipeline_id) {
+      const { data: pRec } = await db
+        .from("skyler_sales_pipeline")
+        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, emails_opened")
+        .eq("id", ctx.pipeline_id)
+        .single();
+      if (pRec) {
+        pipelineExtra = `
+Pipeline Stage: ${pRec.stage ?? "unknown"}
+Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}
+Emails Sent: ${pRec.emails_sent ?? 0}, Opened: ${pRec.emails_opened ?? 0}, Replied: ${pRec.emails_replied ?? 0}`;
+      }
+    }
 
-Pipeline: ${ctx.contact_name} at ${ctx.company_name} (ID: ${ctx.pipeline_id})
-Email referenced (${emailStatus}):
+    systemPrompt += `\n\n## HIGHLIGHTED EMAIL CONTEXT
+The user highlighted a specific email from the conversation thread with this lead. Their message is about this lead and this email — they might be asking for updates, giving feedback, requesting a re-draft, or anything else. Read their message carefully and respond accordingly.
+
+Lead: ${ctx.contact_name} at ${ctx.company_name}
+${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}${pipelineExtra}
+
+Highlighted email (${emailStatus}):
 Subject: ${email.subject ?? "(no subject)"}
 Content:
 ${email.content}
 
-${isPending ? `This email has NOT been sent yet — it is a pending draft awaiting approval.
-- Acknowledge the feedback
-- Ask if they want you to redraft incorporating their feedback
-- If they say yes, redraft the email with their corrections applied
-- Store the feedback as a workspace memory for future leads` : `This email was already sent.
-- Acknowledge the feedback
-- Store the feedback as a workspace memory so it applies to ALL future emails
-- If the user wants you to send a corrected/follow-up email, use the draft_correction_email tool immediately to create a new draft with the corrections applied. Do NOT just say you'll incorporate it later — actually draft the corrected email now.
-- The corrected email should be a natural follow-up (e.g. "Hi {name}, quick correction on my last email..." or a fresh approach incorporating the feedback)
-- Use pipeline_id: "${ctx.pipeline_id}", to: the contact's email from the referenced email context`}
+${isPending ? `This email is a pending draft (not sent yet). If the user gives feedback, offer to redraft it.` : `This email was already sent. If the user gives feedback on the email content, store it as a workspace memory for future emails AND use draft_correction_email to create a corrected follow-up if they want one (pipeline_id: "${ctx.pipeline_id}", to: the contact's email).`}
 
-IMPORTANT: Always store the user's feedback as an actionable, generalised workspace memory.
-Good memory: "When emailing fitness businesses, don't mention refill guarantees unless the prospect asks about follower drops"
-Bad memory: "User said don't mention refill guarantees"
+You have full context about this lead and the highlighted email. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
 `;
   }
 
@@ -436,7 +444,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
         // If this is a follow-up message (no pipelineContext in request body)
         // but a previous message embedded [Pipeline context: ...], recover it
         // and inject into the system prompt so Skyler remembers the lead.
-        if (!pipelineContext?.referenced_email && history.length > 0) {
+        if (!pipelineContext && history.length > 0) {
           const pipelineMarkerRegex = /\[Pipeline context: (.+?) at (.+?) \(pipeline_id: ([a-f0-9-]+), email: (.+?)\)\]/;
           // Scan history backwards to find the most recent pipeline context marker
           let parsedCtx: { contactName: string; companyName: string; pipelineId: string; emailSubject: string } | null = null;
