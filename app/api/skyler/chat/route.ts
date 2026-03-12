@@ -252,27 +252,39 @@ export async function POST(request: NextRequest) {
     const ctx = pipelineContext;
     // Fetch pipeline record if it's a pipeline source
     let pipelineExtra = "";
+    let threadBlock = "";
     if (ctx.source === "pipeline" && ctx.pipeline_id) {
       const { data: pRec } = await db
         .from("skyler_sales_pipeline")
-        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied")
+        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, conversation_thread")
         .eq("id", ctx.pipeline_id)
         .single();
       if (pRec) {
         pipelineExtra = `\nPipeline Stage: ${pRec.stage ?? "unknown"}
 Emails Sent: ${pRec.emails_sent ?? 0}, Replies: ${pRec.emails_replied ?? 0}
 Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}`;
+
+        // Include the actual conversation thread so Skyler can read what was said
+        const thread = (pRec.conversation_thread ?? []) as Array<{
+          role: string; content: string; subject?: string; timestamp: string;
+        }>;
+        if (thread.length > 0) {
+          const threadLines = thread.map((e) =>
+            `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
+          ).join("\n\n");
+          threadBlock = `\n\nCONVERSATION THREAD (read this carefully — this is what was actually said):\n${threadLines}`;
+        }
       }
     }
 
     systemPrompt += `\n\n## HIGHLIGHTED LEAD CONTEXT
-The user highlighted this lead. Their message is about this lead — they might be asking for updates, requesting actions, or anything else. Read their message and respond using the context below.
+The user highlighted this lead. Their message is about this lead — they might be asking for updates, requesting actions, or anything else. Read the conversation thread below and respond using the full context.
 
 Lead: ${ctx.contact_name} at ${ctx.company_name}
 ${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}
-${ctx.contact_email ? `Contact Email: ${ctx.contact_email}` : ""}${pipelineExtra}
+${ctx.contact_email ? `Contact Email: ${ctx.contact_email}` : ""}${pipelineExtra}${threadBlock}
 
-You have full context about this lead. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
+You have full context about this lead including the entire email conversation. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
 `;
   }
 
@@ -471,15 +483,27 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
               .single();
 
             if (pipelineRecord) {
+              // Include the actual conversation thread
+              const reinjectedThread = (pipelineRecord.conversation_thread ?? []) as Array<{
+                role: string; content: string; subject?: string; timestamp: string;
+              }>;
+              let reinjectedThreadBlock = "";
+              if (reinjectedThread.length > 0) {
+                const threadLines = reinjectedThread.map((e) =>
+                  `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
+                ).join("\n\n");
+                reinjectedThreadBlock = `\n\nCONVERSATION THREAD (read this — this is the actual email exchange):\n${threadLines}`;
+              }
+
               systemPrompt += `\n\n## ACTIVE PIPELINE CONTEXT (from conversation history)
 You are currently discussing a specific lead from the Sales Closer pipeline.
 Pipeline ID: ${parsedCtx.pipelineId}
 Contact: ${pipelineRecord.contact_name ?? parsedCtx.contactName} at ${pipelineRecord.company_name ?? parsedCtx.companyName}
 Contact Email: ${pipelineRecord.contact_email ?? "unknown"}
 Stage: ${pipelineRecord.stage ?? "unknown"}
-Last Email Subject: ${parsedCtx.emailSubject}
+Last Email Subject: ${parsedCtx.emailSubject}${reinjectedThreadBlock}
 
-IMPORTANT: You already have all the context about this lead from the conversation. When the user asks you to re-draft, send a correction email, or take any action on this lead:
+IMPORTANT: You already have all the context about this lead from the conversation including the full email thread. When the user asks you to re-draft, send a correction email, or take any action on this lead:
 - Use pipeline_id: "${parsedCtx.pipelineId}"
 - Use contact email: "${pipelineRecord.contact_email ?? ""}"
 - Do NOT ask the user for the pipeline_id or email — you already have them.
