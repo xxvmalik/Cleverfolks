@@ -82,6 +82,11 @@ type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  pipelineTag?: {
+    contactName: string;
+    companyName: string;
+    subject?: string;
+  };
 };
 
 type ConversationItem = {
@@ -688,11 +693,18 @@ export function SkylerClient({
     const currentPinnedContext = pinnedContext;
     setPinnedContext(null);
 
-    // Add user message to chat
+    // Add user message to chat — attach pipeline tag if context was pinned
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
+      ...(currentPinnedContext && {
+        pipelineTag: {
+          contactName: currentPinnedContext.contactName,
+          companyName: currentPinnedContext.companyName,
+          subject: currentPinnedContext.email.subject,
+        },
+      }),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setIsStreaming(true);
@@ -1587,6 +1599,12 @@ export function SkylerClient({
                                   </div>
                                 )}
                                 <div className={cn("rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]", msg.role === "user" ? "bg-[#F2903D]/20 text-white" : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]")}>
+                                  {msg.role === "user" && msg.pipelineTag && (
+                                    <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-[#F2903D] font-medium opacity-80">
+                                      <Target className="w-3 h-3" />
+                                      <span>{msg.pipelineTag.contactName}{msg.pipelineTag.subject ? ` · ${msg.pipelineTag.subject}` : ""}</span>
+                                    </div>
+                                  )}
                                   {msg.role === "assistant" ? <MarkdownRenderer content={msg.content} /> : <div className="whitespace-pre-wrap">{msg.content}</div>}
                                 </div>
                               </div>
@@ -1839,6 +1857,12 @@ export function SkylerClient({
                                   : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
                               )}
                             >
+                              {msg.role === "user" && msg.pipelineTag && (
+                                <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-[#F2903D] font-medium opacity-80">
+                                  <Target className="w-3 h-3" />
+                                  <span>{msg.pipelineTag.contactName}{msg.pipelineTag.subject ? ` · ${msg.pipelineTag.subject}` : ""}</span>
+                                </div>
+                              )}
                               {msg.role === "assistant" ? (
                                 <MarkdownRenderer content={msg.content} />
                               ) : (

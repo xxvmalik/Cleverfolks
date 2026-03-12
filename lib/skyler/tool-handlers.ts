@@ -11,6 +11,7 @@ import {
 import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
+import { draftOutreachEmail } from "@/lib/email/email-sender";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
@@ -556,8 +557,14 @@ async function getHubSpotConnectionId(
 async function handleActionTool(
   toolName: string,
   input: Record<string, unknown>,
+  workspaceId: string,
   adminSupabase: AdminDb
 ): Promise<ToolHandlerResult> {
+  // draft_correction_email has different params — handle separately
+  if (toolName === "draft_correction_email") {
+    return handleDraftCorrectionEmail(input, workspaceId, adminSupabase);
+  }
+
   const actionId = input.action_id as string;
   if (!actionId) {
     return { results: [], summary: "Missing action_id parameter." };
@@ -590,6 +597,43 @@ async function handleActionTool(
   }
 
   return { results: [], summary: `Unknown action tool: ${toolName}` };
+}
+
+// ── Handle draft correction email ─────────────────────────────────────────────
+
+async function handleDraftCorrectionEmail(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const pipelineId = input.pipeline_id as string;
+  const to = input.to as string;
+  const subject = input.subject as string;
+  const htmlBody = input.html_body as string;
+  const textBody = input.text_body as string;
+
+  if (!pipelineId || !to || !subject || !htmlBody || !textBody) {
+    return { results: [], summary: "Missing required parameters (pipeline_id, to, subject, html_body, text_body)." };
+  }
+
+  try {
+    const { actionId } = await draftOutreachEmail(adminSupabase, {
+      workspaceId,
+      pipelineId,
+      to,
+      subject,
+      htmlBody,
+      textBody,
+    });
+
+    return {
+      results: [],
+      summary: `[ACTION_PROPOSED] Draft correction email created for ${to}: "${subject}"\n\nI've drafted a corrected email for your approval. You can preview and approve it on the pipeline card.`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { results: [], summary: `Failed to create draft: ${msg}` };
+  }
 }
 
 // ── Handle lead scoring tools ─────────────────────────────────────────────────
@@ -864,7 +908,7 @@ export async function executeSkylerToolCall(
 ): Promise<ToolHandlerResult> {
   // ── Action management tools: execute/reject pending actions ──────────
   if (SKYLER_ACTION_TOOL_NAMES.has(toolName)) {
-    return handleActionTool(toolName, input, adminSupabase);
+    return handleActionTool(toolName, input, workspaceId, adminSupabase);
   }
 
   // ── Lead scoring tools: no autonomy check needed (read-like) ──────────

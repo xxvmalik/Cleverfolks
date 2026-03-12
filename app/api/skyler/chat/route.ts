@@ -267,9 +267,11 @@ ${isPending ? `This email has NOT been sent yet — it is a pending draft awaiti
 - Ask if they want you to redraft incorporating their feedback
 - If they say yes, redraft the email with their corrections applied
 - Store the feedback as a workspace memory for future leads` : `This email was already sent.
-- Acknowledge the feedback and confirm you'll apply it to future leads
+- Acknowledge the feedback
 - Store the feedback as a workspace memory so it applies to ALL future emails
-- If there's a follow-up pending for this lead, offer to incorporate the feedback in the next draft`}
+- If the user wants you to send a corrected/follow-up email, use the draft_correction_email tool immediately to create a new draft with the corrections applied. Do NOT just say you'll incorporate it later — actually draft the corrected email now.
+- The corrected email should be a natural follow-up (e.g. "Hi {name}, quick correction on my last email..." or a fresh approach incorporating the feedback)
+- Use pipeline_id: "${ctx.pipeline_id}", to: the contact's email from the referenced email context`}
 
 IMPORTANT: Always store the user's feedback as an actionable, generalised workspace memory.
 Good memory: "When emailing fitness businesses, don't mention refill guarantees unless the prospect asks about follower drops"
