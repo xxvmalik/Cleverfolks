@@ -244,9 +244,7 @@ async function sendViaOutlook(params: {
   subject: string;
   htmlBody: string;
   connectionId: string;
-  inReplyTo?: string | null;
-  references?: string[];
-}): Promise<{ messageId: string; internetMessageId: string | null }> {
+}): Promise<{ messageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -261,43 +259,23 @@ async function sendViaOutlook(params: {
     ],
   };
 
-  // Add threading headers for replies/follow-ups
-  if (params.inReplyTo || (params.references && params.references.length > 0)) {
-    const headers: Array<{ name: string; value: string }> = [];
-    if (params.inReplyTo) {
-      headers.push({ name: "In-Reply-To", value: params.inReplyTo });
-    }
-    if (params.references && params.references.length > 0) {
-      headers.push({ name: "References", value: params.references.join(" ") });
-    }
-    message.internetMessageHeaders = headers;
-  }
+  // Note: Microsoft Graph sendMail only allows custom headers starting with "x-".
+  // Standard headers like In-Reply-To and References are rejected with 400.
+  // Outlook threads by subject + conversationId automatically, so threading
+  // works via the "Re:" subject prefix enforced by enforceReplySubject().
 
-  const payload = { message, saveToSentItems: true };
-  console.log(`[email-sender] Outlook sendMail payload:`, JSON.stringify(payload, null, 2));
-
-  try {
-    await nango.proxy({
-      method: "POST",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: "/v1.0/me/sendMail",
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-      data: payload,
-    });
-  } catch (err) {
-    // Log full error details from Graph API
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const axiosErr = err as any;
-    const responseData = axiosErr?.response?.data ?? axiosErr?.data;
-    console.error(`[email-sender] Outlook sendMail failed:`, JSON.stringify(responseData, null, 2));
-    console.error(`[email-sender] Status:`, axiosErr?.response?.status ?? axiosErr?.status);
-    throw err;
-  }
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: "/v1.0/me/sendMail",
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: { message, saveToSentItems: true },
+  });
 
   const messageId = `outlook-${Date.now()}`;
   console.log(`[email-sender] Outlook sendMail success: ${messageId}`);
-  return { messageId, internetMessageId: null };
+  return { messageId };
 }
 
 // ── Execute approved send ───────────────────────────────────────────────────
@@ -376,17 +354,15 @@ export async function executeEmailSend(
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
     } else {
-      // Outlook: sendMail with threading headers (In-Reply-To + References)
+      // Outlook: sendMail (threading via "Re:" subject prefix — Graph rejects
+      // standard In-Reply-To/References headers on sendMail)
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
         htmlBody: input.htmlBody as string,
         connectionId: emailProvider.connectionId,
-        inReplyTo: threading.inReplyTo,
-        references: threading.references,
       });
       messageId = result.messageId;
-      internetMessageId = result.internetMessageId;
     }
   } catch (sendErr) {
     // Leave action as 'pending' so it stays visible for retry
