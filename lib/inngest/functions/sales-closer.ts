@@ -16,6 +16,8 @@ import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { syncReplyToHubSpot, syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
+import { dispatchNotification } from "@/lib/skyler/notifications";
+import { checkAndEscalate } from "@/lib/skyler/escalation";
 
 // Reply intent classification type
 type ReplyIntent = "positive_interest" | "objection" | "meeting_accept" | "opt_out";
@@ -348,6 +350,24 @@ export const salesCloserWorkflow = inngest.createFunction(
       });
     });
 
+    // Notify: draft awaiting approval
+    await step.run("notify-draft-awaiting-approval", async () => {
+      const db = createAdminSupabaseClient();
+      await dispatchNotification(db, {
+        workspaceId,
+        eventType: "draft_awaiting_approval",
+        pipelineId: pipeline.id,
+        title: `Draft ready: ${pipeline.contact_name || contactName}`,
+        body: `Initial outreach email to ${pipeline.contact_email || contactEmail} is ready for your approval.`,
+        metadata: {
+          contactName: pipeline.contact_name || contactName,
+          contactEmail: pipeline.contact_email || contactEmail,
+          companyName: pipeline.company_name || companyName,
+          cadenceStep: 1,
+        },
+      });
+    });
+
     console.log("[Sales Closer] Initial draft complete. Waiting for approval...");
     return { status: "draft_pending", pipeline_id: pipeline.id, action_id: action.actionId };
   }
@@ -462,6 +482,53 @@ ${replyContent.slice(0, 2000)}`,
         console.warn(`[Pipeline Reply] Failed to parse classification, defaulting to positive_interest`);
         return { intent: "positive_interest" as ReplyIntent, reasoning: "Classification parse failed, defaulting to safe option" };
       }
+    });
+
+    // Notify: lead replied
+    await step.run("notify-lead-replied", async () => {
+      const db = createAdminSupabaseClient();
+      await dispatchNotification(db, {
+        workspaceId,
+        eventType: "lead_replied",
+        pipelineId,
+        title: `${pipeline.contact_name} replied`,
+        body: `${replyContent.slice(0, 150)}${replyContent.length > 150 ? "..." : ""}`,
+        metadata: {
+          contactName: pipeline.contact_name,
+          contactEmail: pipeline.contact_email,
+          companyName: pipeline.company_name,
+          intent: classification.intent,
+        },
+      });
+
+      // Notify objection specifically (fires even in full autonomy mode)
+      if (classification.intent === "objection") {
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "objection_received",
+          pipelineId,
+          title: `Objection from ${pipeline.contact_name}`,
+          body: classification.reasoning,
+          metadata: {
+            contactName: pipeline.contact_name,
+            contactEmail: pipeline.contact_email,
+            companyName: pipeline.company_name,
+          },
+        });
+      }
+
+      // Run escalation check
+      await checkAndEscalate(db, {
+        pipelineId,
+        workspaceId,
+        contactName: pipeline.contact_name as string,
+        contactEmail: pipeline.contact_email as string,
+        companyName: (pipeline.company_name as string) ?? undefined,
+        replyIntent: classification.intent,
+        cadenceStep: pipeline.cadence_step as number,
+        isFirstContact: (pipeline.cadence_step as number) <= 1,
+        contactTitle: (pipeline.contact_title as string) ?? undefined,
+      });
     });
 
     // Step 3: Proactive intelligence — surface actionable notes based on reply intent
@@ -598,6 +665,21 @@ ${replyContent.slice(0, 2000)}`,
 
         console.log(`[Pipeline Reply] Opt-out processed for ${contactEmail} — pipeline marked disqualified`);
 
+        // Notify: deal closed lost (opt-out)
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "deal_closed_lost",
+          pipelineId,
+          title: `Opt-out: ${pipeline.contact_name}`,
+          body: `${pipeline.contact_name} opted out. Reason: ${classification.reasoning}`,
+          metadata: {
+            contactName: pipeline.contact_name,
+            contactEmail,
+            companyName: pipeline.company_name,
+            resolution: "disqualified",
+          },
+        });
+
         // Sync resolution to HubSpot
         await syncResolutionToHubSpot({
           workspaceId,
@@ -733,6 +815,24 @@ ${replyContent.slice(0, 2000)}`,
       });
     });
 
+    // Notify: reply draft awaiting approval
+    await step.run("notify-reply-draft-ready", async () => {
+      const db = createAdminSupabaseClient();
+      await dispatchNotification(db, {
+        workspaceId,
+        eventType: "draft_awaiting_approval",
+        pipelineId,
+        title: `Reply draft ready: ${pipeline.contact_name}`,
+        body: `${classification.intent === "objection" ? "Objection response" : "Reply"} to ${pipeline.contact_email} is ready for your approval.`,
+        metadata: {
+          contactName: pipeline.contact_name,
+          contactEmail: pipeline.contact_email,
+          companyName: pipeline.company_name,
+          intent: classification.intent,
+        },
+      });
+    });
+
     // Step 8: Sync reply to HubSpot (fire-and-forget)
     await step.run("sync-reply-to-hubspot", async () => {
       await syncReplyToHubSpot({
@@ -818,6 +918,23 @@ export const triggerSalesCloserOnHotLead = inngest.createFunction(
     });
 
     if (existing) return { status: "skipped", reason: "already_in_pipeline" };
+
+    // Notify: hot lead scored
+    await step.run("notify-hot-lead", async () => {
+      const db = createAdminSupabaseClient();
+      await dispatchNotification(db, {
+        workspaceId,
+        eventType: "lead_scored_hot",
+        title: `Hot lead: ${contactName ?? contactEmail}`,
+        body: `${contactName ?? "New contact"}${companyName ? ` at ${companyName}` : ""} scored ${score ?? "70+"}. Sales closer workflow starting.`,
+        metadata: {
+          contactName,
+          contactEmail,
+          companyName,
+          score,
+        },
+      });
+    });
 
     // Trigger the sales closer workflow
     await step.sendEvent("start-sales-closer", {

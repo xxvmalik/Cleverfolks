@@ -18,6 +18,7 @@ import { draftEmail } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
+import { dispatchNotification } from "@/lib/skyler/notifications";
 
 // ── Cadence Scheduler (cron) ─────────────────────────────────────────────────
 // Runs every hour. Finds pipeline records due for follow-up and dispatches events.
@@ -40,6 +41,7 @@ export const salesCadenceScheduler = inngest.createFunction(
         .lte("next_followup_at", now)
         .is("resolution", null)
         .eq("awaiting_reply", true)
+        .neq("cadence_paused", true)
         .lt("cadence_step", 4)
         .limit(50);
 
@@ -99,6 +101,21 @@ export const salesCadenceScheduler = inngest.createFunction(
             updated_at: now,
           })
           .eq("id", record.id);
+
+        // Notify: deal closed lost (no response)
+        dispatchNotification(db, {
+          workspaceId: record.workspace_id,
+          eventType: "deal_closed_lost",
+          pipelineId: record.id,
+          title: `No response: ${record.contact_name ?? record.contact_email}`,
+          body: `No reply after full 4-step cadence + 7-day grace period.${record.company_name ? ` Company: ${record.company_name}` : ""}`,
+          metadata: {
+            contactName: record.contact_name,
+            contactEmail: record.contact_email,
+            companyName: record.company_name,
+            resolution: "no_response",
+          },
+        }).catch((err) => console.error(`[cadence-scheduler] Notification failed for ${record.id}:`, err));
 
         // Sync resolution to HubSpot (fire-and-forget)
         syncResolutionToHubSpot({
@@ -306,6 +323,24 @@ export const salesCadenceFollowUp = inngest.createFunction(
           updated_at: new Date().toISOString(),
         })
         .eq("id", pipelineId);
+    });
+
+    // Notify: follow-up draft awaiting approval
+    await step.run("notify-followup-draft-ready", async () => {
+      const db = createAdminSupabaseClient();
+      await dispatchNotification(db, {
+        workspaceId,
+        eventType: "draft_awaiting_approval",
+        pipelineId,
+        title: `Follow-up draft ready: ${pipeline.contact_name ?? contactName}`,
+        body: `Step ${nextStep} follow-up to ${pipeline.contact_email ?? contactEmail} is ready for your approval.`,
+        metadata: {
+          contactName: pipeline.contact_name ?? contactName,
+          contactEmail: pipeline.contact_email ?? contactEmail,
+          companyName: pipeline.company_name ?? companyName,
+          cadenceStep: nextStep,
+        },
+      });
     });
 
     console.log(`[cadence-followup] Step ${nextStep} draft stored for approval: ${action.actionId}`);
