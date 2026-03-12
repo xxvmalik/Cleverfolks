@@ -235,9 +235,8 @@ async function sendViaGmail(params: {
 // ── Outlook send ────────────────────────────────────────────────────────────
 
 /**
- * Send via Outlook using sendMail. Includes threading headers (In-Reply-To,
- * References) for follow-ups so the recipient's mail client groups the thread.
- * Only requires Mail.Send scope.
+ * Send initial outreach via Outlook using sendMail.
+ * Used only for the FIRST email — no threading needed.
  */
 async function sendViaOutlook(params: {
   to: string;
@@ -247,34 +246,122 @@ async function sendViaOutlook(params: {
 }): Promise<{ messageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const message: Record<string, any> = {
-    subject: params.subject,
-    body: {
-      contentType: "HTML",
-      content: params.htmlBody,
-    },
-    toRecipients: [
-      { emailAddress: { address: params.to } },
-    ],
-  };
-
-  // Note: Microsoft Graph sendMail only allows custom headers starting with "x-".
-  // Standard headers like In-Reply-To and References are rejected with 400.
-  // Outlook threads by subject + conversationId automatically, so threading
-  // works via the "Re:" subject prefix enforced by enforceReplySubject().
-
   await nango.proxy({
     method: "POST",
     baseUrlOverride: "https://graph.microsoft.com",
     endpoint: "/v1.0/me/sendMail",
     connectionId: params.connectionId,
     providerConfigKey: "outlook",
-    data: { message, saveToSentItems: true },
+    data: {
+      message: {
+        subject: params.subject,
+        body: { contentType: "HTML", content: params.htmlBody },
+        toRecipients: [{ emailAddress: { address: params.to } }],
+      },
+      saveToSentItems: true,
+    },
   });
 
   const messageId = `outlook-${Date.now()}`;
   console.log(`[email-sender] Outlook sendMail success: ${messageId}`);
+  return { messageId };
+}
+
+/**
+ * Find the most recent Outlook Sent Item matching a subject + recipient.
+ * Uses Mail.Read scope to search the SentItems folder.
+ */
+async function findOutlookSentMessage(
+  nango: Nango,
+  connectionId: string,
+  subject: string,
+  recipientEmail: string
+): Promise<string | null> {
+  try {
+    // Strip "Re:" prefix for matching — Outlook stores the base subject
+    const baseSubject = subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
+    const safeEmail = recipientEmail.toLowerCase();
+    const filter = `contains(subject,'${baseSubject}') and toRecipients/any(r: r/emailAddress/address eq '${safeEmail}')`;
+    const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
+
+    const response = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
+      connectionId,
+      providerConfigKey: "outlook",
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messages = (response as any)?.data?.value;
+    if (messages && messages.length > 0) {
+      console.log(`[email-sender] Found Sent Item for threading: ${messages[0].id}`);
+      return messages[0].id;
+    }
+
+    console.log(`[email-sender] No Sent Item found for subject="${baseSubject}" to=${safeEmail}`);
+  } catch (err) {
+    console.warn(`[email-sender] Sent Items search failed:`, err);
+  }
+  return null;
+}
+
+/**
+ * Reply to an existing Outlook thread: createReply → PATCH → send.
+ * createReply inherits conversationId and threading from the original message.
+ * We PATCH to set our body and correct recipient (since the original was sent
+ * BY us, the default reply-to would be ourselves).
+ * Requires Mail.Read + Mail.Send scopes.
+ */
+async function replyViaOutlook(params: {
+  outlookMessageId: string;
+  recipientEmail: string;
+  htmlBody: string;
+  connectionId: string;
+}): Promise<{ messageId: string }> {
+  const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+
+  // Step 1: Create a reply draft (inherits threading from original message)
+  const draftResponse = await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${params.outlookMessageId}/createReply`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {},
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const draftId = (draftResponse as any)?.data?.id;
+  if (!draftId) {
+    throw new Error("Failed to create Outlook reply draft — no draft ID returned");
+  }
+
+  // Step 2: Update the draft with our content and correct recipient
+  await nango.proxy({
+    method: "PATCH",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {
+      body: { contentType: "HTML", content: params.htmlBody },
+      toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
+    },
+  });
+
+  // Step 3: Send the draft
+  await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com",
+    endpoint: `/v1.0/me/messages/${draftId}/send`,
+    connectionId: params.connectionId,
+    providerConfigKey: "outlook",
+    data: {},
+  });
+
+  const messageId = `outlook-reply-${Date.now()}`;
+  console.log(`[email-sender] Outlook reply success: ${messageId} (thread from ${params.outlookMessageId})`);
   return { messageId };
 }
 
@@ -353,9 +440,38 @@ export async function executeEmailSend(
       });
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
+    } else if (existingThread.length > 0) {
+      // Outlook follow-up: find the last sent message, then createReply for threading
+      const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+      const originalSubject = threading.originalSubject ?? rawSubject;
+      const sentMessageId = await findOutlookSentMessage(
+        nango,
+        emailProvider.connectionId,
+        originalSubject,
+        input.to as string
+      );
+
+      if (sentMessageId) {
+        const result = await replyViaOutlook({
+          outlookMessageId: sentMessageId,
+          recipientEmail: input.to as string,
+          htmlBody: input.htmlBody as string,
+          connectionId: emailProvider.connectionId,
+        });
+        messageId = result.messageId;
+      } else {
+        // No previous sent message found — fall back to sendMail
+        console.warn(`[email-sender] No Sent Item found for threading — using sendMail`);
+        const result = await sendViaOutlook({
+          to: input.to as string,
+          subject,
+          htmlBody: input.htmlBody as string,
+          connectionId: emailProvider.connectionId,
+        });
+        messageId = result.messageId;
+      }
     } else {
-      // Outlook: sendMail (threading via "Re:" subject prefix — Graph rejects
-      // standard In-Reply-To/References headers on sendMail)
+      // Outlook initial outreach: plain sendMail
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
