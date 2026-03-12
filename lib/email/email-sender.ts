@@ -8,6 +8,7 @@
 import { Nango } from "@nangohq/node";
 import { randomUUID } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { generateTrackingPixel } from "@/lib/skyler/open-tracking";
 
 export type EmailDraftParams = {
   workspaceId: string;
@@ -572,7 +573,7 @@ export async function executeEmailSend(
   // Extract threading info from existing conversation
   const { data: pipelineForThread } = await db
     .from("skyler_sales_pipeline")
-    .select("conversation_thread")
+    .select("conversation_thread, cadence_step")
     .eq("id", pipelineId)
     .single();
 
@@ -583,6 +584,19 @@ export async function executeEmailSend(
   const rawSubject = input.subject as string;
   const subject = enforceReplySubject(rawSubject, threading.originalSubject, threading.isReplyThread);
 
+  // ── Open tracking pixel ──────────────────────────────────────────────────
+  const currentStep = ((pipelineForThread as Record<string, unknown>)?.cadence_step as number ?? 0) + 1;
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://app.cleverfolks.ai");
+  const { trackingId, pixelHtml } = generateTrackingPixel(baseUrl, {
+    pipelineId,
+    workspaceId,
+    cadenceStep: currentStep,
+  });
+
+  // Append tracking pixel to email HTML body
+  const htmlBodyWithPixel = (input.htmlBody as string) + pixelHtml;
+
   // Send through the connected provider with threading headers
   let messageId: string;
   let internetMessageId: string | null = null;
@@ -592,7 +606,7 @@ export async function executeEmailSend(
       const result = await sendViaGmail({
         to: input.to as string,
         subject,
-        htmlBody: input.htmlBody as string,
+        htmlBody: htmlBodyWithPixel,
         fromEmail,
         connectionId: emailProvider.connectionId,
         inReplyTo: threading.inReplyTo,
@@ -624,7 +638,7 @@ export async function executeEmailSend(
           outlookMessageId: replyToId,
           recipientEmail: input.to as string,
           subject,
-          htmlBody: input.htmlBody as string,
+          htmlBody: htmlBodyWithPixel,
           connectionId: emailProvider.connectionId,
         });
         messageId = result.messageId;
@@ -643,7 +657,7 @@ export async function executeEmailSend(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const fallbackPayload: Record<string, any> = {
           subject,
-          body: { contentType: "HTML", content: input.htmlBody as string },
+          body: { contentType: "HTML", content: htmlBodyWithPixel },
           toRecipients: [{ emailAddress: { address: input.to as string } }],
         };
 
@@ -666,7 +680,7 @@ export async function executeEmailSend(
       const result = await sendViaOutlook({
         to: input.to as string,
         subject,
-        htmlBody: input.htmlBody as string,
+        htmlBody: htmlBodyWithPixel,
         connectionId: emailProvider.connectionId,
       });
       messageId = result.messageId;
@@ -695,6 +709,19 @@ export async function executeEmailSend(
     })
     .eq("id", actionId);
 
+  // Store open tracking record (fire-and-forget — don't block on failure)
+  try {
+    await db.from("skyler_email_opens").insert({
+      tracking_id: trackingId,
+      workspace_id: workspaceId,
+      pipeline_id: pipelineId,
+      cadence_step: currentStep,
+    });
+    console.log(`[email-sender] Open tracking pixel stored: ${trackingId}`);
+  } catch (trackErr) {
+    console.error("[email-sender] Failed to store tracking pixel:", trackErr instanceof Error ? trackErr.message : trackErr);
+  }
+
   // Update pipeline record
   const now = new Date().toISOString();
 
@@ -704,7 +731,6 @@ export async function executeEmailSend(
     .eq("id", pipelineId)
     .single();
 
-  const currentStep = (pipeline?.cadence_step ?? 0) + 1;
   const nextCadence = DEFAULT_CADENCE.find((c) => c.step === currentStep + 1);
   const nextFollowup = nextCadence
     ? new Date(Date.now() + nextCadence.delay_days * 86400000).toISOString()

@@ -23,5 +23,17 @@ ALTER TABLE synced_documents
     'deal',
     'document',
     'attachment',
-    'cleverbrain_chat'
+    'cleverbrain_chat',
+    'hubspot_contact',
+    'hubspot_company',
+    'hubspot_deal',
+    'hubspot_ticket',
+    'hubspot_task',
+    'hubspot_note',
+    'hubspot_owner',
+    'hubspot_product',
+    'hubspot_user',
+    'hubspot_kb_article',
+    'hubspot_service_ticket',
+    'hubspot_currency'
   ));

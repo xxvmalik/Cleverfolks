@@ -14,6 +14,9 @@ CREATE INDEX IF NOT EXISTS idx_conversations_agent_type
 -- Update create_conversation to accept agent_type
 -- ============================================================
 
+DROP FUNCTION IF EXISTS public.create_conversation(uuid, uuid, text);
+DROP FUNCTION IF EXISTS public.create_conversation(uuid, uuid, text, text);
+
 CREATE OR REPLACE FUNCTION public.create_conversation(
   p_workspace_id uuid,
   p_user_id      uuid,
@@ -39,6 +42,9 @@ $$;
 -- ============================================================
 -- Update get_workspace_conversations to filter by agent_type
 -- ============================================================
+
+DROP FUNCTION IF EXISTS public.get_workspace_conversations(uuid, uuid);
+DROP FUNCTION IF EXISTS public.get_workspace_conversations(uuid, uuid, text);
 
 CREATE OR REPLACE FUNCTION public.get_workspace_conversations(
   p_workspace_id uuid,
