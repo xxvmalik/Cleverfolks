@@ -414,6 +414,11 @@ export const handlePipelineReply = inngest.createFunction(
     const classification = await step.run("classify-reply-intent", async () => {
       console.log(`[Pipeline Reply] Classifying reply from ${contactEmail}...`);
 
+      // Include recent thread context so classifier understands the conversation stage
+      const recentThread = existingThread.slice(-4).map((e) =>
+        `[${e.role}] (${e.timestamp}): ${(e.content as string).slice(0, 300)}`
+      ).join("\n");
+
       const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
       const response = await anthropic.messages.create({
         model: "claude-sonnet-4-20250514",
@@ -426,17 +431,19 @@ export const handlePipelineReply = inngest.createFunction(
 Possible intents (pick exactly one):
 - positive_interest: prospect is asking questions, wanting more details, showing curiosity, requesting examples or case studies, asking about pricing, asking about results. ANY question about your services is positive interest.
 - objection: prospect is pushing back — too expensive, bad timing, not the right fit, already using a competitor, need to think about it. They're engaged but resistant.
-- meeting_accept: prospect is agreeing to a call, meeting, demo, or next step. They said yes.
+- meeting_accept: prospect is agreeing to a call, meeting, demo, booking a meeting, confirming a time, or any form of "yes to a meeting/call/demo". Includes: "I booked", "Friday works", "See you then", picking a time slot.
 - opt_out: prospect EXPLICITLY says stop emailing, unsubscribe, remove me, don't contact me again, not interested at all. This is ONLY for clear, explicit refusals.
 
 CRITICAL RULES:
 - Questions are NEVER opt_out. "What results do you see?" = positive_interest
 - "Not right now" or "Bad timing" = objection, NOT opt_out
 - "Tell me more" = positive_interest
+- "I booked" or "I have booked" = meeting_accept (they completed the booking)
 - Only use opt_out for EXPLICIT stop/remove/unsubscribe requests
 - When in doubt between positive_interest and objection, choose positive_interest
 
-PROSPECT'S REPLY:
+${recentThread ? `RECENT CONVERSATION CONTEXT:\n${recentThread}\n` : ""}
+PROSPECT'S LATEST REPLY:
 ${replyContent.slice(0, 2000)}`,
         }],
       });

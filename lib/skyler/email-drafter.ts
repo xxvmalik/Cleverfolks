@@ -101,15 +101,13 @@ SUBJECT LINE: "closing the loop" or similar. All lowercase.`,
 
   reply_followup: `PROSPECT REPLIED. This is now a warm conversation.
 
-Read their reply carefully. Respond based on what they said:
+Read the FULL CONVERSATION THREAD above. Understand where the discussion is RIGHT NOW. Your reply must continue naturally from the prospect's LAST message — not restart the conversation.
+
+Response guidelines based on what they said:
 - QUESTION → Answer directly with specific service details, then ask one follow-up
-- INTEREST → Propose a specific next step (call, demo) with two time options
-- OBJECTION → Use the PQVIR framework:
-  * Pause: "That makes sense."
-  * Question: Ask what specifically concerns them
-  * Validate: Agree with the valid part
-  * Isolate: "If we could solve X, would that change things?"
-  * Reframe: Show how our service addresses it
+- INTEREST / READY TO BUY → Help them take the next step. If they're asking how to sign up, give them the link. If they want a demo, confirm timing.
+- MEETING BOOKED → Just confirm. "See you [day] at [time]." Don't pitch again.
+- OBJECTION → Pause, validate, reframe (PQVIR framework)
 - REMOVAL REQUEST → Be gracious, confirm removal, no guilt
 
 Match their tone and energy. Reference what they actually said. Under 100 words.
@@ -274,11 +272,12 @@ USE THE PQVIR FRAMEWORK:
 
       meeting_accept: `REPLY INTENT: MEETING ACCEPTANCE — The prospect agreed to a call, meeting, or demo.
 
-RESPONSE RULES:
-- Confirm enthusiasm briefly ("Great, looking forward to it")
-- Propose 2-3 specific time slots or ask for their availability
-- Keep it under 50 words
-- Make it easy for them to confirm`,
+READ THE FULL THREAD CAREFULLY before responding:
+- If the prospect already BOOKED a meeting (mentioned a specific date/time they booked, or said "I have booked"): Simply confirm the booking. "Perfect, see you [day] at [time]." Do NOT propose new time slots — they already booked.
+- If the prospect agreed in PRINCIPLE but hasn't picked a time yet: Propose 2-3 specific time slots or share your booking link.
+- If the prospect picked a time from your options: Confirm that specific time. Send the meeting link if you have one (check saved resources/booking links).
+
+Keep it under 50 words. Make it easy.`,
     };
     intentInstructions = intentMap[replyIntent] ?? "";
   }
@@ -299,15 +298,36 @@ ${salesVoice.vocabulary_notes ? `- Vocabulary: ${salesVoice.vocabulary_notes}` :
 ${salesVoice.avoid_patterns.length > 0 ? `- NEVER: ${salesVoice.avoid_patterns.join(", ")}` : ""}`
     : "";
 
-  // For follow-ups (steps 2-4), show previous emails so the AI drafts a fresh angle
+  // Build conversation thread for AI context
   const isFollowUp = cadenceStep >= 2 && cadenceStep <= 4;
-  const threadBlock =
-    conversationThread.length > 0
-      ? `\nPREVIOUS EMAILS IN THIS THREAD:\n${conversationThread
-          .map((e) => `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}): ${e.content.slice(0, 300)}`)
-          .join("\n")}
-${isFollowUp ? "\nIMPORTANT: Do NOT reference or mention any of the previous emails. Write a completely fresh email with a new subject line, new hook, and new angle. The prospect should not feel like they are getting a follow-up — it should read like a standalone email." : ""}\n`
+  const isReply = cadenceAngle === "reply_followup";
+  let threadBlock = "";
+
+  if (conversationThread.length > 0) {
+    // Show recent messages in full (last 4), older ones truncated
+    const recentCount = 4;
+    const older = conversationThread.slice(0, -recentCount);
+    const recent = conversationThread.slice(-recentCount);
+
+    const olderBlock = older.length > 0
+      ? older.map((e) => `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}): ${e.content.slice(0, 200)}...`).join("\n") + "\n\n"
       : "";
+
+    const recentBlock = recent.map((e) =>
+      `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
+    ).join("\n\n");
+
+    threadBlock = `\n## FULL CONVERSATION THREAD
+Read this carefully. This is the actual conversation so far. Your reply must logically continue from the prospect's LAST message.
+${olderBlock}${recentBlock}
+
+${isReply ? `CRITICAL: Your reply is to the LAST message above. Read it word for word. Respond to exactly what they said.
+- Do NOT repeat offers, time slots, or pitches already made in earlier messages
+- Do NOT re-introduce yourself or your company if you already have
+- Do NOT propose a meeting if one is already booked
+- Match the conversation stage — if they're ready to buy, help them buy. If they booked, confirm it.` : ""}
+${isFollowUp ? `\nNOTE: The prospect has NOT replied to any previous emails. Write a completely fresh email with a new subject line, new hook, and new angle. Do NOT reference previous emails.` : ""}\n`;
+  }
 
   // Build knowledge profile summary (authoritative business context)
   let knowledgeBlock = "";
