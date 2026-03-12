@@ -304,17 +304,14 @@ const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
   {
     name: "draft_correction_email",
     description:
-      "Draft a corrected/replacement email for a pipeline lead. Use when the user gives feedback on an already-sent email and wants you to send a follow-up with corrections, or when the user asks you to re-draft/rewrite an email for a specific lead. Creates a new pending draft for approval.",
+      "Draft a corrected/replacement email for a pipeline lead. Use when the user gives feedback on an already-sent email and wants you to send a follow-up with corrections, or when the user asks you to re-draft/rewrite an email for a specific lead. The system will use the full email engine (sender identity, playbook, thread context, rules) to generate the draft — you just provide the feedback.",
     input_schema: {
       type: "object" as const,
       properties: {
         pipeline_id: { type: "string", description: "Pipeline record ID" },
-        to: { type: "string", description: "Recipient email address" },
-        subject: { type: "string", description: "Email subject line" },
-        html_body: { type: "string", description: "Email body as HTML (wrap paragraphs in <p> tags)" },
-        text_body: { type: "string", description: "Plain text version of the email body" },
+        user_feedback: { type: "string", description: "What the user wants changed or the instructions for the new draft. Summarise the user's feedback clearly." },
       },
-      required: ["pipeline_id", "to", "subject", "html_body", "text_body"],
+      required: ["pipeline_id", "user_feedback"],
     },
   },
 ];

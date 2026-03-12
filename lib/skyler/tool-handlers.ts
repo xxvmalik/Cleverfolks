@@ -12,6 +12,11 @@ import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TO
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
+import { draftEmail } from "@/lib/skyler/email-drafter";
+import type { CompanyResearch } from "@/lib/skyler/company-research";
+import { getSalesVoice } from "@/lib/skyler/voice-learner";
+import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
+import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
@@ -600,6 +605,9 @@ async function handleActionTool(
 }
 
 // ── Handle draft correction email ─────────────────────────────────────────────
+// Routes through the full email-drafter engine so the draft gets:
+// sender identity, playbook, voice, knowledge profile, conversation thread,
+// word limits, no-emoji rules, and all other guardrails.
 
 async function handleDraftCorrectionEmail(
   input: Record<string, unknown>,
@@ -607,31 +615,150 @@ async function handleDraftCorrectionEmail(
   adminSupabase: AdminDb
 ): Promise<ToolHandlerResult> {
   const pipelineId = input.pipeline_id as string;
-  const to = input.to as string;
-  const subject = input.subject as string;
-  const htmlBody = input.html_body as string;
-  const textBody = input.text_body as string;
+  const userFeedback = input.user_feedback as string;
 
-  if (!pipelineId || !to || !subject || !htmlBody || !textBody) {
-    return { results: [], summary: "Missing required parameters (pipeline_id, to, subject, html_body, text_body)." };
+  if (!pipelineId) {
+    return { results: [], summary: "Missing required parameter: pipeline_id." };
   }
 
   try {
+    // 1. Fetch pipeline record
+    const { data: pipeline } = await adminSupabase
+      .from("skyler_sales_pipeline")
+      .select("*")
+      .eq("id", pipelineId)
+      .single();
+
+    if (!pipeline) {
+      return { results: [], summary: `Pipeline record ${pipelineId} not found.` };
+    }
+
+    const contactName = pipeline.contact_name as string;
+    const contactEmail = pipeline.contact_email as string;
+    const companyName = pipeline.company_name as string;
+    const thread = (pipeline.conversation_thread ?? []) as Array<{
+      role: string;
+      content: string;
+      subject?: string;
+      timestamp: string;
+    }>;
+
+    // 2. Load sender identity (workspace owner)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: memberData } = await adminSupabase
+      .from("workspace_memberships")
+      .select("profiles(full_name)")
+      .eq("workspace_id", workspaceId)
+      .eq("role", "owner")
+      .limit(1)
+      .single();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const prof = (memberData as any)?.profiles;
+    const senderName: string | null = Array.isArray(prof)
+      ? prof[0]?.full_name
+      : prof?.full_name ?? null;
+
+    const { data: ws } = await adminSupabase
+      .from("workspaces")
+      .select("settings")
+      .eq("id", workspaceId)
+      .single();
+    const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+    const senderCompany = (settings.company_name as string) ?? null;
+
+    // 3. Load knowledge profile
+    const { data: kpData } = await adminSupabase
+      .from("knowledge_profiles")
+      .select("profile, status")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    const knowledgeProfile =
+      kpData?.profile && ["ready", "pending_review"].includes(kpData.status ?? "")
+        ? (kpData.profile as Record<string, unknown>)
+        : null;
+
+    // 4. Load workspace memories + build playbook
+    const { data: memRows } = await adminSupabase
+      .from("workspace_memories")
+      .select("content")
+      .eq("workspace_id", workspaceId)
+      .is("superseded_by", null)
+      .order("times_reinforced", { ascending: false })
+      .limit(20);
+    const rawMemories = (memRows ?? []).map((m) => m.content as string);
+    const memories = filterDealMemories(rawMemories);
+
+    const playbook = await buildSalesPlaybook(adminSupabase, workspaceId, memories, knowledgeProfile);
+
+    // 5. Load sales voice
+    const voice = await getSalesVoice(adminSupabase, workspaceId);
+
+    // 6. Load cached company research from pipeline record (or minimal fallback)
+    let research: CompanyResearch;
+    if (pipeline.company_research) {
+      research = pipeline.company_research as unknown as CompanyResearch;
+    } else {
+      // Minimal fallback — don't block on full research for a correction
+      research = {
+        summary: `${companyName} — limited research available`,
+        industry: "Unknown",
+        estimated_size: "Unknown",
+        trigger_event: "",
+        pain_points: [],
+        recent_news: [],
+        decision_makers: [],
+        talking_points: [],
+        service_alignment_points: [],
+        website_insights: "",
+        researched_at: new Date().toISOString(),
+        confidence: "low" as const,
+        confidence_reason: "No cached research — using fallback for correction draft",
+      };
+    }
+
+    // 7. Draft via the full email engine
+    console.log(`[draft_correction_email] Routing through email drafter for ${contactName} (pipeline: ${pipelineId})`);
+    const draft = await draftEmail({
+      workspaceId,
+      pipelineRecord: {
+        id: pipelineId,
+        contact_name: contactName,
+        contact_email: contactEmail,
+        company_name: companyName,
+        stage: pipeline.stage as string,
+        cadence_step: pipeline.cadence_step as number,
+        conversation_thread: thread,
+      },
+      cadenceStep: thread.length > 0 ? -1 : 1, // Reply mode if thread exists, else initial
+      companyResearch: research,
+      salesVoice: voice,
+      conversationThread: thread,
+      workspaceMemories: memories,
+      salesPlaybook: playbook,
+      knowledgeProfile,
+      senderName: senderName ?? undefined,
+      senderCompany: senderCompany ?? undefined,
+      replyIntent: thread.length > 0 ? "positive_interest" : undefined,
+      userFeedback: userFeedback || undefined,
+    });
+
+    // 8. Store as pending action for approval
     const { actionId } = await draftOutreachEmail(adminSupabase, {
       workspaceId,
       pipelineId,
-      to,
-      subject,
-      htmlBody,
-      textBody,
+      to: contactEmail,
+      subject: draft.subject,
+      htmlBody: draft.htmlBody,
+      textBody: draft.textBody,
     });
 
     return {
       results: [],
-      summary: `[ACTION_PROPOSED] Draft correction email created for ${to}: "${subject}"\n\nI've drafted a corrected email for your approval. You can preview and approve it on the pipeline card.`,
+      summary: `[ACTION_PROPOSED] Draft correction email created for ${contactEmail}: "${draft.subject}"\n\nI've drafted a corrected email for your approval. You can preview and approve it on the pipeline card.`,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[draft_correction_email] Error:`, msg);
     return { results: [], summary: `Failed to create draft: ${msg}` };
   }
 }
