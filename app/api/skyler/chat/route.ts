@@ -246,7 +246,36 @@ export async function POST(request: NextRequest) {
     pendingActions
   );
 
-  // ── Inject pipeline feedback context if present ────────────────────────
+  // ── Inject lead/pipeline tag context ────────────────────────────────────
+  // Case 1: Lead-level tag (no specific email) — user tagged a lead or pipeline card
+  if (pipelineContext && !pipelineContext.referenced_email) {
+    const ctx = pipelineContext;
+    // Fetch pipeline record if it's a pipeline source
+    let pipelineExtra = "";
+    if (ctx.source === "pipeline" && ctx.pipeline_id) {
+      const { data: pRec } = await db
+        .from("skyler_sales_pipeline")
+        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied")
+        .eq("id", ctx.pipeline_id)
+        .single();
+      if (pRec) {
+        pipelineExtra = `\nPipeline Stage: ${pRec.stage ?? "unknown"}
+Emails Sent: ${pRec.emails_sent ?? 0}, Replies: ${pRec.emails_replied ?? 0}
+Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}`;
+      }
+    }
+
+    systemPrompt += `\n\n## TAGGED LEAD CONTEXT
+The user has tagged a specific lead into this conversation.
+Lead: ${ctx.contact_name} at ${ctx.company_name}
+${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}
+${ctx.contact_email ? `Contact Email: ${ctx.contact_email}` : ""}${pipelineExtra}
+
+All messages in this conversation are about this lead. When the user asks you to take actions (draft emails, create tasks, update records), use the info above — do NOT ask them for details you already have.
+`;
+  }
+
+  // Case 2: Email-level tag — user is giving feedback on a specific email
   if (pipelineContext?.referenced_email) {
     const ctx = pipelineContext;
     const email = ctx.referenced_email;
@@ -355,10 +384,10 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
         // Save user message — embed pipeline context so it persists in history
         // for follow-up messages in the same conversation
         let savedUserContent = message;
-        if (pipelineContext?.referenced_email) {
+        if (pipelineContext?.pipeline_id) {
           const ctx = pipelineContext;
-          const email = ctx.referenced_email;
-          savedUserContent = `[Pipeline context: ${ctx.contact_name} at ${ctx.company_name} (pipeline_id: ${ctx.pipeline_id}, email: ${email.subject ?? "no subject"})]\n\n${message}`;
+          const emailSubject = ctx.referenced_email?.subject ?? "no subject";
+          savedUserContent = `[Pipeline context: ${ctx.contact_name} at ${ctx.company_name} (pipeline_id: ${ctx.pipeline_id}, email: ${emailSubject})]\n\n${message}`;
         }
 
         await db.rpc("create_chat_message", {

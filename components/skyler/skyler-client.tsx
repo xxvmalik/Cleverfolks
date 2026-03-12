@@ -84,7 +84,7 @@ type ChatMessage = {
   content: string;
   pipelineTag?: {
     contactName: string;
-    companyName: string;
+    companyName?: string;
     subject?: string;
   };
 };
@@ -369,11 +369,17 @@ type PendingAction = {
 
 // ── Pinned context type (reply-to-email feedback) ───────────────────────────
 
-type PinnedEmailContext = {
-  pipelineId: string;
+type PinnedLeadContext = {
+  /** Source: "lead" for lead-qualification cards, "pipeline" for sales-closer records */
+  source: "lead" | "pipeline";
+  /** Lead ID or Pipeline record ID */
+  sourceId: string;
   contactName: string;
   companyName: string;
-  email: {
+  contactEmail?: string;
+  stage?: string;
+  /** Optional: when replying to a specific email in a thread */
+  email?: {
     role: string;
     subject?: string;
     content: string;
@@ -522,7 +528,7 @@ export function SkylerClient({
   const [previewActionId, setPreviewActionId] = useState<string | null>(null);
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
-  const [pinnedContext, setPinnedContext] = useState<PinnedEmailContext | null>(null);
+  const [pinnedContext, setPinnedContext] = useState<PinnedLeadContext | null>(null);
   // Persists pipeline tag across all user messages in the same conversation
   const [conversationPipelineTag, setConversationPipelineTag] = useState<ChatMessage["pipelineTag"] | null>(null);
 
@@ -701,7 +707,7 @@ export function SkylerClient({
       activeTag = {
         contactName: currentPinnedContext.contactName,
         companyName: currentPinnedContext.companyName,
-        subject: currentPinnedContext.email.subject,
+        subject: currentPinnedContext.email?.subject,
       };
       setConversationPipelineTag(activeTag);
     }
@@ -730,10 +736,13 @@ export function SkylerClient({
       };
       if (currentPinnedContext) {
         chatBody.pipelineContext = {
-          pipeline_id: currentPinnedContext.pipelineId,
+          source: currentPinnedContext.source,
+          pipeline_id: currentPinnedContext.sourceId,
           contact_name: currentPinnedContext.contactName,
           company_name: currentPinnedContext.companyName,
-          referenced_email: currentPinnedContext.email,
+          contact_email: currentPinnedContext.contactEmail,
+          stage: currentPinnedContext.stage,
+          ...(currentPinnedContext.email && { referenced_email: currentPinnedContext.email }),
         };
       }
 
@@ -1004,8 +1013,27 @@ export function SkylerClient({
     }
   }
 
-  function handlePrompt(company: string) {
-    setInputValue(`Tell me about the ${company} deal`);
+  function handlePromptLead(lead: Lead) {
+    setPinnedContext({
+      source: "lead",
+      sourceId: lead.id,
+      contactName: lead.contact_name ?? lead.company,
+      companyName: lead.company,
+      contactEmail: lead.contact_email,
+      stage: lead.classification ?? undefined,
+    });
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }
+
+  function handlePromptPipeline(rec: PipelineRecord) {
+    setPinnedContext({
+      source: "pipeline",
+      sourceId: rec.id,
+      contactName: rec.contact_name || rec.contact_email,
+      companyName: rec.company_name ?? "",
+      contactEmail: rec.contact_email,
+      stage: rec.stage,
+    });
     setTimeout(() => textareaRef.current?.focus(), 50);
   }
 
@@ -1287,6 +1315,14 @@ export function SkylerClient({
                                 {rec.company_name ?? "No company"} &bull; {rec.emails_sent} sent, {rec.emails_opened} opened, {rec.emails_replied} replied
                               </p>
                             </div>
+                            <button
+                              onClick={() => handlePromptPipeline(rec)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] hover:bg-[#353535] border border-[#3A3A3A] rounded-full text-white text-xs font-medium transition-colors flex-shrink-0"
+                              title="Tag this lead into chat"
+                            >
+                              <Target className="w-3 h-3 text-[#F2903D]" />
+                              Tag
+                            </button>
                           </div>
 
                           {/* Convo Thread toggle */}
@@ -1321,9 +1357,12 @@ export function SkylerClient({
                                           <button
                                             onClick={() => {
                                               setPinnedContext({
-                                                pipelineId: rec.id,
+                                                source: "pipeline",
+                                                sourceId: rec.id,
                                                 contactName: rec.contact_name || rec.contact_email,
                                                 companyName: rec.company_name ?? "",
+                                                contactEmail: rec.contact_email,
+                                                stage: rec.stage,
                                                 email: {
                                                   role: entry.role,
                                                   subject: entry.subject,
@@ -1417,9 +1456,12 @@ export function SkylerClient({
                                   <button
                                     onClick={() => {
                                       setPinnedContext({
-                                        pipelineId: rec.id,
+                                        source: "pipeline",
+                                        sourceId: rec.id,
                                         contactName: rec.contact_name || rec.contact_email,
                                         companyName: rec.company_name ?? "",
+                                        contactEmail: rec.contact_email,
+                                        stage: rec.stage,
                                         email: {
                                           role: "skyler",
                                           subject: "Clarification needed",
@@ -1651,20 +1693,16 @@ export function SkylerClient({
                   <div className="px-4 pb-4">
                     {/* Pinned context card (reply-to-email) */}
                     {pinnedContext && (
-                      <div
-                        className={cn(
-                          "mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] px-3 py-2.5 flex items-start gap-2",
-                          pinnedContext.email.role === "skyler" ? "border-l-[#F2903D]" : "border-l-[#4ADE80]"
-                        )}
-                      >
-                        <CornerUpLeft className="w-3.5 h-3.5 text-[#8B8F97] flex-shrink-0 mt-0.5" />
+                      <div className="mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] border-l-[#F2903D] px-3 py-2.5 flex items-start gap-2">
+                        <Target className="w-3.5 h-3.5 text-[#F2903D] flex-shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-white text-xs font-medium truncate">
-                            Replying to: {pinnedContext.email.subject ? `"${pinnedContext.email.subject}"` : pinnedContext.contactName}
+                          <p className="text-[#F2903D] text-xs font-semibold truncate">
+                            {pinnedContext.contactName}{pinnedContext.companyName ? ` · ${pinnedContext.companyName}` : ""}
                           </p>
                           <p className="text-[#8B8F97] text-[11px] truncate mt-0.5">
-                            {parseEmailBody(pinnedContext.email.content).slice(0, 80)}
-                            {pinnedContext.email.content.length > 80 ? "..." : ""}
+                            {pinnedContext.email
+                              ? `${pinnedContext.email.subject ? `"${pinnedContext.email.subject}" — ` : ""}${parseEmailBody(pinnedContext.email.content).slice(0, 60)}${pinnedContext.email.content.length > 60 ? "..." : ""}`
+                              : `${pinnedContext.stage ? formatStage(pinnedContext.stage) + " · " : ""}${pinnedContext.contactEmail ?? "Tagged lead"}`}
                           </p>
                         </div>
                         <button
@@ -1680,7 +1718,7 @@ export function SkylerClient({
                         value={inputValue}
                         onChange={(e) => { setInputValue(e.target.value); resizeTextarea(e.target); }}
                         onKeyDown={handleKeyDown}
-                        placeholder={pinnedContext ? "Give Skyler feedback on this email..." : "Ask Skyler about outreach..."}
+                        placeholder={pinnedContext ? `Message Skyler about ${pinnedContext.contactName}...` : "Ask Skyler about outreach..."}
                         rows={1}
                         disabled={isStreaming}
                         className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
@@ -1809,7 +1847,7 @@ export function SkylerClient({
                       lead={lead}
                       isActive={lead.id === activeLeadId}
                       onClick={() => setActiveLeadId(lead.id)}
-                      onPrompt={() => handlePrompt(lead.company)}
+                      onPrompt={() => handlePromptLead(lead)}
                     />
                   ))
                 )}
@@ -1868,9 +1906,17 @@ export function SkylerClient({
                               )}
                             >
                               {msg.role === "user" && msg.pipelineTag && (
-                                <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-[#F2903D] font-medium opacity-80">
-                                  <Target className="w-3 h-3" />
-                                  <span>{msg.pipelineTag.contactName}{msg.pipelineTag.subject ? ` · ${msg.pipelineTag.subject}` : ""}</span>
+                                <div className="mb-2 rounded-md bg-[#F2903D]/10 border-l-[3px] border-l-[#F2903D] px-2.5 py-1.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <Target className="w-3 h-3 text-[#F2903D]" />
+                                    <span className="text-[11px] text-[#F2903D] font-semibold">{msg.pipelineTag.contactName}</span>
+                                    {msg.pipelineTag.companyName && (
+                                      <span className="text-[10px] text-[#F2903D]/60">· {msg.pipelineTag.companyName}</span>
+                                    )}
+                                  </div>
+                                  {msg.pipelineTag.subject && (
+                                    <p className="text-[10px] text-[#8B8F97] mt-0.5 truncate">{msg.pipelineTag.subject}</p>
+                                  )}
                                 </div>
                               )}
                               {msg.role === "assistant" ? (
@@ -1945,22 +1991,18 @@ export function SkylerClient({
 
               {/* Input bar */}
               <div className="px-4 pb-4">
-                {/* Pinned context card (reply-to-email) */}
+                {/* Pinned context card (tagged lead) */}
                 {pinnedContext && (
-                  <div
-                    className={cn(
-                      "mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] px-3 py-2.5 flex items-start gap-2",
-                      pinnedContext.email.role === "skyler" ? "border-l-[#F2903D]" : "border-l-[#4ADE80]"
-                    )}
-                  >
-                    <CornerUpLeft className="w-3.5 h-3.5 text-[#8B8F97] flex-shrink-0 mt-0.5" />
+                  <div className="mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] border-l-[#F2903D] px-3 py-2.5 flex items-start gap-2">
+                    <Target className="w-3.5 h-3.5 text-[#F2903D] flex-shrink-0 mt-0.5" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-white text-xs font-medium truncate">
-                        Replying to: {pinnedContext.email.subject ? `"${pinnedContext.email.subject}"` : pinnedContext.contactName}
+                      <p className="text-[#F2903D] text-xs font-semibold truncate">
+                        {pinnedContext.contactName}{pinnedContext.companyName ? ` · ${pinnedContext.companyName}` : ""}
                       </p>
                       <p className="text-[#8B8F97] text-[11px] truncate mt-0.5">
-                        {parseEmailBody(pinnedContext.email.content).slice(0, 80)}
-                        {pinnedContext.email.content.length > 80 ? "..." : ""}
+                        {pinnedContext.email
+                          ? `${pinnedContext.email.subject ? `"${pinnedContext.email.subject}" — ` : ""}${parseEmailBody(pinnedContext.email.content).slice(0, 60)}${pinnedContext.email.content.length > 60 ? "..." : ""}`
+                          : `${pinnedContext.stage ? formatStage(pinnedContext.stage) + " · " : ""}${pinnedContext.contactEmail ?? "Tagged lead"}`}
                       </p>
                     </div>
                     <button
@@ -1992,7 +2034,7 @@ export function SkylerClient({
                       resizeTextarea(e.target);
                     }}
                     onKeyDown={handleKeyDown}
-                    placeholder={pinnedContext ? "Give Skyler feedback on this email..." : "Ask Skyler about your pipeline..."}
+                    placeholder={pinnedContext ? `Message Skyler about ${pinnedContext.contactName}...` : "Ask Skyler about your pipeline..."}
                     rows={1}
                     disabled={isStreaming}
                     className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
