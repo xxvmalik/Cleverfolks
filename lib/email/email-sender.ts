@@ -268,41 +268,76 @@ async function sendViaOutlook(params: {
 }
 
 /**
- * Find the most recent Outlook Sent Item matching a subject + recipient.
- * Uses Mail.Read scope to search the SentItems folder.
+ * Find the best Outlook message to reply to for proper threading on BOTH sides.
+ *
+ * Key insight: calling createReply on a Sent Items message creates a conversation
+ * fork — the reply threads on the prospect's end but appears as a new thread on
+ * the sender's Outlook. To thread on both sides, we must reply to a RECEIVED
+ * message (e.g. a prospect reply in the Inbox).
+ *
+ * Strategy:
+ *  1. Search all folders for the most recent received message in this thread (prospect reply)
+ *  2. Fall back to Sent Items if no received message exists (first follow-up, no reply yet)
  */
-async function findOutlookSentMessage(
+async function findOutlookThreadMessage(
   nango: Nango,
   connectionId: string,
   subject: string,
   recipientEmail: string
 ): Promise<string | null> {
-  try {
-    // Strip "Re:" prefix for matching — Outlook stores the base subject
-    const baseSubject = subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
-    const safeEmail = recipientEmail.toLowerCase();
-    const filter = `contains(subject,'${baseSubject}') and toRecipients/any(r: r/emailAddress/address eq '${safeEmail}')`;
-    const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
+  const baseSubject = subject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''");
+  const safeEmail = recipientEmail.toLowerCase();
 
-    const response = await nango.proxy({
+  // Step 1: Search ALL folders for the most recent message FROM the prospect (received)
+  try {
+    const inboxFilter = `contains(subject,'${baseSubject}') and from/emailAddress/address eq '${safeEmail}'`;
+    const inboxQs = `$filter=${encodeURIComponent(inboxFilter)}&$top=1&$orderby=receivedDateTime desc&$select=id,parentFolderId`;
+
+    const inboxResponse = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
+      endpoint: `/v1.0/me/messages?${inboxQs}`,
       connectionId,
       providerConfigKey: "outlook",
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messages = (response as any)?.data?.value;
-    if (messages && messages.length > 0) {
-      console.log(`[email-sender] Found Sent Item for threading: ${messages[0].id}`);
-      return messages[0].id;
+    const inboxMessages = (inboxResponse as any)?.data?.value;
+    if (inboxMessages && inboxMessages.length > 0) {
+      console.log(`[email-sender] Found received message for threading: ${inboxMessages[0].id} — reply will thread on both sides`);
+      return inboxMessages[0].id;
+    }
+
+    console.log(`[email-sender] No received message from ${safeEmail} — falling back to Sent Items`);
+  } catch (err) {
+    console.warn(`[email-sender] Inbox search failed, falling back to Sent Items:`, err);
+  }
+
+  // Step 2: Fall back to Sent Items (for follow-ups before prospect has replied)
+  try {
+    const sentFilter = `contains(subject,'${baseSubject}') and toRecipients/any(r: r/emailAddress/address eq '${safeEmail}')`;
+    const sentQs = `$filter=${encodeURIComponent(sentFilter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
+
+    const sentResponse = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${sentQs}`,
+      connectionId,
+      providerConfigKey: "outlook",
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sentMessages = (sentResponse as any)?.data?.value;
+    if (sentMessages && sentMessages.length > 0) {
+      console.log(`[email-sender] Found Sent Item for threading: ${sentMessages[0].id} (no received message available)`);
+      return sentMessages[0].id;
     }
 
     console.log(`[email-sender] No Sent Item found for subject="${baseSubject}" to=${safeEmail}`);
   } catch (err) {
     console.warn(`[email-sender] Sent Items search failed:`, err);
   }
+
   return null;
 }
 
@@ -441,10 +476,10 @@ export async function executeEmailSend(
       messageId = result.messageId;
       internetMessageId = result.internetMessageId;
     } else if (existingThread.length > 0) {
-      // Outlook follow-up: find the last sent message, then createReply for threading
+      // Outlook follow-up: find best message to reply to for threading on both sides
       const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
       const originalSubject = threading.originalSubject ?? rawSubject;
-      const sentMessageId = await findOutlookSentMessage(
+      const sentMessageId = await findOutlookThreadMessage(
         nango,
         emailProvider.connectionId,
         originalSubject,
