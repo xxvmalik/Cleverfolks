@@ -273,14 +273,27 @@ async function sendViaOutlook(params: {
     message.internetMessageHeaders = headers;
   }
 
-  await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/sendMail",
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: { message, saveToSentItems: true },
-  });
+  const payload = { message, saveToSentItems: true };
+  console.log(`[email-sender] Outlook sendMail payload:`, JSON.stringify(payload, null, 2));
+
+  try {
+    await nango.proxy({
+      method: "POST",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: "/v1.0/me/sendMail",
+      connectionId: params.connectionId,
+      providerConfigKey: "outlook",
+      data: payload,
+    });
+  } catch (err) {
+    // Log full error details from Graph API
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const axiosErr = err as any;
+    const responseData = axiosErr?.response?.data ?? axiosErr?.data;
+    console.error(`[email-sender] Outlook sendMail failed:`, JSON.stringify(responseData, null, 2));
+    console.error(`[email-sender] Status:`, axiosErr?.response?.status ?? axiosErr?.status);
+    throw err;
+  }
 
   const messageId = `outlook-${Date.now()}`;
   console.log(`[email-sender] Outlook sendMail success: ${messageId}`);
