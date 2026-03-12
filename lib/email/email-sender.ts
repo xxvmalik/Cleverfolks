@@ -496,25 +496,22 @@ async function replyViaOutlook(params: {
   const replySubject = params.subject.startsWith("Re:") ? params.subject : `Re: ${params.subject}`;
 
   let internetMessageId: string | null = null;
-  let conversationId: string | null = null;
   try {
     const msgResponse = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages/${params.outlookMessageId}?$select=internetMessageId,conversationId`,
+      endpoint: `/v1.0/me/messages/${params.outlookMessageId}?$select=internetMessageId`,
       connectionId: params.connectionId,
       providerConfigKey: "outlook",
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const msgData = (msgResponse as any)?.data;
-    internetMessageId = msgData?.internetMessageId ?? null;
-    conversationId = msgData?.conversationId ?? null;
-    console.log(`[email-sender] Fetched threading info: internetMessageId=${internetMessageId}, conversationId=${conversationId}`);
+    internetMessageId = (msgResponse as any)?.data?.internetMessageId ?? null;
+    console.log(`[email-sender] Fetched threading info: internetMessageId=${internetMessageId}`);
   } catch (fetchErr) {
     console.warn(`[email-sender] Could not fetch original message for threading headers:`, fetchErr instanceof Error ? fetchErr.message : fetchErr);
   }
 
-  // Build message with threading headers
+  // Build message with threading headers (conversationId is read-only — only use internetMessageHeaders)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messagePayload: Record<string, any> = {
     subject: replySubject,
@@ -522,18 +519,12 @@ async function replyViaOutlook(params: {
     toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
   };
 
-  // Add In-Reply-To and References headers for proper threading
   if (internetMessageId) {
     messagePayload.internetMessageHeaders = [
       { name: "In-Reply-To", value: internetMessageId },
       { name: "References", value: internetMessageId },
     ];
     console.log(`[email-sender] sendMail with threading headers: In-Reply-To=${internetMessageId}`);
-  }
-
-  // conversationId makes Outlook group the emails in the same conversation
-  if (conversationId) {
-    messagePayload.conversationId = conversationId;
   }
 
   await nango.proxy({
@@ -666,11 +657,10 @@ export async function executeEmailSend(
 
         // Try to find any sent message with this subject for threading headers
         let threadInternetMessageId: string | null = null;
-        let threadConversationId: string | null = null;
         try {
           const safeSubject = originalSubject.replace(/^re:\s*/i, "").trim().replace(/'/g, "''").replace(/[\\"%&+#]/g, "");
           const filter = `contains(subject,'${safeSubject}')`;
-          const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId,conversationId`;
+          const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id,internetMessageId`;
           const searchResponse = await nango2.proxy({
             method: "GET",
             baseUrlOverride: "https://graph.microsoft.com",
@@ -682,7 +672,6 @@ export async function executeEmailSend(
           const msgs = (searchResponse as any)?.data?.value;
           if (msgs && msgs.length > 0) {
             threadInternetMessageId = msgs[0].internetMessageId ?? null;
-            threadConversationId = msgs[0].conversationId ?? null;
             console.log(`[email-sender] Found sent message for threading: internetMessageId=${threadInternetMessageId}`);
           }
         } catch (searchErr) {
@@ -700,9 +689,6 @@ export async function executeEmailSend(
             { name: "In-Reply-To", value: threadInternetMessageId },
             { name: "References", value: threadInternetMessageId },
           ];
-        }
-        if (threadConversationId) {
-          fallbackPayload.conversationId = threadConversationId;
         }
 
         await nango2.proxy({
