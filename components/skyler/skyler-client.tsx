@@ -78,15 +78,28 @@ type IntegrationLogo = {
   logoUrl: string;
 };
 
+/** Highlighted lead/email attached to a user message (WhatsApp reply-quote style) */
+type MessageHighlight = {
+  /** "lead" = lead qualification card, "pipeline" = pipeline card, "email" = specific email in a thread */
+  kind: "lead" | "pipeline" | "email";
+  contactName: string;
+  companyName?: string;
+  /** Preview snippet — first few words of the email, or lead detail */
+  preview?: string;
+  /** Email subject (for email highlights) */
+  subject?: string;
+  /** Stage label */
+  stage?: string;
+  /** Score / classification for lead cards */
+  classification?: string;
+  potential?: string;
+};
+
 type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
-  pipelineTag?: {
-    contactName: string;
-    companyName?: string;
-    subject?: string;
-  };
+  highlight?: MessageHighlight;
 };
 
 type ConversationItem = {
@@ -96,6 +109,34 @@ type ConversationItem = {
   is_starred?: boolean;
   custom_title?: string | null;
 };
+
+/** WhatsApp-style highlight quote shown above user message text */
+function HighlightQuote({ highlight }: { highlight: MessageHighlight }) {
+  return (
+    <div className="mb-2 rounded-md bg-[#F2903D]/10 border-l-[3px] border-l-[#F2903D] px-2.5 py-1.5">
+      <div className="flex items-center gap-1.5">
+        <Target className="w-3 h-3 text-[#F2903D] flex-shrink-0" />
+        <span className="text-[11px] text-[#F2903D] font-semibold truncate">{highlight.contactName}</span>
+        {highlight.companyName && (
+          <span className="text-[10px] text-[#F2903D]/60 truncate">· {highlight.companyName}</span>
+        )}
+        {highlight.stage && (
+          <span className="text-[9px] text-[#8B8F97] bg-white/5 px-1.5 py-0.5 rounded-full flex-shrink-0">{formatStage(highlight.stage)}</span>
+        )}
+      </div>
+      {/* Email highlight: show subject + snippet */}
+      {highlight.kind === "email" && (
+        <p className="text-[10px] text-[#8B8F97] mt-0.5 truncate">
+          {highlight.subject ? `"${highlight.subject}" — ` : ""}{highlight.preview ?? ""}
+        </p>
+      )}
+      {/* Lead card highlight: show classification */}
+      {highlight.kind === "lead" && highlight.classification && (
+        <p className="text-[10px] text-[#8B8F97] mt-0.5">{highlight.classification} lead{highlight.potential ? ` · ${highlight.potential}` : ""}</p>
+      )}
+    </div>
+  );
+}
 
 /** Unescape HTML entities that may be double-escaped in JSONB storage */
 function unescapeHtml(html: string): string {
@@ -378,6 +419,9 @@ type PinnedLeadContext = {
   companyName: string;
   contactEmail?: string;
   stage?: string;
+  /** Lead-specific fields */
+  classification?: string;
+  potential?: string;
   /** Optional: when replying to a specific email in a thread */
   email?: {
     role: string;
@@ -529,8 +573,6 @@ export function SkylerClient({
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
   const [pinnedContext, setPinnedContext] = useState<PinnedLeadContext | null>(null);
-  // Persists pipeline tag across all user messages in the same conversation
-  const [conversationPipelineTag, setConversationPipelineTag] = useState<ChatMessage["pipelineTag"] | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
   const fetchDashboard = useCallback(async () => {
@@ -701,23 +743,44 @@ export function SkylerClient({
     const currentPinnedContext = pinnedContext;
     setPinnedContext(null);
 
-    // Persist pipeline tag for the whole conversation once set
-    let activeTag = conversationPipelineTag;
-    if (currentPinnedContext && !activeTag) {
-      activeTag = {
-        contactName: currentPinnedContext.contactName,
-        companyName: currentPinnedContext.companyName,
-        subject: currentPinnedContext.email?.subject,
-      };
-      setConversationPipelineTag(activeTag);
+    // Build per-message highlight from whatever was pinned
+    let highlight: MessageHighlight | undefined;
+    if (currentPinnedContext) {
+      if (currentPinnedContext.email) {
+        // Email-level highlight — show contact + snippet of email content
+        highlight = {
+          kind: "email",
+          contactName: currentPinnedContext.contactName,
+          companyName: currentPinnedContext.companyName,
+          subject: currentPinnedContext.email.subject,
+          preview: parseEmailBody(currentPinnedContext.email.content).slice(0, 80),
+          stage: currentPinnedContext.stage,
+        };
+      } else if (currentPinnedContext.source === "pipeline") {
+        // Pipeline card highlight
+        highlight = {
+          kind: "pipeline",
+          contactName: currentPinnedContext.contactName,
+          companyName: currentPinnedContext.companyName,
+          stage: currentPinnedContext.stage,
+        };
+      } else {
+        // Lead card highlight
+        highlight = {
+          kind: "lead",
+          contactName: currentPinnedContext.contactName,
+          companyName: currentPinnedContext.companyName,
+          classification: currentPinnedContext.classification,
+          potential: currentPinnedContext.potential,
+        };
+      }
     }
 
-    // Add user message to chat — attach pipeline tag (first message or follow-ups)
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: trimmed,
-      ...(activeTag && { pipelineTag: activeTag }),
+      ...(highlight && { highlight }),
     };
     setChatMessages((prev) => [...prev, userMsg]);
     setIsStreaming(true);
@@ -871,7 +934,7 @@ export function SkylerClient({
   function handleNewChat() {
     setActiveConversationId(null);
     setChatMessages([]);
-    setConversationPipelineTag(null);
+
     setStreamingContent("");
     setActivityLabel(null);
     setMessageActions({});
@@ -882,7 +945,7 @@ export function SkylerClient({
   async function loadConversation(convId: string) {
     setActiveConversationId(convId);
     setChatMessages([]);
-    setConversationPipelineTag(null);
+
     setStreamingContent("");
     setMessageActions({});
     try {
@@ -945,7 +1008,7 @@ export function SkylerClient({
     if (activeConversationId === id) {
       setActiveConversationId(null);
       setChatMessages([]);
-      setConversationPipelineTag(null);
+  
     }
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
   }
@@ -1021,6 +1084,8 @@ export function SkylerClient({
       companyName: lead.company,
       contactEmail: lead.contact_email,
       stage: lead.classification ?? undefined,
+      classification: lead.classification ?? undefined,
+      potential: lead.potential,
     });
     setTimeout(() => textareaRef.current?.focus(), 50);
   }
@@ -1651,12 +1716,7 @@ export function SkylerClient({
                                   </div>
                                 )}
                                 <div className={cn("rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]", msg.role === "user" ? "bg-[#F2903D]/20 text-white" : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]")}>
-                                  {msg.role === "user" && msg.pipelineTag && (
-                                    <div className="flex items-center gap-1.5 mb-1.5 text-[10px] text-[#F2903D] font-medium opacity-80">
-                                      <Target className="w-3 h-3" />
-                                      <span>{msg.pipelineTag.contactName}{msg.pipelineTag.subject ? ` · ${msg.pipelineTag.subject}` : ""}</span>
-                                    </div>
-                                  )}
+                                  {msg.role === "user" && msg.highlight && <HighlightQuote highlight={msg.highlight} />}
                                   {msg.role === "assistant" ? <MarkdownRenderer content={msg.content} /> : <div className="whitespace-pre-wrap">{msg.content}</div>}
                                 </div>
                               </div>
@@ -1905,20 +1965,7 @@ export function SkylerClient({
                                   : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
                               )}
                             >
-                              {msg.role === "user" && msg.pipelineTag && (
-                                <div className="mb-2 rounded-md bg-[#F2903D]/10 border-l-[3px] border-l-[#F2903D] px-2.5 py-1.5">
-                                  <div className="flex items-center gap-1.5">
-                                    <Target className="w-3 h-3 text-[#F2903D]" />
-                                    <span className="text-[11px] text-[#F2903D] font-semibold">{msg.pipelineTag.contactName}</span>
-                                    {msg.pipelineTag.companyName && (
-                                      <span className="text-[10px] text-[#F2903D]/60">· {msg.pipelineTag.companyName}</span>
-                                    )}
-                                  </div>
-                                  {msg.pipelineTag.subject && (
-                                    <p className="text-[10px] text-[#8B8F97] mt-0.5 truncate">{msg.pipelineTag.subject}</p>
-                                  )}
-                                </div>
-                              )}
+                              {msg.role === "user" && msg.highlight && <HighlightQuote highlight={msg.highlight} />}
                               {msg.role === "assistant" ? (
                                 <MarkdownRenderer content={msg.content} />
                               ) : (
