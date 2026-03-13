@@ -4,6 +4,7 @@ import { syncIntegrationFunction } from "@/lib/inngest/functions/sync-integratio
 import { buildKnowledgeProfileFunction } from "@/lib/inngest/functions/build-knowledge-profile";
 import { salesCloserWorkflow, triggerSalesCloserOnHotLead, handlePipelineReply, handleClarificationReceived } from "@/lib/inngest/functions/sales-closer";
 import { salesCadenceScheduler, salesCadenceFollowUp } from "@/lib/inngest/functions/sales-cadence";
+import { replyCheckScheduler } from "@/lib/inngest/functions/reply-check";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -16,5 +17,6 @@ export const { GET, POST, PUT } = serve({
     handleClarificationReceived,
     salesCadenceScheduler,
     salesCadenceFollowUp,
+    replyCheckScheduler,
   ],
 });
