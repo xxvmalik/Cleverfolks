@@ -17,7 +17,8 @@ export type NotificationEventType =
   | "escalation_triggered"
   | "deal_closed_won"
   | "deal_closed_lost"
-  | "objection_received";
+  | "objection_received"
+  | "meeting_booked";
 
 export type NotificationParams = {
   workspaceId: string;

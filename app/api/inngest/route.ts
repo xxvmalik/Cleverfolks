@@ -5,6 +5,7 @@ import { buildKnowledgeProfileFunction } from "@/lib/inngest/functions/build-kno
 import { salesCloserWorkflow, triggerSalesCloserOnHotLead, handlePipelineReply, handleClarificationReceived } from "@/lib/inngest/functions/sales-closer";
 import { salesCadenceScheduler, salesCadenceFollowUp } from "@/lib/inngest/functions/sales-cadence";
 import { replyCheckScheduler } from "@/lib/inngest/functions/reply-check";
+import { meetingCheckScheduler } from "@/lib/inngest/functions/meeting-check";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -18,5 +19,6 @@ export const { GET, POST, PUT } = serve({
     salesCadenceScheduler,
     salesCadenceFollowUp,
     replyCheckScheduler,
+    meetingCheckScheduler,
   ],
 });

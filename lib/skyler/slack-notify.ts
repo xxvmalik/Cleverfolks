@@ -23,6 +23,7 @@ const EVENT_EMOJI: Record<NotificationEventType, string> = {
   deal_closed_won: ":tada:",
   deal_closed_lost: ":x:",
   objection_received: ":warning:",
+  meeting_booked: ":calendar:",
 };
 
 /**

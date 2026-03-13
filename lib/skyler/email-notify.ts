@@ -22,6 +22,7 @@ const EVENT_LABELS: Record<NotificationEventType, string> = {
   deal_closed_won: "Deal Closed Won",
   deal_closed_lost: "Deal Closed Lost",
   objection_received: "Objection Received",
+  meeting_booked: "Meeting Booked",
 };
 
 /**

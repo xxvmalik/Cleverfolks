@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
         email: profile?.email ?? user.email ?? undefined,
         display_name: profile?.full_name ?? undefined,
       },
-      allowed_integrations: ["slack", "google-mail", "outlook", "hubspot"],
+      allowed_integrations: ["slack", "google-mail", "outlook", "hubspot", "google-calendar", "calendly"],
     });
 
     return NextResponse.json({ token: session.data.token });
