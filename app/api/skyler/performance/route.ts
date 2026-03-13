@@ -29,23 +29,21 @@ export async function GET(req: NextRequest) {
   // Aggregate from pipeline records
   const { data: records } = await db
     .from("skyler_sales_pipeline")
-    .select("emails_sent, emails_opened, emails_clicked, emails_replied, resolution, stage")
+    .select("emails_sent, emails_replied, resolution, stage")
     .eq("workspace_id", workspaceId);
 
   const all = records ?? [];
   const totalLeads = all.length;
   const totalEmailsSent = all.reduce((sum, r) => sum + (r.emails_sent ?? 0), 0);
-  const totalOpened = all.reduce((sum, r) => sum + (r.emails_opened ?? 0), 0);
-  const totalClicked = all.reduce((sum, r) => sum + (r.emails_clicked ?? 0), 0);
   const totalReplied = all.reduce((sum, r) => sum + (r.emails_replied ?? 0), 0);
 
-  const meetingsBooked = all.filter((r) => r.resolution === "meeting_booked").length;
-  const demosBooked = all.filter((r) => r.resolution === "demo_booked" || r.stage === "demo_booked").length;
+  const meetingsBooked = all.filter((r) =>
+    r.resolution === "meeting_booked" || r.resolution === "demo_booked" || r.stage === "demo_booked"
+  ).length;
   const paymentsSecured = all.filter((r) => r.resolution === "payment_secured").length;
   const dealsWon = all.filter((r) => r.stage === "closed_won").length;
   const dealsLost = all.filter((r) => r.stage === "disqualified").length;
 
-  const openRate = totalEmailsSent > 0 ? Math.round((totalOpened / totalEmailsSent) * 100) : 0;
   const replyRate = totalEmailsSent > 0 ? Math.round((totalReplied / totalEmailsSent) * 100) : 0;
   const conversionRate = totalLeads > 0 ? Math.round((dealsWon / totalLeads) * 100) : 0;
 
@@ -59,13 +57,9 @@ export async function GET(req: NextRequest) {
     metrics: {
       totalLeads,
       emailsSent: totalEmailsSent,
-      emailsOpened: totalOpened,
-      emailsClicked: totalClicked,
       emailsReplied: totalReplied,
-      openRate,
       replyRate,
       meetingsBooked,
-      demosBooked,
       paymentsSecured,
       dealsWon,
       dealsLost,

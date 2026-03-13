@@ -481,10 +481,8 @@ type PipelineRecord = {
 type PerformanceMetrics = {
   totalLeads: number;
   emailsSent: number;
-  openRate: number;
   replyRate: number;
   meetingsBooked: number;
-  demosBooked: number;
   paymentsSecured: number;
   dealsWon: number;
   conversionRate: number;
@@ -1336,10 +1334,9 @@ export function SkylerClient({
               {/* Performance Metrics */}
               <div className="px-6 py-4 flex gap-4">
                 <StatCard label="Emails Sent" value={pipelineLoading ? "..." : String(performanceMetrics?.emailsSent ?? 0)} />
-                <StatCard label="Open Rate" value={pipelineLoading ? "..." : `${performanceMetrics?.openRate ?? 0}%`} />
                 <StatCard label="Reply Rate" value={pipelineLoading ? "..." : `${performanceMetrics?.replyRate ?? 0}%`} />
                 <StatCard label="Meetings Booked" value={pipelineLoading ? "..." : String(performanceMetrics?.meetingsBooked ?? 0)} />
-                <StatCard label="Demos Booked" value={pipelineLoading ? "..." : String(performanceMetrics?.demosBooked ?? 0)} />
+                <StatCard label="Deals Won" value={pipelineLoading ? "..." : String(performanceMetrics?.dealsWon ?? 0)} />
                 <StatCard label="Conversion" value={pipelineLoading ? "..." : `${performanceMetrics?.conversionRate ?? 0}%`} />
               </div>
 
