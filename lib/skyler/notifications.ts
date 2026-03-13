@@ -18,7 +18,8 @@ export type NotificationEventType =
   | "deal_closed_won"
   | "deal_closed_lost"
   | "objection_received"
-  | "meeting_booked";
+  | "meeting_booked"
+  | "action_note_due";
 
 export type NotificationParams = {
   workspaceId: string;

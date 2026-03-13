@@ -26,6 +26,8 @@ export type MeetingDetectionResult = {
   detected: boolean;
   pipeline_id?: string;
   contact_email?: string;
+  meetingLink?: string;
+  startTime?: string;
 };
 
 /**
@@ -60,14 +62,12 @@ export async function detectPipelineMeeting(
     const pipeline = pipelines[0];
     const now = new Date().toISOString();
 
-    // Atomic update: only succeeds if resolution is still NULL
+    // Atomic update: only succeeds if resolution is still NULL and not already meeting_booked
+    // meeting_booked is a STAGE, not a resolution — keeps the lead card active
     const { data: updated, error: updateErr } = await db
       .from("skyler_sales_pipeline")
       .update({
-        resolution: "meeting_booked",
-        resolution_notes: `Meeting detected: "${meeting.title}" via ${meeting.provider}`,
-        resolved_at: now,
-        stage: "demo_booked",
+        stage: "meeting_booked",
         meeting_event_id: meeting.eventId,
         meeting_details: {
           title: meeting.title,
@@ -79,10 +79,12 @@ export async function detectPipelineMeeting(
         },
         awaiting_reply: false,
         next_followup_at: null,
+        cadence_paused: true, // Pause follow-ups during meeting stage
         updated_at: now,
       })
       .eq("id", pipeline.id)
       .is("resolution", null)
+      .neq("stage", "meeting_booked") // Don't re-detect same meeting
       .select("id")
       .maybeSingle();
 
@@ -128,6 +130,8 @@ export async function detectPipelineMeeting(
       detected: true,
       pipeline_id: pipeline.id,
       contact_email: pipeline.contact_email,
+      meetingLink: meeting.meetingLink,
+      startTime: meeting.startTime,
     };
   } catch (err) {
     console.warn(

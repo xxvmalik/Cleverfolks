@@ -6,6 +6,7 @@ import { salesCloserWorkflow, triggerSalesCloserOnHotLead, handlePipelineReply, 
 import { salesCadenceScheduler, salesCadenceFollowUp } from "@/lib/inngest/functions/sales-cadence";
 import { replyCheckScheduler } from "@/lib/inngest/functions/reply-check";
 import { meetingCheckScheduler } from "@/lib/inngest/functions/meeting-check";
+import { processMeetingTranscript, actionNoteDeadlineChecker } from "@/lib/inngest/functions/meeting-transcript";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -20,5 +21,7 @@ export const { GET, POST, PUT } = serve({
     salesCadenceFollowUp,
     replyCheckScheduler,
     meetingCheckScheduler,
+    processMeetingTranscript,
+    actionNoteDeadlineChecker,
   ],
 });

@@ -700,20 +700,20 @@ ${replyContent.slice(0, 2000)}`,
         const db = createAdminSupabaseClient();
         const now = new Date().toISOString();
 
-        // Atomic update: only if not already resolved (dedup with calendar cron)
+        // meeting_booked is a STAGE, not a resolution — keeps lead card active
+        // Atomic update: only if not already resolved and not already meeting_booked
         const { data: updated } = await db
           .from("skyler_sales_pipeline")
           .update({
-            resolution: "meeting_booked",
-            resolution_notes: `Lead confirmed meeting via reply: ${classification.reasoning}`,
-            resolved_at: now,
-            stage: "demo_booked",
+            stage: "meeting_booked",
             awaiting_reply: false,
             next_followup_at: null,
+            cadence_paused: true, // Pause follow-ups during meeting stage
             updated_at: now,
           })
           .eq("id", pipelineId)
           .is("resolution", null)
+          .neq("stage", "meeting_booked")
           .select("id")
           .maybeSingle();
 

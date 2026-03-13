@@ -501,6 +501,9 @@ const STAGE_COLORS: Record<string, string> = {
   disqualified: "#F87171",
   stalled: "#8B8F97",
   pending_clarification: "#FBB040",
+  meeting_booked: "#06B6D4",
+  follow_up_meeting: "#3B82F6",
+  closed_lost: "#F87171",
 };
 
 function formatStage(stage: string): string {

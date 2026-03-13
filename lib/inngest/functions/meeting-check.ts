@@ -12,6 +12,7 @@ import { Nango } from "@nangohq/node";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { detectPipelineMeeting, type MeetingRecord } from "@/lib/sync/meeting-detector";
+import { createRecallBot } from "@/lib/recall/client";
 
 // ── Cron: Meeting Check ─────────────────────────────────────────────────────
 
@@ -116,6 +117,32 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
         if (result.detected) {
           meetingsFound++;
           console.log(`[meeting-check] Meeting booked: ${result.contact_email} → pipeline ${result.pipeline_id}`);
+
+          // Dispatch Recall.ai bot to join the meeting (if meeting link exists)
+          if (result.meetingLink && result.pipeline_id) {
+            try {
+              const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+                ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://cleverfolks.vercel.app");
+              const webhookUrl = `${baseUrl}/api/recall/webhook`;
+
+              const bot = await createRecallBot({
+                meetingUrl: result.meetingLink,
+                botName: "Skyler Notetaker",
+                joinAt: result.startTime,
+                webhookUrl,
+              });
+
+              // Store bot ID on pipeline record for webhook matching
+              await db
+                .from("skyler_sales_pipeline")
+                .update({ recall_bot_id: bot.id, updated_at: new Date().toISOString() })
+                .eq("id", result.pipeline_id);
+
+              console.log(`[meeting-check] Recall bot ${bot.id} scheduled for pipeline ${result.pipeline_id}`);
+            } catch (recallErr) {
+              console.error(`[meeting-check] Failed to create Recall bot:`, recallErr instanceof Error ? recallErr.message : recallErr);
+            }
+          }
         }
       }
     } catch (err) {

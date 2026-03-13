@@ -37,12 +37,14 @@ export async function GET(req: NextRequest) {
   const totalEmailsSent = all.reduce((sum, r) => sum + (r.emails_sent ?? 0), 0);
   const totalReplied = all.reduce((sum, r) => sum + (r.emails_replied ?? 0), 0);
 
+  // meeting_booked is now a STAGE — count unique leads that reached meeting stage
   const meetingsBooked = all.filter((r) =>
-    r.resolution === "meeting_booked" || r.resolution === "demo_booked" || r.stage === "demo_booked"
+    r.stage === "meeting_booked" || r.stage === "demo_booked" || r.stage === "follow_up_meeting"
+    || r.resolution === "meeting_booked" || r.resolution === "demo_booked" // legacy
   ).length;
   const paymentsSecured = all.filter((r) => r.resolution === "payment_secured").length;
-  const dealsWon = all.filter((r) => r.stage === "closed_won").length;
-  const dealsLost = all.filter((r) => r.stage === "disqualified").length;
+  const dealsWon = all.filter((r) => r.stage === "closed_won" || r.resolution === "closed_won").length;
+  const dealsLost = all.filter((r) => r.stage === "disqualified" || r.stage === "closed_lost" || r.resolution === "closed_lost").length;
 
   const replyRate = totalEmailsSent > 0 ? Math.round((totalReplied / totalEmailsSent) * 100) : 0;
   const conversionRate = totalLeads > 0 ? Math.round((dealsWon / totalLeads) * 100) : 0;
