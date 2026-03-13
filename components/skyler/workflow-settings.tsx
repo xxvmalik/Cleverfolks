@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle, Flame, Sprout, Archive } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle, Flame, Sprout, Archive, ChevronDown, Search, Hash, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -26,8 +26,10 @@ type WorkflowSettings = {
   notifications: {
     slack: boolean;
     slackChannel: string;
+    slackChannels: string[];
     email: boolean;
     emailAddress: string;
+    emailAddresses: string[];
     taskCreation: boolean;
     taskAssignee: string;
   };
@@ -292,6 +294,187 @@ const ROUTING_CARD_CONFIG: Record<string, {
   },
 };
 
+// ── Slack Picker ────────────────────────────────────────────────────────────
+
+type SlackOption = { id: string; name: string; type: "channel" | "member" };
+
+function SlackMultiPicker({
+  selected,
+  onChange,
+  options,
+  loadingOptions,
+  max = 3,
+}: {
+  selected: string[];
+  onChange: (v: string[]) => void;
+  options: SlackOption[];
+  loadingOptions: boolean;
+  max?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  const filtered = options.filter((o) =>
+    o.name.toLowerCase().includes(search.toLowerCase()) && !selected.includes(o.name)
+  );
+
+  return (
+    <div ref={ref} className="relative">
+      {/* Selected tags */}
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {selected.map((name) => {
+            const opt = options.find((o) => o.name === name);
+            return (
+              <span
+                key={name}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border bg-[#F2903D]/10 border-[#F2903D]/30 text-[#F2903D]"
+              >
+                {opt?.type === "channel" ? <Hash className="w-3 h-3" /> : <User className="w-3 h-3" />}
+                {name}
+                <button onClick={() => onChange(selected.filter((s) => s !== name))} className="hover:opacity-70">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Trigger button */}
+      {selected.length < max && (
+        <button
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-[#8B8F97] hover:border-[#F2903D]/50 transition-colors w-[260px]"
+        >
+          <Search className="w-3 h-3" />
+          <span>
+            {loadingOptions ? "Loading Slack..." : `Select channel or member (${selected.length}/${max})`}
+          </span>
+          <ChevronDown className="w-3 h-3 ml-auto" />
+        </button>
+      )}
+
+      {/* Dropdown */}
+      {open && (
+        <div className="absolute z-50 mt-1 w-[280px] bg-[#1C1F24] border border-[#2A2D35] rounded-xl shadow-2xl overflow-hidden">
+          <div className="px-3 py-2 border-b border-[#2A2D35]">
+            <input
+              type="text"
+              placeholder="Search channels or members..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full bg-transparent text-xs text-white placeholder-[#555A63] outline-none"
+              autoFocus
+            />
+          </div>
+          <div className="max-h-[200px] overflow-y-auto thin-scrollbar">
+            {loadingOptions ? (
+              <div className="px-3 py-4 text-center text-xs text-[#8B8F97]">
+                <Loader2 className="w-4 h-4 animate-spin mx-auto mb-1" />
+                Loading...
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-[#555A63]">
+                {options.length === 0 ? "Connect Slack to see options" : "No matches found"}
+              </div>
+            ) : (
+              filtered.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => {
+                    onChange([...selected, opt.name]);
+                    setSearch("");
+                    if (selected.length + 1 >= max) setOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-[#E0E0E0] hover:bg-white/5 transition-colors"
+                >
+                  {opt.type === "channel" ? (
+                    <Hash className="w-3.5 h-3.5 text-[#8B8F97]" />
+                  ) : (
+                    <User className="w-3.5 h-3.5 text-[#8B8F97]" />
+                  )}
+                  {opt.name}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Email Multi Input ───────────────────────────────────────────────────────
+
+function EmailMultiInput({
+  emails,
+  onChange,
+  max = 3,
+}: {
+  emails: string[];
+  onChange: (v: string[]) => void;
+  max?: number;
+}) {
+  const [inputVal, setInputVal] = useState("");
+
+  function addEmail() {
+    const val = inputVal.trim().toLowerCase();
+    if (val && val.includes("@") && !emails.includes(val) && emails.length < max) {
+      onChange([...emails, val]);
+      setInputVal("");
+    }
+  }
+
+  return (
+    <div>
+      {emails.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {emails.map((email) => (
+            <span
+              key={email}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border bg-white/5 border-[#2A2D35] text-[#E0E0E0]"
+            >
+              {email}
+              <button onClick={() => onChange(emails.filter((e) => e !== email))} className="hover:opacity-70">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      {emails.length < max && (
+        <div className="flex gap-2">
+          <input
+            type="email"
+            placeholder={emails.length === 0 ? "sales@company.com" : "Add another email..."}
+            value={inputVal}
+            onChange={(e) => setInputVal(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addEmail(); } }}
+            className="bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[220px]"
+          />
+          <button
+            onClick={addEmail}
+            className="px-3 py-1.5 bg-white/5 text-[#8B8F97] rounded-lg text-xs font-medium hover:bg-white/10 hover:text-white transition-colors"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
@@ -301,6 +484,8 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>("global-rules");
+  const [slackOptions, setSlackOptions] = useState<SlackOption[]>([]);
+  const [slackLoading, setSlackLoading] = useState(false);
   const [editingDimension, setEditingDimension] = useState<number | null>(null);
   const [editDimensionValues, setEditDimensionValues] = useState<ScoringDimension | null>(null);
 
@@ -319,6 +504,25 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     fetchSettings();
   }, [fetchSettings]);
+
+  // Fetch Slack channels + members
+  useEffect(() => {
+    async function fetchSlackOptions() {
+      setSlackLoading(true);
+      try {
+        const res = await fetch(`/api/skyler/slack-options?workspaceId=${workspaceId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSlackOptions([...(data.channels ?? []), ...(data.members ?? [])]);
+        }
+      } catch {
+        // Slack may not be connected — that's fine
+      } finally {
+        setSlackLoading(false);
+      }
+    }
+    fetchSlackOptions();
+  }, [workspaceId]);
 
   function markDirty() {
     setDirty(true);
@@ -500,12 +704,16 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-[#E0E0E0] text-sm">Slack: Real-time alert with lead name, company, score, and qualification reason</p>
-                    <input
-                      type="text"
-                      value={settings.notifications.slackChannel ?? ""}
-                      onChange={(e) => updateNotification("slackChannel", e.target.value)}
-                      placeholder="#sales-alerts"
-                      className="mt-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[200px]"
+                    <p className="text-[#555A63] text-[11px] mt-0.5 mb-2">Select up to 3 channels or people to notify</p>
+                    <SlackMultiPicker
+                      selected={settings.notifications.slackChannels ?? (settings.notifications.slackChannel ? [settings.notifications.slackChannel] : [])}
+                      onChange={(channels) => {
+                        updateNotification("slackChannels", channels);
+                        updateNotification("slackChannel", channels[0] ?? "");
+                      }}
+                      options={slackOptions}
+                      loadingOptions={slackLoading}
+                      max={3}
                     />
                   </div>
                   <SettingsToggle
@@ -517,12 +725,14 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1 min-w-0">
                     <p className="text-[#E0E0E0] text-sm">Email: Detailed brief with full context, talking points, and next steps</p>
-                    <input
-                      type="text"
-                      value={settings.notifications.emailAddress ?? ""}
-                      onChange={(e) => updateNotification("emailAddress", e.target.value)}
-                      placeholder="sales@company.com"
-                      className="mt-2 bg-[#111111] border border-[#2A2D35] rounded-lg px-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 w-[200px]"
+                    <p className="text-[#555A63] text-[11px] mt-0.5 mb-2">Add up to 3 email addresses to notify</p>
+                    <EmailMultiInput
+                      emails={settings.notifications.emailAddresses ?? (settings.notifications.emailAddress ? [settings.notifications.emailAddress] : [])}
+                      onChange={(emails) => {
+                        updateNotification("emailAddresses", emails);
+                        updateNotification("emailAddress", emails[0] ?? "");
+                      }}
+                      max={3}
                     />
                   </div>
                   <SettingsToggle
