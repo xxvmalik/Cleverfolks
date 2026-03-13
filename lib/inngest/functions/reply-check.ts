@@ -132,19 +132,16 @@ async function checkOutlookReplies(
 ): Promise<number> {
   let repliesFound = 0;
 
-  // Check last 10 minutes of emails to avoid missing any
-  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-
-  // Build OData filter: recent emails from any pipeline contact
-  // Graph API doesn't support OR on from/emailAddress, so we fetch recent and filter client-side
-  const filter = `receivedDateTime ge ${tenMinAgo}`;
-  const qs = `$filter=${encodeURIComponent(filter)}&$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,body,receivedDateTime`;
+  // Fetch top 20 recent emails and filter client-side.
+  // Note: $filter with receivedDateTime doesn't work reliably through Nango proxy,
+  // so we fetch recent messages without a date filter and check timestamps ourselves.
+  const tenMinAgo = Date.now() - 10 * 60 * 1000;
 
   try {
     const response = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages?${qs}`,
+      endpoint: `/v1.0/me/messages?$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,body,receivedDateTime`,
       connectionId,
       providerConfigKey: "outlook",
     });
@@ -154,6 +151,10 @@ async function checkOutlookReplies(
     if (!messages || messages.length === 0) return 0;
 
     for (const msg of messages) {
+      // Client-side time filter: skip emails older than 10 minutes
+      const receivedAt = new Date(msg.receivedDateTime).getTime();
+      if (receivedAt < tenMinAgo) continue;
+
       const senderEmail = msg.from?.emailAddress?.address?.toLowerCase();
       if (!senderEmail || !contactEmails.includes(senderEmail)) continue;
 
