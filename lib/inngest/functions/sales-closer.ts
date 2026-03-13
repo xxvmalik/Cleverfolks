@@ -694,6 +694,63 @@ ${replyContent.slice(0, 2000)}`,
       return { status: "opt_out_processed", pipeline_id: pipelineId };
     }
 
+    // Step 4b: Handle meeting_accept — mark pipeline as meeting booked
+    if (classification.intent === "meeting_accept") {
+      await step.run("handle-meeting-accept", async () => {
+        const db = createAdminSupabaseClient();
+        const now = new Date().toISOString();
+
+        // Atomic update: only if not already resolved (dedup with calendar cron)
+        const { data: updated } = await db
+          .from("skyler_sales_pipeline")
+          .update({
+            resolution: "meeting_booked",
+            resolution_notes: `Lead confirmed meeting via reply: ${classification.reasoning}`,
+            resolved_at: now,
+            stage: "demo_booked",
+            awaiting_reply: false,
+            next_followup_at: null,
+            updated_at: now,
+          })
+          .eq("id", pipelineId)
+          .is("resolution", null)
+          .select("id")
+          .maybeSingle();
+
+        if (updated) {
+          console.log(`[Pipeline Reply] Meeting accepted by ${contactEmail} — pipeline marked meeting_booked`);
+
+          await dispatchNotification(db, {
+            workspaceId,
+            eventType: "meeting_booked",
+            pipelineId,
+            title: `Meeting confirmed: ${pipeline.contact_name}`,
+            body: `${pipeline.contact_name} confirmed a meeting. Reason: ${classification.reasoning}`,
+            metadata: {
+              contactName: pipeline.contact_name,
+              contactEmail,
+              companyName: pipeline.company_name,
+              source: "reply_classification",
+            },
+          });
+
+          // Sync to HubSpot
+          await syncResolutionToHubSpot({
+            workspaceId,
+            contactEmail,
+            contactName: pipeline.contact_name as string,
+            companyName: (pipeline.company_name as string) ?? undefined,
+            resolution: "meeting_booked",
+            hubspotDealId: (pipeline.hubspot_deal_id as string) ?? undefined,
+          });
+        } else {
+          console.log(`[Pipeline Reply] Pipeline ${pipelineId} already resolved — skipping meeting_accept update`);
+        }
+      });
+
+      // Don't return — still draft a confirmation reply below
+    }
+
     // Step 5: Fetch business context for drafting
     const memories = await step.run("fetch-reply-context", async () => {
       const db = createAdminSupabaseClient();
