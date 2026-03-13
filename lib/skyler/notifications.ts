@@ -28,10 +28,16 @@ export type NotificationParams = {
   metadata?: Record<string, unknown>;
 };
 
+export type SlackTarget = {
+  id: string;
+  name: string;
+  type: "channel" | "member";
+};
+
 type NotificationSettings = {
   slack: boolean;
-  slackChannels?: string[];
-  slackChannel?: string; // legacy single channel
+  slackChannels?: SlackTarget[];
+  slackChannel?: string; // legacy single channel (display name — deprecated)
   email: boolean;
   emailAddresses?: string[];
   emailAddress?: string; // legacy single address
@@ -100,18 +106,18 @@ export async function dispatchNotification(
 
     // 4. Slack notifications
     if (notifications.slack) {
-      const channels = resolveSlackChannels(notifications);
-      if (channels.length > 0) {
-        for (const channel of channels) {
+      const targets = resolveSlackTargets(notifications);
+      if (targets.length > 0) {
+        for (const target of targets) {
           try {
-            await sendSlackNotification(db, workspaceId, channel, {
+            await sendSlackNotification(db, workspaceId, target.id, {
               eventType,
               title,
               body,
               metadata,
             });
           } catch (slackErr) {
-            console.error(`[notifications] Slack send to ${channel} failed:`, slackErr);
+            console.error(`[notifications] Slack send to ${target.name} (${target.id}) failed:`, slackErr);
           }
         }
       }
@@ -145,16 +151,16 @@ export async function dispatchNotification(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Resolve Slack channels — supports both new multi-channel and legacy single-channel formats. */
-function resolveSlackChannels(notifications: NotificationSettings): string[] {
-  // New format: slackChannels array (up to 3)
+/** Resolve Slack targets — supports new object format and legacy string format. */
+function resolveSlackTargets(notifications: NotificationSettings): SlackTarget[] {
+  // New format: slackChannels array of { id, name, type } objects (up to 3)
   if (notifications.slackChannels && notifications.slackChannels.length > 0) {
-    return notifications.slackChannels.filter(Boolean).slice(0, 3);
+    return notifications.slackChannels
+      .filter((t) => t && t.id)
+      .slice(0, 3);
   }
-  // Legacy format: single slackChannel string
-  if (notifications.slackChannel?.trim()) {
-    return [notifications.slackChannel.trim()];
-  }
+  // Legacy format: single slackChannel string — can't resolve to ID, skip
+  // (Old display-name strings like "@Name" won't work with Slack API)
   return [];
 }
 

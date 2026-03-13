@@ -26,12 +26,14 @@ const EVENT_EMOJI: Record<NotificationEventType, string> = {
 };
 
 /**
- * Send a notification to a Slack channel via Nango proxy.
+ * Send a notification to a Slack channel or user via Nango proxy.
+ * @param channelOrUserId — A Slack channel ID (C...) or user ID (U...).
+ *   For DMs to a user, Slack's chat.postMessage accepts a user ID directly.
  */
 export async function sendSlackNotification(
   db: SupabaseClient,
   workspaceId: string,
-  channel: string,
+  channelOrUserId: string,
   payload: SlackNotificationPayload
 ): Promise<void> {
   try {
@@ -60,15 +62,15 @@ export async function sendSlackNotification(
       connectionId: integration.nango_connection_id,
       providerConfigKey: "slack",
       data: {
-        channel: channel.startsWith("#") ? channel : `#${channel}`,
+        channel: channelOrUserId,
         text,
         unfurl_links: false,
         unfurl_media: false,
       },
     });
 
-    console.log(`[slack-notify] Sent to ${channel}: ${payload.title}`);
+    console.log(`[slack-notify] Sent to ${channelOrUserId}: ${payload.title}`);
   } catch (err) {
-    console.error(`[slack-notify] Failed to send to ${channel}:`, err instanceof Error ? err.message : err);
+    console.error(`[slack-notify] Failed to send to ${channelOrUserId}:`, err instanceof Error ? err.message : err);
   }
 }

@@ -6,6 +6,12 @@ import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+type SlackTarget = {
+  id: string;
+  name: string;
+  type: "channel" | "member";
+};
+
 type ScoringDimension = {
   name: string;
   weight: number;
@@ -26,7 +32,7 @@ type WorkflowSettings = {
   notifications: {
     slack: boolean;
     slackChannel: string;
-    slackChannels: string[];
+    slackChannels: SlackTarget[];
     email: boolean;
     emailAddress: string;
     emailAddresses: string[];
@@ -305,8 +311,8 @@ function SlackMultiPicker({
   loadingOptions,
   max = 3,
 }: {
-  selected: string[];
-  onChange: (v: string[]) => void;
+  selected: SlackTarget[];
+  onChange: (v: SlackTarget[]) => void;
   options: SlackOption[];
   loadingOptions: boolean;
   max?: number;
@@ -324,8 +330,9 @@ function SlackMultiPicker({
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
+  const selectedIds = new Set(selected.map((s) => s.id));
   const filtered = options.filter((o) =>
-    o.name.toLowerCase().includes(search.toLowerCase()) && !selected.includes(o.name)
+    o.name.toLowerCase().includes(search.toLowerCase()) && !selectedIds.has(o.id)
   );
 
   return (
@@ -333,21 +340,18 @@ function SlackMultiPicker({
       {/* Selected tags */}
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-2">
-          {selected.map((name) => {
-            const opt = options.find((o) => o.name === name);
-            return (
-              <span
-                key={name}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border bg-[#F2903D]/10 border-[#F2903D]/30 text-[#F2903D]"
-              >
-                {opt?.type === "channel" ? <Hash className="w-3 h-3" /> : <User className="w-3 h-3" />}
-                {name}
-                <button onClick={() => onChange(selected.filter((s) => s !== name))} className="hover:opacity-70">
-                  <X className="w-3 h-3" />
-                </button>
-              </span>
-            );
-          })}
+          {selected.map((target) => (
+            <span
+              key={target.id}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border bg-[#F2903D]/10 border-[#F2903D]/30 text-[#F2903D]"
+            >
+              {target.type === "channel" ? <Hash className="w-3 h-3" /> : <User className="w-3 h-3" />}
+              {target.name}
+              <button onClick={() => onChange(selected.filter((s) => s.id !== target.id))} className="hover:opacity-70">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
         </div>
       )}
 
@@ -393,7 +397,7 @@ function SlackMultiPicker({
                 <button
                   key={opt.id}
                   onClick={() => {
-                    onChange([...selected, opt.name]);
+                    onChange([...selected, { id: opt.id, name: opt.name, type: opt.type }]);
                     setSearch("");
                     if (selected.length + 1 >= max) setOpen(false);
                   }}
@@ -706,10 +710,18 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                     <p className="text-[#E0E0E0] text-sm">Slack: Real-time alert with lead name, company, score, and qualification reason</p>
                     <p className="text-[#555A63] text-[11px] mt-0.5 mb-2">Select up to 3 channels or people to notify</p>
                     <SlackMultiPicker
-                      selected={settings.notifications.slackChannels ?? (settings.notifications.slackChannel ? [settings.notifications.slackChannel] : [])}
-                      onChange={(channels) => {
-                        updateNotification("slackChannels", channels);
-                        updateNotification("slackChannel", channels[0] ?? "");
+                      selected={settings.notifications.slackChannels ?? []}
+                      onChange={(targets) => {
+                        if (!settings) return;
+                        setSettings({
+                          ...settings,
+                          notifications: {
+                            ...settings.notifications,
+                            slackChannels: targets,
+                            slackChannel: targets[0]?.name ?? "",
+                          },
+                        });
+                        markDirty();
                       }}
                       options={slackOptions}
                       loadingOptions={slackLoading}
@@ -729,8 +741,16 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                     <EmailMultiInput
                       emails={settings.notifications.emailAddresses ?? (settings.notifications.emailAddress ? [settings.notifications.emailAddress] : [])}
                       onChange={(emails) => {
-                        updateNotification("emailAddresses", emails);
-                        updateNotification("emailAddress", emails[0] ?? "");
+                        if (!settings) return;
+                        setSettings({
+                          ...settings,
+                          notifications: {
+                            ...settings.notifications,
+                            emailAddresses: emails,
+                            emailAddress: emails[0] ?? "",
+                          },
+                        });
+                        markDirty();
                       }}
                       max={3}
                     />

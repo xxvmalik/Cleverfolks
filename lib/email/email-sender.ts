@@ -587,7 +587,7 @@ export async function executeEmailSend(
   // ── Open tracking pixel ──────────────────────────────────────────────────
   const currentStep = ((pipelineForThread as Record<string, unknown>)?.cadence_step as number ?? 0) + 1;
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://app.cleverfolks.ai");
+    ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://cleverfolks.vercel.app");
   const { trackingId, pixelHtml } = generateTrackingPixel(baseUrl, {
     pipelineId,
     workspaceId,
