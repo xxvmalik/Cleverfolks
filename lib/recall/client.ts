@@ -5,6 +5,30 @@
 
 const RECALL_BASE_URL = process.env.RECALL_AI_BASE_URL ?? "https://us-east-1.recall.ai";
 
+/** Platforms supported by Recall.ai */
+const SUPPORTED_MEETING_DOMAINS = [
+  "zoom.us",
+  "meet.google.com",
+  "teams.microsoft.com",
+  "teams.live.com",
+  "webex.com",
+  "gotomeeting.com",
+];
+
+/**
+ * Check if a meeting URL is for a platform Recall.ai supports.
+ */
+export function isSupportedMeetingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return SUPPORTED_MEETING_DOMAINS.some(
+      (d) => parsed.hostname === d || parsed.hostname.endsWith(`.${d}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 type CreateBotParams = {
   meetingUrl: string;
   botName?: string;

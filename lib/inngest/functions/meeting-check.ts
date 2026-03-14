@@ -12,7 +12,7 @@ import { Nango } from "@nangohq/node";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { detectPipelineMeeting, type MeetingRecord } from "@/lib/sync/meeting-detector";
-import { createRecallBot } from "@/lib/recall/client";
+import { createRecallBot, isSupportedMeetingUrl } from "@/lib/recall/client";
 
 // ── Cron: Meeting Check ─────────────────────────────────────────────────────
 
@@ -118,29 +118,33 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
           meetingsFound++;
           console.log(`[meeting-check] Meeting booked: ${result.contact_email} → pipeline ${result.pipeline_id}`);
 
-          // Dispatch Recall.ai bot to join the meeting (if meeting link exists)
+          // Dispatch Recall.ai bot to join the meeting (if supported platform link exists)
           if (result.meetingLink && result.pipeline_id) {
-            try {
-              const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-                ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://cleverfolks.vercel.app");
-              const webhookUrl = `${baseUrl}/api/recall/webhook`;
+            if (!isSupportedMeetingUrl(result.meetingLink)) {
+              console.log(`[meeting-check] Skipping Recall bot — unsupported meeting URL: ${result.meetingLink}`);
+            } else {
+              try {
+                const baseUrl = process.env.NEXT_PUBLIC_APP_URL
+                  ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://cleverfolks.vercel.app");
+                const webhookUrl = `${baseUrl}/api/recall/webhook`;
 
-              const bot = await createRecallBot({
-                meetingUrl: result.meetingLink,
-                botName: "Skyler Notetaker",
-                joinAt: result.startTime,
-                webhookUrl,
-              });
+                const bot = await createRecallBot({
+                  meetingUrl: result.meetingLink,
+                  botName: "Skyler Notetaker",
+                  joinAt: result.startTime,
+                  webhookUrl,
+                });
 
-              // Store bot ID on pipeline record for webhook matching
-              await db
-                .from("skyler_sales_pipeline")
-                .update({ recall_bot_id: bot.id, updated_at: new Date().toISOString() })
-                .eq("id", result.pipeline_id);
+                // Store bot ID on pipeline record for webhook matching
+                await db
+                  .from("skyler_sales_pipeline")
+                  .update({ recall_bot_id: bot.id, updated_at: new Date().toISOString() })
+                  .eq("id", result.pipeline_id);
 
-              console.log(`[meeting-check] Recall bot ${bot.id} scheduled for pipeline ${result.pipeline_id}`);
-            } catch (recallErr) {
-              console.error(`[meeting-check] Failed to create Recall bot:`, recallErr instanceof Error ? recallErr.message : recallErr);
+                console.log(`[meeting-check] Recall bot ${bot.id} scheduled for pipeline ${result.pipeline_id}`);
+              } catch (recallErr) {
+                console.error(`[meeting-check] Failed to create Recall bot:`, recallErr instanceof Error ? recallErr.message : recallErr);
+              }
             }
           }
         }
@@ -231,7 +235,7 @@ async function fetchOutlookCalendarEvents(
     const response = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/calendarView?startDateTime=${encodeURIComponent(past24h)}&endDateTime=${encodeURIComponent(future7d)}&$top=50&$select=id,subject,start,end,attendees,webLink,onlineMeetingUrl,isCancelled`,
+      endpoint: `/v1.0/me/calendarView?startDateTime=${encodeURIComponent(past24h)}&endDateTime=${encodeURIComponent(future7d)}&$top=50&$select=id,subject,start,end,attendees,onlineMeetingUrl,onlineMeeting,isOnlineMeeting,isCancelled`,
       connectionId,
       providerConfigKey: "outlook",
     });
@@ -263,12 +267,15 @@ async function fetchOutlookCalendarEvents(
         title: item.subject ?? "(No Title)",
         startTime: item.start?.dateTime ?? "",
         endTime: item.end?.dateTime ?? "",
-        meetingLink: item.onlineMeetingUrl ?? item.webLink ?? undefined,
+        meetingLink: item.onlineMeeting?.joinUrl ?? item.onlineMeetingUrl ?? undefined,
         provider: "outlook",
       });
     }
 
     console.log(`[meeting-check] Outlook Calendar: fetched ${events.length} events with attendees`);
+    for (const e of events) {
+      console.log(`[meeting-check] Event "${e.title}": meetingLink=${e.meetingLink ?? "none"}`);
+    }
   } catch (err) {
     console.error("[meeting-check] Outlook Calendar fetch failed:", err instanceof Error ? err.message : err);
   }
