@@ -52,6 +52,7 @@ export async function createRecallBot(params: CreateBotParams): Promise<CreateBo
   const body: Record<string, unknown> = {
     meeting_url: params.meetingUrl,
     bot_name: params.botName ?? "Skyler Notetaker",
+    webhook_url: params.webhookUrl,  // Status events: bot.done, bot.fatal, etc.
     recording_config: {
       transcript: {
         provider: {
