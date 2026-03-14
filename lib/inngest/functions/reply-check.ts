@@ -158,9 +158,16 @@ async function checkOutlookReplies(
       const senderEmail = msg.from?.emailAddress?.address?.toLowerCase();
       if (!senderEmail || !contactEmails.includes(senderEmail)) continue;
 
+      // Skip calendar acceptance/decline notifications — not real replies
+      const subject = (msg.subject ?? "") as string;
+      if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
+        console.log(`[reply-check] Skipping calendar notification from ${senderEmail}: "${subject}"`);
+        continue;
+      }
+
       // Found a recent email from a pipeline contact — run reply detection
       const content = buildEmailContent(msg);
-      console.log(`[reply-check] Found Outlook email from ${senderEmail}: "${msg.subject}"`);
+      console.log(`[reply-check] Found Outlook email from ${senderEmail}: "${subject}"`);
 
       const result = await detectPipelineReply(db, workspaceId, {
         content,
@@ -239,6 +246,12 @@ async function checkGmailReplies(
         const senderEmail = emailMatch ? emailMatch[1].toLowerCase() : fromHeader.toLowerCase();
 
         if (!contactEmails.includes(senderEmail)) continue;
+
+        // Skip calendar acceptance/decline notifications
+        if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
+          console.log(`[reply-check] Skipping calendar notification from ${senderEmail}: "${subject}"`);
+          continue;
+        }
 
         // Fetch the snippet as content
         const content = `From: ${fromHeader}\nSubject: ${subject}\n\n${msg.snippet ?? ""}`;

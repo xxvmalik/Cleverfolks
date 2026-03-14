@@ -748,7 +748,8 @@ ${replyContent.slice(0, 2000)}`,
         }
       });
 
-      // Don't return — still draft a confirmation reply below
+      // Meeting acceptance noted — no reply needed (it's a calendar accept, not a conversation)
+      return { status: "meeting_accept_noted", pipeline_id: pipelineId };
     }
 
     // Step 5: Fetch business context for drafting
