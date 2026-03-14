@@ -36,6 +36,7 @@ export async function proxy(request: NextRequest) {
     "/create-workspace",
     "/api/inngest",        // Inngest dev server + cloud executor (no user session)
     "/api/nango-webhook",  // Nango webhook calls (no user session)
+    "/api/recall/webhook", // Recall.ai webhook calls (no user session)
     "/api/admin",          // Admin endpoints (auth via secret param)
   ];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
