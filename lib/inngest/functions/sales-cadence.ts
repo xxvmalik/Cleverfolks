@@ -271,9 +271,19 @@ export const salesCadenceFollowUp = inngest.createFunction(
       timestamp: string;
     }>;
 
+    // Build meeting context if this lead had a meeting
+    const meetingOutcome = pipeline.meeting_outcome as Record<string, unknown> | null;
+    const meetingContext = meetingOutcome ? {
+      transcript: (pipeline.meeting_transcript as string) ?? undefined,
+      outcome: meetingOutcome.outcome as string | undefined,
+      reasoning: meetingOutcome.reasoning as string | undefined,
+      keyPoints: meetingOutcome.key_discussion_points as string[] | undefined,
+      followUpDate: meetingOutcome.follow_up_date as string | undefined,
+    } : null;
+
     // Draft follow-up email
     const draft = await step.run("draft-followup-email", async () => {
-      console.log(`[cadence-followup] Drafting step ${nextStep} for ${contactEmail}`);
+      console.log(`[cadence-followup] Drafting step ${nextStep} for ${contactEmail}${meetingContext ? " [with meeting context]" : ""}`);
 
       return await draftEmail({
         workspaceId,
@@ -295,6 +305,7 @@ export const salesCadenceFollowUp = inngest.createFunction(
         knowledgeProfile,
         senderName: senderIdentity.senderName ?? undefined,
         senderCompany: senderIdentity.senderCompany ?? undefined,
+        meetingContext,
       });
     });
 

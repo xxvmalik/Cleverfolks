@@ -124,15 +124,10 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
               console.log(`[meeting-check] Skipping Recall bot — unsupported meeting URL: ${result.meetingLink}`);
             } else {
               try {
-                const baseUrl = process.env.NEXT_PUBLIC_APP_URL
-                  ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "https://cleverfolks.vercel.app");
-                const webhookUrl = `${baseUrl}/api/recall/webhook`;
-
                 const bot = await createRecallBot({
                   meetingUrl: result.meetingLink,
                   botName: "Skyler Notetaker",
                   joinAt: result.startTime,
-                  webhookUrl,
                 });
 
                 // Store bot ID on pipeline record for webhook matching

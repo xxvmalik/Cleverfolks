@@ -114,6 +114,40 @@ Match their tone and energy. Reference what they actually said. Under 100 words.
 SUBJECT LINE: Re: [original subject]`,
 };
 
+// ── Meeting context block ────────────────────────────────────────────────────
+
+function buildMeetingContextBlock(ctx: MeetingContext): string {
+  const parts: string[] = ["\n## MEETING CONTEXT (you had a meeting with this prospect)"];
+
+  if (ctx.outcome) {
+    parts.push(`Meeting outcome: ${ctx.outcome}${ctx.reasoning ? ` — ${ctx.reasoning}` : ""}`);
+  }
+  if (ctx.keyPoints && ctx.keyPoints.length > 0) {
+    parts.push(`Key discussion points:\n${ctx.keyPoints.map((p) => `- ${p}`).join("\n")}`);
+  }
+  if (ctx.followUpDate) {
+    parts.push(`Follow-up timing discussed: ${ctx.followUpDate}`);
+  }
+  if (ctx.transcript) {
+    // Include last ~3000 chars of transcript for context
+    const trimmed = ctx.transcript.length > 3000
+      ? `...\n${ctx.transcript.slice(-3000)}`
+      : ctx.transcript;
+    parts.push(`Meeting transcript (recent portion):\n${trimmed}`);
+  }
+
+  parts.push(`
+CRITICAL MEETING FOLLOW-UP RULES:
+- Reference specific things discussed in the meeting. DO NOT write a generic follow-up.
+- If action items were agreed, mention them: "As discussed, I'll send over the..."
+- If a next step was agreed, confirm it: "Looking forward to our follow-up on..."
+- DO NOT re-pitch services already discussed in the meeting.
+- DO NOT act like you've never spoken — you literally just met with them.
+- Keep it short and specific to what was discussed.`);
+
+  return parts.join("\n");
+}
+
 // ── Three lead scenarios ─────────────────────────────────────────────────────
 
 function detectLeadScenario(params: {
@@ -226,6 +260,7 @@ function buildDraftPrompt(params: {
   contactEmail: string;
   companyName: string;
   replyIntent?: string;
+  meetingContext?: MeetingContext | null;
 }): string {
   const {
     cadenceStep,
@@ -242,6 +277,7 @@ function buildDraftPrompt(params: {
     contactName,
     companyName,
     replyIntent,
+    meetingContext,
   } = params;
 
   const angleInstructions = CADENCE_ANGLES[cadenceAngle] ?? CADENCE_ANGLES.initial_outreach;
@@ -425,7 +461,7 @@ ${companyResearch.pain_points.length > 0 ? `Pain points: ${companyResearch.pain_
 ${companyResearch.recent_news.length > 0 ? `Recent news: ${companyResearch.recent_news.join("; ")}` : ""}
 ${companyResearch.talking_points.length > 0 ? `Hooks: ${companyResearch.talking_points.join("; ")}` : ""}
 ${alignmentBlock}${leadContextBlock}${objectionBlock}
-${threadBlock}
+${threadBlock}${meetingContext ? buildMeetingContextBlock(meetingContext) : ""}
 ## LEAD SCENARIO
 ${scenarioInstructions}
 
@@ -483,6 +519,14 @@ ${senderFirstName ? `Sign off as "${senderFirstName}" with "${senderCompany ?? "
 /**
  * Draft a personalised outreach email using Claude Sonnet.
  */
+export type MeetingContext = {
+  transcript?: string;
+  outcome?: string;
+  reasoning?: string;
+  keyPoints?: string[];
+  followUpDate?: string;
+};
+
 export async function draftEmail(params: {
   workspaceId: string;
   pipelineRecord: SalesPipelineRecord;
@@ -498,8 +542,9 @@ export async function draftEmail(params: {
   senderCompany?: string;
   replyIntent?: string;
   userFeedback?: string;
+  meetingContext?: MeetingContext | null;
 }): Promise<DraftedEmail> {
-  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany, replyIntent, userFeedback } = params;
+  const { pipelineRecord, cadenceStep, companyResearch, salesVoice, conversationThread, salesPlaybook, leadContext, knowledgeProfile, senderName, senderCompany, replyIntent, userFeedback, meetingContext } = params;
   let workspaceMemories = params.workspaceMemories;
 
   // Fallback: fetch memories directly if none were passed and no playbook
@@ -544,6 +589,7 @@ export async function draftEmail(params: {
     contactEmail: pipelineRecord.contact_email,
     companyName: pipelineRecord.company_name,
     replyIntent,
+    meetingContext,
   });
 
   // Inject user feedback as additional drafting instruction

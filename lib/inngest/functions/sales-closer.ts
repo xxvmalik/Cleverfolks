@@ -832,8 +832,18 @@ ${replyContent.slice(0, 2000)}`,
       timestamp: string;
     }>;
 
+    // Build meeting context if this lead had a meeting
+    const replyMeetingOutcome = pipeline.meeting_outcome as Record<string, unknown> | null;
+    const replyMeetingContext = replyMeetingOutcome ? {
+      transcript: (pipeline.meeting_transcript as string) ?? undefined,
+      outcome: replyMeetingOutcome.outcome as string | undefined,
+      reasoning: replyMeetingOutcome.reasoning as string | undefined,
+      keyPoints: replyMeetingOutcome.key_discussion_points as string[] | undefined,
+      followUpDate: replyMeetingOutcome.follow_up_date as string | undefined,
+    } : null;
+
     const draft = await step.run("draft-reply-email", async () => {
-      console.log(`[Pipeline Reply] Drafting ${classification.intent} reply for ${contactEmail}...`);
+      console.log(`[Pipeline Reply] Drafting ${classification.intent} reply for ${contactEmail}${replyMeetingContext ? " [with meeting context]" : ""}...`);
 
       return await draftEmail({
         workspaceId,
@@ -856,6 +866,7 @@ ${replyContent.slice(0, 2000)}`,
         senderName: replySender.senderName ?? undefined,
         senderCompany: replySender.senderCompany ?? undefined,
         replyIntent: classification.intent,
+        meetingContext: replyMeetingContext,
       });
     });
 

@@ -33,7 +33,6 @@ type CreateBotParams = {
   meetingUrl: string;
   botName?: string;
   joinAt?: string; // ISO timestamp — if >10min future, bot is "scheduled"
-  webhookUrl: string; // Our webhook endpoint for status + transcript events
 };
 
 type CreateBotResult = {
@@ -43,7 +42,8 @@ type CreateBotResult = {
 
 /**
  * Create a Recall bot and send it to a meeting.
- * The bot joins, records, and sends transcript events to our webhook.
+ * Webhook events (bot.done, bot.fatal, transcript) are delivered via
+ * the account-level webhook configured in the Recall dashboard.
  */
 export async function createRecallBot(params: CreateBotParams): Promise<CreateBotResult> {
   const apiKey = process.env.RECALL_AI_API_KEY;
@@ -52,20 +52,12 @@ export async function createRecallBot(params: CreateBotParams): Promise<CreateBo
   const body: Record<string, unknown> = {
     meeting_url: params.meetingUrl,
     bot_name: params.botName ?? "Skyler Notetaker",
-    webhook_url: params.webhookUrl,  // Status events: bot.done, bot.fatal, etc.
     recording_config: {
       transcript: {
         provider: {
           meeting_captions: {},
         },
       },
-      realtime_endpoints: [
-        {
-          type: "webhook",
-          url: params.webhookUrl,
-          events: ["transcript.data"],
-        },
-      ],
     },
   };
 
@@ -99,6 +91,31 @@ export async function createRecallBot(params: CreateBotParams): Promise<CreateBo
     id: data.id,
     meetingUrl: params.meetingUrl,
   };
+}
+
+/**
+ * Get the status of a Recall bot.
+ */
+export async function getRecallBotStatus(botId: string): Promise<{ status: string; statusChanges: Array<{ code: string; created_at: string }> } | null> {
+  const apiKey = process.env.RECALL_AI_API_KEY;
+  if (!apiKey) throw new Error("RECALL_AI_API_KEY not set");
+
+  try {
+    const response = await fetch(`${RECALL_BASE_URL}/api/v1/bot/${botId}`, {
+      method: "GET",
+      headers: { Authorization: `Token ${apiKey}` },
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    return {
+      status: data.status_changes?.[data.status_changes.length - 1]?.code ?? "unknown",
+      statusChanges: data.status_changes ?? [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**

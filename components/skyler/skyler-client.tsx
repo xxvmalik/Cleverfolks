@@ -28,6 +28,9 @@ import {
   CornerUpLeft,
   Lightbulb,
   AlertTriangle,
+  FileText,
+  CheckCircle,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -451,6 +454,25 @@ type SkylerNote = {
   action?: string;
 };
 
+type MeetingOutcome = {
+  outcome?: string;
+  reasoning?: string;
+  key_discussion_points?: string[];
+  follow_up_date?: string;
+  skyler_tasks?: Array<{ task: string; follow_up_date?: string; context: string }>;
+  user_tasks?: Array<{ task: string; deadline?: string; context: string }>;
+  error?: string;
+};
+
+type ActionNote = {
+  task: string;
+  deadline?: string;
+  context: string;
+  completed: boolean;
+  notified: boolean;
+  source?: string;
+};
+
 type PipelineRecord = {
   id: string;
   contact_name: string;
@@ -465,6 +487,9 @@ type PipelineRecord = {
   updated_at: string;
   conversation_thread: ConvoThreadEntry[];
   skyler_note?: SkylerNote | null;
+  meeting_transcript?: string | null;
+  meeting_outcome?: MeetingOutcome | null;
+  action_notes?: ActionNote[] | null;
   pending_actions: Array<{
     id: string;
     description: string;
@@ -573,6 +598,7 @@ export function SkylerClient({
   const [previewActionId, setPreviewActionId] = useState<string | null>(null);
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
+  const [transcriptOpenId, setTranscriptOpenId] = useState<string | null>(null);
   const [pinnedContext, setPinnedContext] = useState<PinnedLeadContext | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
@@ -1472,6 +1498,93 @@ export function SkylerClient({
                                     })}
                                 </div>
                               )}
+                            </div>
+                          )}
+
+                          {/* Meeting Outcome + Transcript */}
+                          {rec.meeting_outcome && !rec.meeting_outcome.error && (
+                            <div className="mt-3">
+                              {/* Outcome summary */}
+                              <div className="rounded-lg bg-[#1A1A1A] border border-[#2A2D35] p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <FileText className="w-3.5 h-3.5 text-[#06B6D4]" />
+                                  <span className="text-[#06B6D4] text-xs font-semibold">Meeting Summary</span>
+                                  <span
+                                    className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-medium"
+                                    style={{
+                                      background: rec.meeting_outcome.outcome === "won" ? "#4ADE8020" : rec.meeting_outcome.outcome === "lost" ? "#F8717120" : "#3A89FF20",
+                                      color: rec.meeting_outcome.outcome === "won" ? "#4ADE80" : rec.meeting_outcome.outcome === "lost" ? "#F87171" : "#3A89FF",
+                                    }}
+                                  >
+                                    {rec.meeting_outcome.outcome === "won" ? "Deal Won" : rec.meeting_outcome.outcome === "lost" ? "Deal Lost" : "Follow-up Needed"}
+                                  </span>
+                                </div>
+                                <p className="text-[#E0E0E0] text-xs leading-relaxed mb-2">{rec.meeting_outcome.reasoning}</p>
+                                {rec.meeting_outcome.key_discussion_points && rec.meeting_outcome.key_discussion_points.length > 0 && (
+                                  <div className="space-y-1">
+                                    <p className="text-[#8B8F97] text-[10px] font-medium uppercase">Key Points</p>
+                                    {rec.meeting_outcome.key_discussion_points.map((point, i) => (
+                                      <p key={i} className="text-[#E0E0E0] text-xs pl-2 border-l border-[#2A2D35]">{point}</p>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* Transcript toggle */}
+                                {rec.meeting_transcript && (
+                                  <button
+                                    onClick={() => setTranscriptOpenId(transcriptOpenId === rec.id ? null : rec.id)}
+                                    className="mt-2 flex items-center gap-1.5 px-2.5 py-1 bg-[#06B6D4]/10 text-[#06B6D4] rounded-lg text-xs font-medium hover:bg-[#06B6D4]/20 transition-colors"
+                                  >
+                                    <FileText className="w-3 h-3" />
+                                    {transcriptOpenId === rec.id ? "Hide Transcript" : "View Transcript"}
+                                  </button>
+                                )}
+                                {transcriptOpenId === rec.id && rec.meeting_transcript && (
+                                  <div className="mt-2 bg-[#111111] border border-[#2A2D35]/50 rounded-lg p-3 max-h-[300px] overflow-y-auto">
+                                    <pre className="text-[#E0E0E0] text-xs leading-relaxed whitespace-pre-wrap font-sans">{rec.meeting_transcript}</pre>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Action Notes */}
+                          {rec.action_notes && rec.action_notes.length > 0 && (
+                            <div className="mt-3">
+                              <div className="rounded-lg bg-[#1A1A1A] border border-[#2A2D35] p-3">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Clock className="w-3.5 h-3.5 text-[#FBB040]" />
+                                  <span className="text-[#FBB040] text-xs font-semibold">Action Notes</span>
+                                </div>
+                                <div className="space-y-2">
+                                  {rec.action_notes.map((note, i) => (
+                                    <div
+                                      key={i}
+                                      className={cn(
+                                        "flex items-start gap-2 text-xs p-2 rounded-lg",
+                                        note.completed ? "bg-[#4ADE80]/5" : "bg-[#FBB040]/5"
+                                      )}
+                                    >
+                                      {note.completed ? (
+                                        <CheckCircle className="w-3.5 h-3.5 text-[#4ADE80] mt-0.5 flex-shrink-0" />
+                                      ) : (
+                                        <Clock className="w-3.5 h-3.5 text-[#FBB040] mt-0.5 flex-shrink-0" />
+                                      )}
+                                      <div className="flex-1 min-w-0">
+                                        <p className={cn("text-[#E0E0E0]", note.completed && "line-through text-[#8B8F97]")}>{note.task}</p>
+                                        {note.deadline && (
+                                          <p className="text-[#8B8F97] text-[10px] mt-0.5">
+                                            Due: {new Date(note.deadline).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}
+                                          </p>
+                                        )}
+                                        {note.context && (
+                                          <p className="text-[#555A63] text-[10px] mt-0.5">{note.context}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
                           )}
 

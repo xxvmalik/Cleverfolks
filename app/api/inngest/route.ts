@@ -7,6 +7,7 @@ import { salesCadenceScheduler, salesCadenceFollowUp } from "@/lib/inngest/funct
 import { replyCheckScheduler } from "@/lib/inngest/functions/reply-check";
 import { meetingCheckScheduler } from "@/lib/inngest/functions/meeting-check";
 import { processMeetingTranscript, actionNoteDeadlineChecker } from "@/lib/inngest/functions/meeting-transcript";
+import { recallBotChecker } from "@/lib/inngest/functions/recall-bot-checker";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -23,5 +24,6 @@ export const { GET, POST, PUT } = serve({
     meetingCheckScheduler,
     processMeetingTranscript,
     actionNoteDeadlineChecker,
+    recallBotChecker,
   ],
 });
