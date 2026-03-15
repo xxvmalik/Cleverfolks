@@ -1,13 +1,12 @@
 /**
- * Multi-LLM Model Router for Skyler.
+ * Two-Tier LLM Router for Skyler.
  *
- * Routes tasks to the right model tier based on complexity:
- * - fast: GPT-4o-mini (classification, extraction, sentiment)
- * - medium: Claude Haiku 4.5 (summarisation, knowledge profiles)
+ * Routes tasks to the right model based on complexity:
+ * - fast: GPT-4o-mini (classification, extraction, summarisation, knowledge profiles)
  * - complex: Claude Sonnet 4 (reasoning, email composition, deal analysis)
  *
  * Includes attempt-based fallback: first 2 retries use primary model,
- * subsequent retries fall back to a cheaper tier.
+ * subsequent retries fall back to GPT-4o-mini.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -16,18 +15,16 @@ import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 // ── Model config ─────────────────────────────────────────────────────────────
 
-export type ModelTier = "fast" | "medium" | "complex";
+export type ModelTier = "fast" | "complex";
 
 const MODEL_IDS: Record<ModelTier, string> = {
   fast: "gpt-4o-mini",
-  medium: "claude-haiku-4-5-20241022",
   complex: "claude-sonnet-4-20250514",
 };
 
 const FALLBACK_TIER: Record<ModelTier, ModelTier> = {
-  complex: "medium",
-  medium: "fast",
-  fast: "fast", // no cheaper option
+  complex: "fast",
+  fast: "fast",
 };
 
 // ── Token usage tracking ─────────────────────────────────────────────────────
@@ -92,9 +89,8 @@ export async function routedLLMCall(
   // Route to appropriate provider
   if (effectiveTier === "fast") {
     return await callOpenAI(params, effectiveTier, model);
-  } else {
-    return await callAnthropic(params, effectiveTier, model);
   }
+  return await callAnthropic(params, effectiveTier, model);
 }
 
 // ── OpenAI (GPT-4o-mini) ─────────────────────────────────────────────────────
@@ -123,7 +119,7 @@ async function callOpenAI(
   return { text, usage, stopReason: "stop" };
 }
 
-// ── Anthropic (Haiku / Sonnet) ───────────────────────────────────────────────
+// ── Anthropic (Sonnet) ──────────────────────────────────────────────────────
 
 async function callAnthropic(
   params: RoutedCallParams,

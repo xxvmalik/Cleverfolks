@@ -10,7 +10,7 @@ import type { ModelTier } from "./model-router";
 // ── Task-to-tier mapping ─────────────────────────────────────────────────────
 
 const TASK_TIERS: Record<string, ModelTier> = {
-  // Tier 1: GPT-4o-mini (fast, cheap)
+  // GPT-4o-mini — fast, cheap, handles everything that isn't complex reasoning
   classify_intent: "fast",
   detect_referral: "fast",
   extract_entities: "fast",
@@ -19,15 +19,13 @@ const TASK_TIERS: Record<string, ModelTier> = {
   summarise_company_research: "fast",
   classify_reply_intent: "fast",
   classify_directive: "fast",
+  summarise_thread: "fast",
+  generate_knowledge_profile: "fast",
+  extract_memories: "fast",
+  summarise_meeting: "fast",
+  generate_conversation_summary: "fast",
 
-  // Tier 2: Claude Haiku 4.5 (medium)
-  summarise_thread: "medium",
-  generate_knowledge_profile: "medium",
-  extract_memories: "medium",
-  summarise_meeting: "medium",
-  generate_conversation_summary: "medium",
-
-  // Tier 3: Claude Sonnet 4 (complex, high quality)
+  // Claude Sonnet 4 — complex reasoning, composition, analysis
   reason_about_event: "complex",
   compose_email: "complex",
   analyse_deal: "complex",
