@@ -70,7 +70,7 @@ export type SkylerWorkflowSettings = {
   };
 };
 
-const DEFAULT_SETTINGS: SkylerWorkflowSettings = {
+export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
   autonomyLevel: "draft_approve",
   scoringDimensions: [
     { name: "Company Size", weight: 25, description: "50-1000 employees = highest score. Under 10 or over 5000 = penalty." },
@@ -129,9 +129,9 @@ export async function GET(req: NextRequest) {
   const db = createAdminSupabaseClient();
   const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
   const settings = (ws?.settings ?? {}) as Record<string, unknown>;
-  const workflow = (settings.skyler_workflow ?? DEFAULT_SETTINGS) as SkylerWorkflowSettings;
+  const workflow = (settings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
 
-  return NextResponse.json({ settings: { ...DEFAULT_SETTINGS, ...workflow } });
+  return NextResponse.json({ settings: { ...DEFAULT_WORKFLOW_SETTINGS, ...workflow } });
 }
 
 export async function POST(req: NextRequest) {
@@ -152,7 +152,7 @@ export async function POST(req: NextRequest) {
   // Read current settings
   const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
   const currentSettings = (ws?.settings ?? {}) as Record<string, unknown>;
-  const currentWorkflow = (currentSettings.skyler_workflow ?? DEFAULT_SETTINGS) as SkylerWorkflowSettings;
+  const currentWorkflow = (currentSettings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
 
   // Merge
   const merged = { ...currentWorkflow, ...newSettings };

@@ -5,6 +5,7 @@ import {
   type KnowledgeProfileRow,
   formatKnowledgeProfile,
 } from "@/lib/cleverbrain/system-prompt";
+import { type SkylerWorkflowSettings, DEFAULT_WORKFLOW_SETTINGS } from "@/app/api/skyler/workflow-settings/route";
 
 // Re-export types for convenience
 export type { WorkspaceRow, OnboardingRow, KnowledgeProfileRow };
@@ -87,6 +88,77 @@ When the ideal integration is not connected:
 4. Recommend connecting the ideal integration — explain what it would unlock for our pipeline`;
 }
 
+// ── Workflow Settings formatter ───────────────────────────────────────────────
+
+function formatWorkflowSettings(ws: SkylerWorkflowSettings | null, isConfigured: boolean): string {
+  if (!ws) return "";
+
+  const s = ws;
+  const or = (val: string | undefined, fallback: string) => val?.trim() || fallback;
+
+  const lines: string[] = [];
+  lines.push("## Your Sales Configuration");
+  lines.push("");
+
+  // Sales Process
+  lines.push("### Sales Process");
+  lines.push(`- Primary goal: ${or(s.primaryGoal, "Not configured")}`);
+  lines.push(`- Sales journey: ${or(s.salesJourney, "Not configured")}`);
+  lines.push(`- Pricing structure: ${or(s.pricingStructure, "Not configured")}`);
+  lines.push(`- Average sales cycle: ${or(s.averageSalesCycle, "Not configured")}`);
+  lines.push(`- Average deal size: ${or(s.averageDealSize, "Not configured")}`);
+  lines.push(`- Max follow-up attempts: ${s.maxFollowUpAttempts ?? 4}`);
+  lines.push(`- Book demos using: ${or(s.bookDemosUsing, "Not configured")}`);
+  lines.push("");
+
+  // Communication Style
+  lines.push("### Communication Style");
+  lines.push(`- Formality: ${or(s.formality, "Professional but friendly")}`);
+  lines.push(`- Approach: ${or(s.communicationApproach, "Consultative")}`);
+  if (s.phrasesToAlwaysUse && s.phrasesToAlwaysUse.length > 0) {
+    lines.push(`- Always use these phrases: ${s.phrasesToAlwaysUse.map(p => `"${p}"`).join(", ")}`);
+  } else {
+    lines.push("- Always use these phrases: (none configured)");
+  }
+  if (s.phrasesToNeverUse && s.phrasesToNeverUse.length > 0) {
+    lines.push(`- NEVER use these phrases: ${s.phrasesToNeverUse.map(p => `"${p}"`).join(", ")}`);
+  } else {
+    lines.push("- NEVER use these phrases: (none configured)");
+  }
+  lines.push("");
+
+  // Autonomy Level
+  lines.push("### Your Autonomy Level");
+  lines.push(`- Global mode: ${s.autonomyLevel === "full_autonomy" ? "Full Autonomy" : "Draft & Approve"}`);
+  const t = s.autonomyToggles ?? { sendFollowUps: true, handleObjections: true, bookMeetings: true, firstOutreachApproval: true };
+  lines.push(`- Can send follow-up emails autonomously: ${t.sendFollowUps ? "Yes" : "No"}`);
+  lines.push(`- Can handle objections autonomously: ${t.handleObjections ? "Yes" : "No"}`);
+  lines.push(`- Can book meetings autonomously: ${t.bookMeetings ? "Yes" : "No"}`);
+  lines.push(`- Must get approval for first outreach: ${t.firstOutreachApproval ? "Yes" : "No"}`);
+  lines.push("");
+
+  // Escalation Rules
+  const esc = s.escalationRules ?? { dealValueExceedsThreshold: true, dealValueThreshold: 5000, vipAccount: true, negativeSentiment: true, firstContact: true, cSuiteContact: true };
+  lines.push("### Escalation Rules (ALWAYS escalate when)");
+  if (esc.dealValueExceedsThreshold) {
+    lines.push(`- Deal value exceeds: $${(esc.dealValueThreshold ?? 5000).toLocaleString()}`);
+  }
+  if (esc.vipAccount) lines.push("- Contact is VIP/key account: Yes");
+  if (esc.negativeSentiment) lines.push("- Negative sentiment detected: Yes");
+  if (esc.firstContact) lines.push("- First contact with new lead: Yes");
+  if (esc.cSuiteContact) lines.push("- C-suite contact involved: Yes");
+  lines.push("");
+
+  lines.push("Note: These are your configured boundaries. The guardrail engine enforces them automatically — you do not need to self-police these rules, but be aware of them when reasoning about actions.");
+
+  if (!isConfigured) {
+    lines.push("");
+    lines.push("⚠️ Your workspace settings are not fully configured. Using conservative defaults — all actions require approval. Ask the user to configure Workflow Settings for a more personalized experience.");
+  }
+
+  return lines.join("\n");
+}
+
 // ── System prompt builder ─────────────────────────────────────────────────────
 
 export function buildSkylerSystemPrompt(
@@ -102,7 +174,8 @@ export function buildSkylerSystemPrompt(
     times_reinforced: number;
   }>,
   autonomyLevel: "full" | "approval_required" | "read_only" = "approval_required",
-  pendingActions?: Array<{ id: string; description: string }>
+  pendingActions?: Array<{ id: string; description: string }>,
+  workflowSettings?: SkylerWorkflowSettings | null
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
@@ -278,6 +351,17 @@ Always use the correct term from your VERY FIRST mention.\n\n`
     });
   }
 
+  // ── Workflow Settings section ────────────────────────────────────────
+  const effectiveWorkflow = workflowSettings
+    ? { ...DEFAULT_WORKFLOW_SETTINGS, ...workflowSettings }
+    : DEFAULT_WORKFLOW_SETTINGS;
+  const isWorkflowConfigured = workflowSettings != null &&
+    (!!workflowSettings.primaryGoal || !!workflowSettings.salesJourney || !!workflowSettings.pricingStructure);
+  const workflowSettingsSection = formatWorkflowSettings(
+    effectiveWorkflow,
+    isWorkflowConfigured
+  );
+
   // ── Autonomy description ──────────────────────────────────────────────
   const autonomyDescription = {
     full: "You have FULL AUTONOMY. You can take sales actions directly — send emails, create deals, update CRM records. Act decisively.",
@@ -292,6 +376,8 @@ You say "our pipeline", "our prospects", "our team". You celebrate wins ("Great 
 TODAY IS: ${humanDate}, ${humanTime} (${isoDate}). Workspace timezone: ${workspaceTimezone}.
 
 AUTONOMY LEVEL: ${autonomyDescription}
+
+${workflowSettingsSection}
 ${companySection}${intelligenceSection}${memorySection}
 ${integrationMap}
 

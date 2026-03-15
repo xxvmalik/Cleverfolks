@@ -13,6 +13,7 @@ import {
   type OnboardingRow,
   type KnowledgeProfileRow,
 } from "@/lib/skyler/system-prompt";
+import type { SkylerWorkflowSettings } from "@/app/api/skyler/workflow-settings/route";
 import { SKYLER_TOOLS } from "@/lib/skyler/tools";
 import { executeSkylerToolCall } from "@/lib/skyler/tool-handlers";
 import type { UnifiedResult } from "@/lib/strategy-executor";
@@ -212,6 +213,14 @@ export async function POST(request: NextRequest) {
     : "approval_required" as const; // default when null/undefined
   console.log(`[skyler-chat] Autonomy level resolved to: ${autonomyLevel} (raw setting: ${rawAutonomy ?? "null"})`);
 
+  // Extract Workflow Settings (stored in workspaces.settings.skyler_workflow)
+  const rawWorkflow = wsSettings.skyler_workflow as SkylerWorkflowSettings | undefined;
+  const workflowSettings: SkylerWorkflowSettings | null = rawWorkflow ?? null;
+  if (workflowSettings) {
+    console.log(`[skyler-chat] Workflow settings loaded — autonomy: ${workflowSettings.autonomyLevel}, goal: ${workflowSettings.primaryGoal ?? "not set"}`);
+  } else {
+    console.log(`[skyler-chat] No workflow settings configured — using defaults`);
+  }
 
   // Fetch pending actions for this conversation (for natural language approval)
   let pendingActions: Array<{ id: string; description: string }> = [];
@@ -243,7 +252,8 @@ export async function POST(request: NextRequest) {
     integrationManifest,
     memories,
     autonomyLevel,
-    pendingActions
+    pendingActions,
+    workflowSettings
   );
 
   // ── Inject lead/pipeline tag context ────────────────────────────────────
