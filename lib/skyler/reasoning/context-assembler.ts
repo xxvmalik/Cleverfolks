@@ -290,8 +290,8 @@ ${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously 
 Based on everything above, decide the single best action to take right now.
 
 Available actions:
-- draft_email: Compose an email to the lead (provide subject + content)
-- update_stage: Move the lead to a different pipeline stage (provide new_stage)
+- draft_email: Compose an email to the lead (provide subject + content). Also use this for invoices/proposals — draft the invoice details as an email since invoicing tools aren't available yet.
+- update_stage: Move the lead to a different pipeline stage (provide new_stage). Valid stages: initial_outreach, follow_up_1, follow_up_2, follow_up_3, replied, negotiation, demo_booked, meeting_booked, follow_up_meeting, proposal, closed_won, closed_lost
 - schedule_followup: Schedule a follow-up for later (provide delay in hours + reason)
 - create_note: Add a note to the lead record (provide note_text)
 - request_info: Ask the user for information you need (provide request_description)

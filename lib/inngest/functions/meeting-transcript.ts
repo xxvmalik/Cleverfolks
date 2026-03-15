@@ -41,7 +41,7 @@ type MeetingIntelligence = {
 };
 
 type MeetingSummary = {
-  outcome: "won" | "lost" | "needs_follow_up";
+  outcome: "won" | "lost" | "needs_follow_up" | "proposal";
   executive_summary: string;
   key_takeaways: string[];
   engagement_level: string;
@@ -223,7 +223,7 @@ ${intelligenceContext}
 
 Return JSON:
 {
-  "outcome": "won|lost|needs_follow_up",
+  "outcome": "won|lost|proposal|needs_follow_up",
   "executive_summary": "3-5 sentence summary of the meeting",
   "key_takeaways": ["takeaway 1", "takeaway 2"],
   "engagement_level": "high/medium/low — how engaged was the prospect",
@@ -235,9 +235,10 @@ Return JSON:
 }
 
 OUTCOME RULES:
-- "won": prospect explicitly agreed to buy, sign, pay, or move forward
+- "won": prospect explicitly agreed AND payment/contract is already done — deal is fully closed
+- "proposal": prospect agreed to buy/pay/move forward BUT a commercial step remains (invoice, proposal, contract, payment pending). This is a verbal yes — they committed but haven't paid yet
 - "lost": prospect explicitly said no, going with competitor, not interested
-- "needs_follow_up": anything else
+- "needs_follow_up": anything else — more discussion needed, no clear commitment
 
 TRANSCRIPT:
 ${transcriptText.slice(0, 12000)}`,
@@ -329,6 +330,29 @@ ${transcriptText.slice(0, 12000)}`,
           companyName: companyName ?? undefined,
           resolution: "closed_won",
         });
+      } else if (summary.outcome === "proposal") {
+        // Prospect committed but a commercial step remains (invoice, contract, payment)
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            stage: "proposal",
+            meeting_outcome: meetingOutcome,
+            action_notes: actionNotes,
+            awaiting_reply: false,
+            next_followup_at: followUpDate ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            updated_at: now,
+          })
+          .eq("id", pipelineId);
+
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "meeting_booked",
+          pipelineId,
+          title: `Proposal stage: ${contactName}`,
+          body: `${contactName} committed to move forward. Next step: ${summary.reasoning}`,
+          metadata: { contactEmail, companyName, source: "meeting_transcript" },
+        });
+
       } else if (summary.outcome === "lost") {
         await db
           .from("skyler_sales_pipeline")
@@ -390,8 +414,8 @@ ${transcriptText.slice(0, 12000)}`,
     });
 
     // Step 5: Generate follow-up strategy via reasoning engine (Claude Sonnet / complex tier)
-    // Only for needs_follow_up — won/lost don't need a follow-up email
-    if (summary.outcome === "needs_follow_up") {
+    // For needs_follow_up and proposal — won/lost don't need a follow-up email
+    if (summary.outcome === "needs_follow_up" || summary.outcome === "proposal") {
       await step.run("generate-followup-strategy", async () => {
         const db = createAdminSupabaseClient();
         await db

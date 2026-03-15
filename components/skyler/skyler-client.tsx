@@ -539,6 +539,7 @@ const STAGE_COLORS: Record<string, string> = {
   pending_clarification: "#FBB040",
   meeting_booked: "#06B6D4",
   follow_up_meeting: "#3B82F6",
+  proposal: "#F2903D",
   closed_lost: "#F87171",
 };
 
