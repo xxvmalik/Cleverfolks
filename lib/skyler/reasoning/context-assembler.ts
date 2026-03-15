@@ -13,6 +13,7 @@ import {
 } from "@/app/api/skyler/workflow-settings/route";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { getActiveDirectives, type Directive } from "@/lib/skyler/directives/directive-store";
+import { getLeadMeetingContext } from "@/lib/skyler/meetings/meeting-search";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,17 @@ export type ReasoningContext = {
   sender: SenderIdentity;
   directives: Directive[];
   pendingRequests: Array<{ id: string; request_description: string; created_at: string }>;
+  meetingContext: {
+    hasMeetings: boolean;
+    meetingCount: number;
+    latestMeeting: {
+      id: string;
+      meetingDate: string;
+      summary: string | null;
+      intelligence: Record<string, unknown> | null;
+      participants: Array<{ name: string }> | null;
+    } | null;
+  } | null;
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -88,7 +100,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -122,6 +134,9 @@ export async function assembleReasoningContext(
       .eq("pipeline_id", pipelineId)
       .eq("status", "pending")
       .order("created_at", { ascending: false }),
+
+    // Meeting intelligence for this lead
+    getLeadMeetingContext(pipelineId),
   ]);
 
   // Extract workflow settings
@@ -177,13 +192,14 @@ export async function assembleReasoningContext(
     sender: { ownerName, companyName },
     directives: directivesResult,
     pendingRequests: (requestsResult.data ?? []) as Array<{ id: string; request_description: string; created_at: string }>,
+    meetingContext: meetingContextResult,
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -200,9 +216,27 @@ export function formatReasoningPrompt(ctx: ReasoningContext): string {
           .join("\n\n")
       : "(No conversation history yet)";
 
-  // Meeting context
+  // Meeting context — use structured intelligence if available, fall back to legacy
   let meetingBlock = "";
-  if (p.meeting_outcome || p.meeting_transcript) {
+  if (meetingContext?.hasMeetings && meetingContext.latestMeeting) {
+    const m = meetingContext.latestMeeting;
+    const intel = m.intelligence ?? {};
+    const participants = (m.participants ?? []).map((p) => p.name).join(", ");
+
+    meetingBlock = `\n## Recent Meeting with This Lead
+- Date: ${m.meetingDate ? new Date(m.meetingDate).toLocaleDateString() : "unknown"}
+- Participants: ${participants || "unknown"}
+${m.summary ? `- Summary: ${m.summary}` : ""}
+${(intel.action_items as string[] | undefined)?.length ? `- Action items: ${(intel.action_items as string[]).join("; ")}` : ""}
+${(intel.commitments as string[] | undefined)?.length ? `- Commitments made: ${(intel.commitments as string[]).join("; ")}` : ""}
+${(intel.stakeholders_identified as string[] | undefined)?.length ? `- Stakeholders identified: ${(intel.stakeholders_identified as string[]).join(", ")}` : ""}
+${(intel.objections as string[] | undefined)?.length ? `- Their objections: ${(intel.objections as string[]).join("; ")}` : ""}
+${(intel.pain_points as string[] | undefined)?.length ? `- Pain points: ${(intel.pain_points as string[]).join("; ")}` : ""}
+${(intel.buying_signals as string[] | undefined)?.length ? `- Buying signals: ${(intel.buying_signals as string[]).join("; ")}` : ""}
+${(intel.next_steps_discussed as string[] | undefined)?.length ? `- Next steps discussed: ${(intel.next_steps_discussed as string[]).join("; ")}` : ""}
+${meetingContext.meetingCount > 1 ? `- (${meetingContext.meetingCount} total meetings on record)` : ""}`.replace(/\n{2,}/g, "\n");
+  } else if (p.meeting_outcome || p.meeting_transcript) {
+    // Legacy fallback
     meetingBlock = `\n## Meeting Data
 - Outcome: ${p.meeting_outcome ?? "unknown"}
 ${p.meeting_transcript ? `- Transcript summary available (${p.meeting_transcript.length} chars)` : "- No transcript"}

@@ -24,6 +24,7 @@ import { reasonAboutEvent } from "@/lib/skyler/reasoning/skyler-reasoning";
 import { checkGuardrails } from "@/lib/skyler/reasoning/guardrail-engine";
 import { executeDecision, type ExecutionContext } from "@/lib/skyler/actions/execute-decision";
 import { assembleReasoningContext } from "@/lib/skyler/reasoning/context-assembler";
+import { chunkAndEmbedTranscript } from "@/lib/skyler/meetings/transcript-chunker";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -466,6 +467,34 @@ ${transcriptText.slice(0, 12000)}`,
         }
       });
     }
+
+    // Chunk transcript and generate embeddings for semantic search
+    await step.run("chunk-and-embed", async () => {
+      const db = createAdminSupabaseClient();
+      const { data: record } = await db
+        .from("meeting_transcripts")
+        .select("raw_transcript")
+        .eq("id", transcriptId)
+        .maybeSingle();
+
+      const rawTranscript = record?.raw_transcript;
+      if (!rawTranscript || !Array.isArray(rawTranscript)) {
+        console.warn(`[meeting-transcript] No raw segments for chunking (transcript ${transcriptId})`);
+        return 0;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const segments = rawTranscript as any[];
+      const chunkCount = await chunkAndEmbedTranscript({
+        transcriptId,
+        leadId: pipelineId,
+        workspaceId,
+        segments,
+      });
+
+      console.log(`[meeting-transcript] Created ${chunkCount} searchable chunks`);
+      return chunkCount;
+    });
 
     // Mark transcript as complete
     await step.run("mark-complete", async () => {
