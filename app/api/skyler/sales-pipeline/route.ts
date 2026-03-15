@@ -102,11 +102,25 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Count meetings per pipeline record
+  let meetingsByPipeline: Record<string, number> = {};
+  if (pipelineIds.length > 0) {
+    const { data: meetings } = await db
+      .from("meeting_transcripts")
+      .select("lead_id")
+      .in("lead_id", pipelineIds);
+    for (const m of meetings ?? []) {
+      const pId = m.lead_id as string;
+      meetingsByPipeline[pId] = (meetingsByPipeline[pId] ?? 0) + 1;
+    }
+  }
+
   const records = (data ?? []).map((p) => ({
     ...p,
     pending_actions: actionsByPipeline[p.id] ?? [],
     directive_count: directivesByPipeline[p.id] ?? 0,
     pending_requests: requestsByPipeline[p.id] ?? [],
+    meeting_count: meetingsByPipeline[p.id] ?? 0,
   }));
 
   return NextResponse.json({ records });

@@ -33,12 +33,14 @@ import {
   Clock,
   ScrollText,
   HelpCircle,
+  Video,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
 import { MarkdownRenderer } from "@/components/shared/markdown-renderer";
 import { ActionApproval } from "@/components/skyler/action-approval";
 import { WorkflowSettings } from "@/components/skyler/workflow-settings";
+import { MeetingsPanel } from "@/components/skyler/meetings-panel";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -509,6 +511,7 @@ type PipelineRecord = {
     request_description: string;
     created_at: string;
   }>;
+  meeting_count?: number;
 };
 
 type PerformanceMetrics = {
@@ -682,6 +685,7 @@ export function SkylerClient({
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
   const [transcriptOpenId, setTranscriptOpenId] = useState<string | null>(null);
+  const [meetingsOpenId, setMeetingsOpenId] = useState<string | null>(null);
   const [pinnedContext, setPinnedContext] = useState<PinnedLeadContext | null>(null);
 
   // Fetch dashboard data — uses lead_scores endpoints, falls back to deal-based dashboard
@@ -1627,8 +1631,25 @@ export function SkylerClient({
                             </div>
                           )}
 
-                          {/* Meeting Outcome + Transcript */}
-                          {rec.meeting_outcome && !rec.meeting_outcome.error && (
+                          {/* Meetings Intelligence Panel */}
+                          <div className="mt-2">
+                            <button
+                              onClick={() => setMeetingsOpenId(meetingsOpenId === rec.id ? null : rec.id)}
+                              className="flex items-center gap-1.5 px-2.5 py-1 bg-[#06B6D4]/10 text-[#06B6D4] rounded-lg text-xs font-medium hover:bg-[#06B6D4]/20 transition-colors"
+                            >
+                              <Video className="w-3 h-3" />
+                              {meetingsOpenId === rec.id ? "Hide" : "Meetings"}{rec.meeting_count ? ` (${rec.meeting_count})` : ""}
+                            </button>
+
+                            {meetingsOpenId === rec.id && (
+                              <div className="mt-2">
+                                <MeetingsPanel leadId={rec.id} />
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Meeting Outcome + Transcript (legacy) */}
+                          {rec.meeting_outcome && !rec.meeting_outcome.error && !meetingsOpenId && (
                             <div className="mt-3">
                               {/* Outcome summary */}
                               <div className="rounded-lg bg-[#1A1A1A] border border-[#2A2D35] p-3">
