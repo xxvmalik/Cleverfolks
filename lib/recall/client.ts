@@ -350,6 +350,173 @@ export async function listRecallBots(
   }
 }
 
+// ── Calendar V2 API ─────────────────────────────────────────────────────────
+
+export type CreateCalendarParams = {
+  /** OAuth platform: "google_calendar" or "microsoft_outlook" */
+  platform: "google_calendar" | "microsoft_outlook";
+  /** OAuth refresh token from the user's calendar provider */
+  oauthRefreshToken: string;
+  /** Client ID for the OAuth app */
+  oauthClientId: string;
+  /** Client secret for the OAuth app */
+  oauthClientSecret: string;
+  /** Webhook URL for calendar sync events */
+  webhookUrl?: string;
+};
+
+export type RecallCalendar = {
+  id: string;
+  platform: string;
+  platform_email?: string;
+  status?: string;
+};
+
+/**
+ * Connect a calendar to Recall via Calendar V2 API.
+ * Returns the Recall calendar ID for future operations.
+ */
+export async function createRecallCalendar(
+  params: CreateCalendarParams
+): Promise<RecallCalendar> {
+  const body: Record<string, unknown> = {
+    platform: params.platform,
+    oauth_refresh_token: params.oauthRefreshToken,
+    oauth_client_id: params.oauthClientId,
+    oauth_client_secret: params.oauthClientSecret,
+  };
+
+  if (params.webhookUrl) {
+    body.webhook_url = params.webhookUrl;
+  }
+
+  const response = await recallFetch(
+    `${RECALL_BASE_URL}/api/v2/calendars`,
+    {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "unknown");
+    throw new Error(`Recall Calendar API error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  console.log(`[recall] Calendar created: ${data.id} (${params.platform})`);
+
+  return {
+    id: data.id,
+    platform: data.platform,
+    platform_email: data.platform_email,
+    status: data.status,
+  };
+}
+
+/**
+ * Delete/disconnect a calendar from Recall.
+ */
+export async function deleteRecallCalendar(calendarId: string): Promise<boolean> {
+  try {
+    const response = await fetch(
+      `${RECALL_BASE_URL}/api/v2/calendars/${calendarId}`,
+      { method: "DELETE", headers: authHeaders() }
+    );
+    return response.ok || response.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+export type CalendarEvent = {
+  id: string;
+  title?: string;
+  start_time: string;
+  end_time: string;
+  meeting_url?: string;
+  is_deleted?: boolean;
+  attendees?: Array<{
+    email: string;
+    name?: string;
+    is_organizer?: boolean;
+  }>;
+};
+
+/**
+ * List calendar events from a connected Recall calendar.
+ */
+export async function listCalendarEvents(
+  calendarId: string,
+  params?: { startTime?: string; endTime?: string }
+): Promise<CalendarEvent[]> {
+  try {
+    const searchParams = new URLSearchParams();
+    searchParams.set("calendar_id", calendarId);
+    if (params?.startTime) searchParams.set("start_time__gte", params.startTime);
+    if (params?.endTime) searchParams.set("start_time__lte", params.endTime);
+
+    const response = await fetch(
+      `${RECALL_BASE_URL}/api/v2/calendar-events?${searchParams.toString()}`,
+      { method: "GET", headers: authHeaders() }
+    );
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return (data.results ?? data) as CalendarEvent[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Schedule a Recall bot for a specific calendar event.
+ * Uses Recall's dedup_key to prevent duplicate bots.
+ */
+export async function scheduleBotForCalendarEvent(params: {
+  calendarEventId: string;
+  botName?: string;
+  /** Dedup key to prevent duplicate bots (e.g. "{start_time}-{meeting_url}") */
+  dedupKey?: string;
+  metadata?: Record<string, string>;
+}): Promise<CreateBotResult> {
+  const body: Record<string, unknown> = {
+    calendar_event_id: params.calendarEventId,
+    bot_config: {
+      bot_name: params.botName ?? "Skyler Notetaker",
+      recording_config: {
+        transcript: {
+          provider: {
+            recallai_streaming: { mode: "prioritize_accuracy" },
+          },
+        },
+      },
+    },
+  };
+
+  if (params.dedupKey) body.dedup_key = params.dedupKey;
+  if (params.metadata) body.bot_config = { ...body.bot_config as object, metadata: params.metadata };
+
+  const response = await recallFetch(
+    `${RECALL_BASE_URL}/api/v2/calendar-events/${params.calendarEventId}/bot`,
+    {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "unknown");
+    throw new Error(`Recall Schedule Bot API error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return { id: data.id ?? data.bot_id, meetingUrl: "" };
+}
+
 // ── Webhook secret verification ─────────────────────────────────────────────
 
 /**

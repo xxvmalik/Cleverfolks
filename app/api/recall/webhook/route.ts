@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { getRecallTranscript, getRecallTranscriptRaw, verifyWebhookSecret } from "@/lib/recall/client";
+import { handleCalendarSyncEvent, handleCalendarUpdate } from "@/lib/skyler/meetings/calendar-sync";
 
 export async function POST(req: NextRequest) {
   // Verify webhook secret
@@ -236,9 +237,21 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Calendar sync events ────────────────────────────────────────────
-    if (event === "calendar.sync_events" || event === "calendar.update") {
-      // TODO: Part B — calendar sync handler
-      console.log(`[recall-webhook] Calendar event: ${event}`);
+    if (event === "calendar.sync_events") {
+      const calendarId = (payload.data?.calendar_id ?? payload.data?.calendar?.id) as string;
+      if (calendarId) {
+        const result = await handleCalendarSyncEvent(calendarId);
+        console.log(`[recall-webhook] Calendar sync: ${result.scheduled} scheduled, ${result.cancelled} cancelled`);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (event === "calendar.update") {
+      const calendarId = (payload.data?.calendar_id ?? payload.data?.calendar?.id) as string;
+      const calendarStatus = (payload.data?.status ?? payload.data?.calendar?.status) as string;
+      if (calendarId) {
+        await handleCalendarUpdate(calendarId, calendarStatus);
+      }
       return NextResponse.json({ ok: true });
     }
 
