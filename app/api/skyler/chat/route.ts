@@ -266,11 +266,21 @@ export async function POST(request: NextRequest) {
     let pipelineExtra = "";
     let threadBlock = "";
     if (ctx.source === "pipeline" && ctx.pipeline_id) {
-      const { data: pRec } = await db
-        .from("skyler_sales_pipeline")
-        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, conversation_thread")
-        .eq("id", ctx.pipeline_id)
-        .single();
+      const [{ data: pRec }, { data: meetings }] = await Promise.all([
+        db
+          .from("skyler_sales_pipeline")
+          .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, conversation_thread, meeting_outcome, meeting_transcript")
+          .eq("id", ctx.pipeline_id)
+          .single(),
+        db
+          .from("meeting_transcripts")
+          .select("id, meeting_date, summary, intelligence, participants, processing_status")
+          .eq("lead_id", ctx.pipeline_id)
+          .eq("processing_status", "complete")
+          .order("meeting_date", { ascending: false })
+          .limit(3),
+      ]);
+
       if (pRec) {
         pipelineExtra = `\nPipeline Stage: ${pRec.stage ?? "unknown"}
 Emails Sent: ${pRec.emails_sent ?? 0}, Replies: ${pRec.emails_replied ?? 0}
@@ -285,6 +295,37 @@ Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}`;
             `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
           ).join("\n\n");
           threadBlock = `\n\nCONVERSATION THREAD (read this carefully — this is what was actually said):\n${threadLines}`;
+        }
+
+        // Include meeting intelligence if available
+        if (meetings && meetings.length > 0) {
+          const meetingLines = meetings.map((m) => {
+            const intel = (m.intelligence ?? {}) as Record<string, unknown>;
+            const participants = ((m.participants ?? []) as Array<{ name: string }>).map((p) => p.name).join(", ");
+            const date = m.meeting_date ? new Date(m.meeting_date as string).toLocaleDateString() : "unknown date";
+
+            let block = `\n### Meeting on ${date}\nParticipants: ${participants || "unknown"}`;
+            if (m.summary) block += `\nSummary: ${m.summary}`;
+            if ((intel.action_items as unknown[])?.length) block += `\nAction items: ${(intel.action_items as Array<{ text: string }>).map((a) => a.text).join("; ")}`;
+            if ((intel.commitments as unknown[])?.length) block += `\nCommitments: ${(intel.commitments as Array<{ text: string }>).map((c) => c.text).join("; ")}`;
+            if ((intel.objections as unknown[])?.length) block += `\nObjections: ${(intel.objections as Array<{ text: string }>).map((o) => o.text).join("; ")}`;
+            if ((intel.buying_signals as unknown[])?.length) block += `\nBuying signals: ${(intel.buying_signals as Array<{ text: string }>).map((b) => b.text).join("; ")}`;
+            if ((intel.stakeholders_identified as unknown[])?.length) block += `\nStakeholders: ${(intel.stakeholders_identified as Array<{ name: string; role?: string }>).map((s) => `${s.name}${s.role ? ` (${s.role})` : ""}`).join(", ")}`;
+            if ((intel.pain_points as unknown[])?.length) block += `\nPain points: ${(intel.pain_points as Array<{ text: string }>).map((p) => p.text).join("; ")}`;
+            if ((intel.next_steps_discussed as unknown[])?.length) block += `\nNext steps: ${(intel.next_steps_discussed as Array<{ step: string }>).map((n) => n.step).join("; ")}`;
+            return block;
+          }).join("\n");
+
+          threadBlock += `\n\nMEETING INTELLIGENCE (what was discussed on calls with this lead):${meetingLines}`;
+        } else if (pRec.meeting_outcome) {
+          // Legacy fallback — meeting_outcome on pipeline record
+          const mo = pRec.meeting_outcome as Record<string, unknown>;
+          if (mo && !mo.error) {
+            threadBlock += `\n\nMEETING OUTCOME: ${mo.reasoning ?? "unknown"}`;
+            if (mo.key_discussion_points) {
+              threadBlock += `\nKey points: ${(mo.key_discussion_points as string[]).join("; ")}`;
+            }
+          }
         }
       }
     }
