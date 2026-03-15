@@ -2,19 +2,26 @@
  * Central AI Reasoning Function for Skyler.
  *
  * The brain. Takes any event type, assembles full context, calls Claude Sonnet
- * for a structured decision, validates it, and returns the decision object.
+ * (via model router) for a structured decision, validates it, and returns it.
  *
  * This function does NOT execute the decision — it only decides.
  * The guardrail engine checks it, then the executor acts on it.
+ *
+ * Uses the model router for proper tier routing and prompt caching
+ * on the static system prompt portion (~90% input token savings).
  */
 
-import Anthropic from "@anthropic-ai/sdk";
 import { SkylerDecisionSchema, type SkylerDecision } from "./decision-schema";
 import {
   assembleReasoningContext,
   formatReasoningPrompt,
   type ReasoningEvent,
 } from "./context-assembler";
+import {
+  routedLLMCall,
+  getModelId,
+  type TokenUsage,
+} from "@/lib/skyler/routing/model-router";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -27,11 +34,12 @@ export type ReasoningResult = {
   model: string;
   /** Time taken for the reasoning call in ms */
   duration_ms: number;
+  /** Token usage from the model router */
+  token_usage?: TokenUsage;
 };
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const REASONING_MODEL = "claude-sonnet-4-20250514";
 const MAX_TOKENS = 1500;
 const RETRY_MAX_TOKENS = 3000;
 
@@ -57,6 +65,7 @@ export async function reasonAboutEvent(
   pipelineId: string
 ): Promise<ReasoningResult> {
   const start = Date.now();
+  const model = getModelId("complex");
 
   // 1. Assemble context
   let ctx;
@@ -76,21 +85,23 @@ export async function reasonAboutEvent(
   // 2. Format the reasoning prompt
   const userPrompt = formatReasoningPrompt(ctx);
 
-  // 3. Call Claude Sonnet
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
-
+  // 3. Call Claude Sonnet via model router (with prompt caching)
   let decision: SkylerDecision | null = null;
-  let lastError: string | null = null;
+  let tokenUsage: TokenUsage | undefined;
 
   // First attempt
-  decision = await callClaude(anthropic, userPrompt, MAX_TOKENS);
+  const result1 = await callReasoning(userPrompt, MAX_TOKENS, 0);
+  decision = result1.decision;
+  tokenUsage = result1.usage;
 
   // Retry once with higher max_tokens if first attempt failed
   if (!decision) {
     console.warn(
       "[skyler-reasoning] First attempt failed, retrying with higher max_tokens"
     );
-    decision = await callClaude(anthropic, userPrompt, RETRY_MAX_TOKENS);
+    const result2 = await callReasoning(userPrompt, RETRY_MAX_TOKENS, 1);
+    decision = result2.decision;
+    tokenUsage = result2.usage;
   }
 
   if (!decision) {
@@ -98,7 +109,7 @@ export async function reasonAboutEvent(
       "[skyler-reasoning] Both attempts failed, falling back to escalation"
     );
     return fallbackEscalation(
-      lastError ?? "Claude failed to return a valid decision after 2 attempts",
+      "Claude failed to return a valid decision after 2 attempts",
       Date.now() - start
     );
   }
@@ -112,69 +123,63 @@ export async function reasonAboutEvent(
   return {
     decision,
     is_fallback: false,
-    model: REASONING_MODEL,
+    model,
     duration_ms: duration,
+    token_usage: tokenUsage,
   };
 }
 
-// ── Claude call with validation ──────────────────────────────────────────────
+// ── Routed call with validation ──────────────────────────────────────────────
 
-async function callClaude(
-  anthropic: Anthropic,
+async function callReasoning(
   userPrompt: string,
-  maxTokens: number
-): Promise<SkylerDecision | null> {
+  maxTokens: number,
+  attempt: number
+): Promise<{ decision: SkylerDecision | null; usage?: TokenUsage }> {
   try {
-    const response = await anthropic.messages.create({
-      model: REASONING_MODEL,
-      max_tokens: maxTokens,
-      system: REASONING_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: userPrompt }],
+    const result = await routedLLMCall({
+      task: "reason_about_event",
+      tier: "complex",
+      systemPrompt: REASONING_SYSTEM_PROMPT,
+      userContent: userPrompt,
+      maxTokens,
+      cacheSystemPrompt: true, // Enable prompt caching on system prompt
+      attempt,
     });
 
     // Check stop reason
-    if (response.stop_reason !== "end_turn") {
-      console.warn(
-        `[skyler-reasoning] Unexpected stop_reason: ${response.stop_reason}`
-      );
-      if (response.stop_reason === "max_tokens") {
-        // Token truncation — response may be incomplete JSON
-        return null;
-      }
+    if (result.stopReason === "max_tokens") {
+      console.warn("[skyler-reasoning] Response truncated (max_tokens)");
+      return { decision: null, usage: result.usage };
     }
 
-    // Extract text
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("")
-      .trim();
-
-    if (!text) {
-      console.warn("[skyler-reasoning] Empty response from Claude");
-      return null;
+    if (!result.text) {
+      console.warn("[skyler-reasoning] Empty response");
+      return { decision: null, usage: result.usage };
     }
 
     // Parse JSON
-    const parsed = parseAIJson<Record<string, unknown>>(text);
+    const parsed = parseAIJson<Record<string, unknown>>(result.text);
 
     // Validate against Zod schema
-    const result = SkylerDecisionSchema.safeParse(parsed);
-    if (!result.success) {
+    const validation = SkylerDecisionSchema.safeParse(parsed);
+    if (!validation.success) {
       console.warn(
         "[skyler-reasoning] Schema validation failed:",
-        result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
+        validation.error.issues
+          .map((i) => `${i.path.join(".")}: ${i.message}`)
+          .join("; ")
       );
-      return null;
+      return { decision: null, usage: result.usage };
     }
 
-    return result.data;
+    return { decision: validation.data, usage: result.usage };
   } catch (err) {
     console.error(
-      "[skyler-reasoning] Claude call failed:",
+      "[skyler-reasoning] Call failed:",
       err instanceof Error ? err.message : err
     );
-    return null;
+    return { decision: null };
   }
 }
 
@@ -195,7 +200,7 @@ function fallbackEscalation(
       urgency: "immediate",
     },
     is_fallback: true,
-    model: REASONING_MODEL,
+    model: getModelId("complex"),
     duration_ms: durationMs,
   };
 }
