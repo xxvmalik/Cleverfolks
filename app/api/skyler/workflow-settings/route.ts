@@ -130,8 +130,18 @@ export async function GET(req: NextRequest) {
   const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
   const settings = (ws?.settings ?? {}) as Record<string, unknown>;
   const workflow = (settings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
+  const meetingSettings = (settings.skyler_meeting ?? {}) as Record<string, unknown>;
 
-  return NextResponse.json({ settings: { ...DEFAULT_WORKFLOW_SETTINGS, ...workflow } });
+  return NextResponse.json({
+    settings: { ...DEFAULT_WORKFLOW_SETTINGS, ...workflow },
+    meetingSettings: {
+      autoJoinMeetings: meetingSettings.autoJoinMeetings ?? false,
+      botDisplayName: meetingSettings.botDisplayName ?? "",
+      calendarConnected: meetingSettings.calendarConnected ?? false,
+      calendarProvider: meetingSettings.calendarProvider ?? "",
+      calendarEmail: meetingSettings.calendarEmail ?? "",
+    },
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -140,9 +150,10 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { workspaceId, settings: newSettings } = body as {
+  const { workspaceId, settings: newSettings, meetingSettings: newMeetingSettings } = body as {
     workspaceId: string;
     settings: Partial<SkylerWorkflowSettings>;
+    meetingSettings?: Record<string, unknown>;
   };
 
   if (!workspaceId) return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
@@ -154,14 +165,20 @@ export async function POST(req: NextRequest) {
   const currentSettings = (ws?.settings ?? {}) as Record<string, unknown>;
   const currentWorkflow = (currentSettings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
 
-  // Merge
+  // Merge workflow settings
   const merged = { ...currentWorkflow, ...newSettings };
+
+  // Merge meeting settings (stored under skyler_meeting key)
+  const currentMeeting = (currentSettings.skyler_meeting ?? {}) as Record<string, unknown>;
+  const mergedMeeting = newMeetingSettings
+    ? { ...currentMeeting, ...newMeetingSettings }
+    : currentMeeting;
 
   // Write back
   const { error } = await db
     .from("workspaces")
     .update({
-      settings: { ...currentSettings, skyler_workflow: merged },
+      settings: { ...currentSettings, skyler_workflow: merged, skyler_meeting: mergedMeeting },
     })
     .eq("id", workspaceId);
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle, Flame, Sprout, Archive, ChevronDown, Search, Hash, User } from "lucide-react";
+import { Zap, PenLine, Loader2, Pencil, Check, X, Plus, Trash2, AlertTriangle, Flame, Sprout, Archive, ChevronDown, Search, Hash, User, Video, Calendar, Link2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -66,7 +66,15 @@ type WorkflowSettings = {
   };
 };
 
-type SettingsTab = "global-rules" | "lead-qualification" | "sales-closer";
+type MeetingSettings = {
+  autoJoinMeetings: boolean;
+  botDisplayName: string;
+  calendarConnected: boolean;
+  calendarProvider: string;
+  calendarEmail: string;
+};
+
+type SettingsTab = "global-rules" | "lead-qualification" | "sales-closer" | "meetings";
 
 // ── Colours for weight distribution bar segments ────────────────────────────
 
@@ -488,6 +496,13 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
   const [saved, setSaved] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>("global-rules");
+  const [meetingSettings, setMeetingSettings] = useState<MeetingSettings>({
+    autoJoinMeetings: false,
+    botDisplayName: "",
+    calendarConnected: false,
+    calendarProvider: "",
+    calendarEmail: "",
+  });
   const [slackOptions, setSlackOptions] = useState<SlackOption[]>([]);
   const [slackLoading, setSlackLoading] = useState(false);
   const [editingDimension, setEditingDimension] = useState<number | null>(null);
@@ -499,6 +514,9 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
       if (res.ok) {
         const data = await res.json();
         setSettings(data.settings);
+        if (data.meetingSettings) {
+          setMeetingSettings((prev) => ({ ...prev, ...data.meetingSettings }));
+        }
       }
     } finally {
       setLoading(false);
@@ -606,6 +624,11 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     markDirty();
   }
 
+  function updateMeetingSetting<K extends keyof MeetingSettings>(key: K, value: MeetingSettings[K]) {
+    setMeetingSettings((prev) => ({ ...prev, [key]: value }));
+    markDirty();
+  }
+
   async function handleSave() {
     if (!settings || !dirty) return;
     setSaving(true);
@@ -613,7 +636,7 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
       const res = await fetch("/api/skyler/workflow-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId, settings }),
+        body: JSON.stringify({ workspaceId, settings, meetingSettings }),
       });
       if (res.ok) {
         setDirty(false);
@@ -639,6 +662,7 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
     { id: "global-rules", label: "Global Rules" },
     { id: "lead-qualification", label: "Lead Qualification" },
     { id: "sales-closer", label: "Sales Closer" },
+    { id: "meetings", label: "Meeting Intelligence" },
   ];
 
   // Sort routing rules by minScore descending for display
@@ -1205,6 +1229,125 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                   />
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Meeting Intelligence Tab ──────────────────────────────────── */}
+        {activeTab === "meetings" && (
+          <div className="space-y-8">
+            {/* Auto-join Meetings */}
+            <div>
+              <h3 className="text-white font-semibold text-base mb-1">Meeting Recording</h3>
+              <p className="text-[#8B8F97] text-xs mb-4">
+                Skyler can automatically join meetings with your prospects to transcribe, extract intelligence, and craft informed follow-ups.
+              </p>
+
+              <div className="space-y-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Video className="w-4 h-4 text-[#8B8F97]" />
+                      <span className="text-white text-sm font-medium">Auto-join meetings with prospects</span>
+                    </div>
+                    <p className="text-[#8B8F97] text-xs mt-1 ml-6">
+                      When enabled, Skyler automatically schedules a notetaker bot for any meeting that has an attendee matching an active lead in your pipeline.
+                    </p>
+                  </div>
+                  <SettingsToggle
+                    enabled={meetingSettings.autoJoinMeetings}
+                    onToggle={() => updateMeetingSetting("autoJoinMeetings", !meetingSettings.autoJoinMeetings)}
+                  />
+                </div>
+
+                {/* Bot Display Name */}
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <User className="w-4 h-4 text-[#8B8F97]" />
+                    <span className="text-white text-sm font-medium">Bot display name</span>
+                  </div>
+                  <p className="text-[#8B8F97] text-xs mb-2 ml-6">
+                    The name shown when the notetaker bot joins a meeting.
+                  </p>
+                  <input
+                    type="text"
+                    value={meetingSettings.botDisplayName}
+                    onChange={(e) => updateMeetingSetting("botDisplayName", e.target.value)}
+                    placeholder="Skyler - Your Company"
+                    className="w-full bg-[#1C1F24] border border-[#2A2D35] rounded-lg px-3 py-2 text-white text-sm placeholder:text-[#8B8F97]/50 focus:outline-none focus:border-[#3A89FF]/50 ml-6 max-w-[400px]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Calendar Connection */}
+            <div>
+              <h3 className="text-white font-semibold text-base mb-1">Calendar Connection</h3>
+              <p className="text-[#8B8F97] text-xs mb-4">
+                Connect your calendar so Skyler can detect meetings with pipeline leads and automatically schedule recording bots.
+              </p>
+
+              {meetingSettings.calendarConnected ? (
+                <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-lg bg-[#4ADE80]/10 flex items-center justify-center">
+                        <Calendar className="w-4 h-4 text-[#4ADE80]" />
+                      </div>
+                      <div>
+                        <p className="text-white text-sm font-medium">
+                          {meetingSettings.calendarProvider === "google" ? "Google Calendar" : "Outlook Calendar"} connected
+                        </p>
+                        <p className="text-[#8B8F97] text-xs">{meetingSettings.calendarEmail}</p>
+                      </div>
+                    </div>
+                    <span className="flex items-center gap-1.5 text-[#4ADE80] text-xs font-medium">
+                      <div className="w-1.5 h-1.5 rounded-full bg-[#4ADE80]" />
+                      Connected
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl p-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-8 h-8 rounded-lg bg-[#3A89FF]/10 flex items-center justify-center">
+                      <Link2 className="w-4 h-4 text-[#3A89FF]" />
+                    </div>
+                    <div>
+                      <p className="text-white text-sm font-medium">No calendar connected</p>
+                      <p className="text-[#8B8F97] text-xs">Connect Google Calendar or Outlook to enable auto-recording</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => window.open(`/api/skyler/calendar/connect?provider=google&workspaceId=${workspaceId}`, "_blank")}
+                      className="px-4 py-2 bg-[#1C1F24] border border-[#2A2D35] rounded-lg text-white text-sm hover:bg-[#2A2D35]/50 transition-colors flex items-center gap-2"
+                    >
+                      <Calendar className="w-4 h-4" />
+                      Google Calendar
+                    </button>
+                    <button
+                      onClick={() => window.open(`/api/skyler/calendar/connect?provider=outlook&workspaceId=${workspaceId}`, "_blank")}
+                      className="px-4 py-2 bg-[#1C1F24] border border-[#2A2D35] rounded-lg text-white text-sm hover:bg-[#2A2D35]/50 transition-colors flex items-center gap-2"
+                    >
+                      <Calendar className="w-4 h-4" />
+                      Outlook Calendar
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Info box */}
+            <div className="bg-[#3A89FF]/5 border border-[#3A89FF]/20 rounded-xl p-4">
+              <p className="text-[#3A89FF] text-xs font-medium mb-1">How Meeting Intelligence Works</p>
+              <p className="text-[#8B8F97] text-xs leading-relaxed">
+                When a meeting with a pipeline lead is detected, Skyler sends a notetaker bot to join the call.
+                After the meeting, the transcript is processed through three AI stages: intelligence extraction
+                (action items, objections, buying signals), summary generation, and follow-up strategy. The meeting
+                context is then used to craft informed, personalised follow-up emails that reference what was actually
+                discussed on the call.
+              </p>
             </div>
           </div>
         )}
