@@ -1,0 +1,237 @@
+/**
+ * Skyler Reasoning Pipeline — Inngest Orchestration (Stage 6)
+ *
+ * Wires together the reasoning engine, guardrail engine, and decision executor
+ * as durable Inngest functions. Runs ALONGSIDE the existing pipeline — does not
+ * replace it. Events use "skyler/reasoning.*" namespace to avoid conflicts.
+ *
+ * Three functions:
+ * 1. reasoningPipeline — Main handler: reason → guardrail → execute/queue
+ * 2. reasoningCadenceScheduler — Fires follow-up events into the reasoning pipeline
+ * 3. (Approval handled by existing approve/reject endpoints — no new function needed)
+ */
+
+import { inngest } from "@/lib/inngest/client";
+import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { reasonAboutEvent } from "@/lib/skyler/reasoning/skyler-reasoning";
+import { checkGuardrails } from "@/lib/skyler/reasoning/guardrail-engine";
+import {
+  executeDecision,
+  type ExecutionContext,
+} from "@/lib/skyler/actions/execute-decision";
+import {
+  assembleReasoningContext,
+  type ReasoningEvent,
+} from "@/lib/skyler/reasoning/context-assembler";
+
+// ── 1. Main Reasoning Pipeline ───────────────────────────────────────────────
+// Triggered by reasoning-specific events. Runs the full chain:
+// reason → guardrail check → execute/queue/escalate
+
+export const reasoningPipeline = inngest.createFunction(
+  {
+    id: "skyler-reasoning-pipeline",
+    retries: 2,
+  },
+  [
+    { event: "skyler/reasoning.reply-received" },
+    { event: "skyler/reasoning.followup-due" },
+    { event: "skyler/reasoning.meeting-booked" },
+    { event: "skyler/reasoning.transcript-ready" },
+    { event: "skyler/reasoning.user-directive" },
+    { event: "skyler/reasoning.user-response" },
+    { event: "skyler/reasoning.lead-qualified" },
+  ],
+  async ({ event, step }) => {
+    const {
+      pipelineId,
+      workspaceId,
+      eventType,
+      eventData,
+    } = event.data as {
+      pipelineId: string;
+      workspaceId: string;
+      eventType: ReasoningEvent["type"];
+      eventData: Record<string, unknown>;
+    };
+
+    console.log(`[reasoning-pipeline] Starting: ${eventType} for pipeline ${pipelineId}`);
+
+    // Step 1: Reason — call Claude Sonnet for a structured decision
+    const reasoningResult = await step.run("reason", async () => {
+      const reasoningEvent: ReasoningEvent = {
+        type: eventType,
+        data: eventData,
+      };
+      return await reasonAboutEvent(reasoningEvent, workspaceId, pipelineId);
+    });
+
+    const decision = reasoningResult.decision;
+    console.log(
+      `[reasoning-pipeline] Decision: ${decision.action_type} (confidence: ${decision.confidence_score}, fallback: ${reasoningResult.is_fallback})`
+    );
+
+    // Step 2: Guardrail check — pure logic, no AI
+    const guardrailResult = await step.run("check-guardrails", async () => {
+      const ctx = await assembleReasoningContext(
+        { type: eventType, data: eventData },
+        workspaceId,
+        pipelineId
+      );
+      return checkGuardrails(decision, ctx.workflowSettings, {
+        emails_sent: ctx.pipeline.emails_sent,
+        deal_value: ctx.pipeline.deal_value,
+        is_vip: ctx.pipeline.is_vip,
+        is_c_suite: ctx.pipeline.is_c_suite,
+      });
+    });
+
+    console.log(
+      `[reasoning-pipeline] Guardrail: ${guardrailResult.outcome} — ${guardrailResult.reason}`
+    );
+
+    // Step 3: Execute based on guardrail outcome
+    const executionResult = await step.run("execute", async () => {
+      const db = createAdminSupabaseClient();
+
+      // Re-fetch pipeline for execution (fresh data)
+      const { data: pipeline } = await db
+        .from("skyler_sales_pipeline")
+        .select("*")
+        .eq("id", pipelineId)
+        .single();
+
+      if (!pipeline) {
+        throw new Error(`Pipeline record ${pipelineId} not found`);
+      }
+
+      const execCtx: ExecutionContext = {
+        db,
+        workspaceId,
+        pipeline: pipeline as unknown as ExecutionContext["pipeline"],
+        decision,
+        guardrail: guardrailResult,
+        eventType,
+      };
+
+      return await executeDecision(execCtx);
+    });
+
+    console.log(
+      `[reasoning-pipeline] Execution: ${executionResult.success ? "SUCCESS" : "FAILED"} — ${executionResult.details ?? executionResult.error}`
+    );
+
+    // Step 4: If schedule_followup was executed, schedule the next event
+    if (
+      decision.action_type === "schedule_followup" &&
+      executionResult.success &&
+      guardrailResult.outcome === "auto_execute"
+    ) {
+      const delayHours = decision.parameters.followup_delay_hours ?? 72;
+      const delayMs = delayHours * 60 * 60 * 1000;
+      const delayStr = `${delayHours}h`;
+
+      await step.sleep("wait-for-followup", delayStr);
+
+      await step.sendEvent("fire-followup", {
+        name: "skyler/reasoning.followup-due",
+        data: {
+          pipelineId,
+          workspaceId,
+          eventType: "cadence.followup.due" as const,
+          eventData: {
+            followupNumber: ((eventData.followupNumber as number) ?? 0) + 1,
+            maxFollowups: eventData.maxFollowups ?? 4,
+          },
+        },
+      });
+    }
+
+    return {
+      pipelineId,
+      eventType,
+      decision: {
+        action_type: decision.action_type,
+        confidence: decision.confidence_score,
+        urgency: decision.urgency,
+        reasoning: decision.reasoning,
+      },
+      guardrail: {
+        outcome: guardrailResult.outcome,
+        reason: guardrailResult.reason,
+      },
+      execution: {
+        success: executionResult.success,
+        action: executionResult.action,
+        details: executionResult.details,
+        actionId: executionResult.actionId,
+      },
+      duration_ms: reasoningResult.duration_ms,
+      is_fallback: reasoningResult.is_fallback,
+    };
+  }
+);
+
+// ── 2. Reasoning Cadence Scheduler ───────────────────────────────────────────
+// Cron that finds due follow-ups and fires them into the reasoning pipeline
+// instead of the old rule-based cadence. Runs alongside the existing scheduler.
+
+export const reasoningCadenceScheduler = inngest.createFunction(
+  {
+    id: "skyler-reasoning-cadence-scheduler",
+    retries: 1,
+  },
+  { cron: "0 * * * *" }, // Every hour, same as existing
+  async ({ step }) => {
+    const dueRecords = await step.run("find-due-followups", async () => {
+      const db = createAdminSupabaseClient();
+      const now = new Date().toISOString();
+
+      // Find pipeline records with reasoning_engine enabled and due for follow-up
+      const { data, error } = await db
+        .from("skyler_sales_pipeline")
+        .select(
+          "id, workspace_id, contact_email, contact_name, company_name, cadence_step, stage"
+        )
+        .lte("next_followup_at", now)
+        .is("resolution", null)
+        .eq("awaiting_reply", true)
+        .neq("cadence_paused", true)
+        .eq("use_reasoning_engine", true) // Only pick up leads opted into the new engine
+        .limit(50);
+
+      if (error) {
+        console.error("[reasoning-cadence] Query error:", error.message);
+        return [];
+      }
+
+      console.log(
+        `[reasoning-cadence] Found ${data?.length ?? 0} reasoning-engine leads due for follow-up`
+      );
+      return data ?? [];
+    });
+
+    if (dueRecords.length === 0) return { dispatched: 0 };
+
+    await step.sendEvent(
+      "dispatch-reasoning-followups",
+      dueRecords.map((r) => ({
+        name: "skyler/reasoning.followup-due" as const,
+        data: {
+          pipelineId: r.id,
+          workspaceId: r.workspace_id,
+          eventType: "cadence.followup.due" as const,
+          eventData: {
+            contactEmail: r.contact_email,
+            contactName: r.contact_name,
+            companyName: r.company_name,
+            followupNumber: (r.cadence_step ?? 0) + 1,
+            maxFollowups: 4,
+          },
+        },
+      }))
+    );
+
+    return { dispatched: dueRecords.length };
+  }
+);

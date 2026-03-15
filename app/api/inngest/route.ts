@@ -8,6 +8,7 @@ import { replyCheckScheduler } from "@/lib/inngest/functions/reply-check";
 import { meetingCheckScheduler } from "@/lib/inngest/functions/meeting-check";
 import { processMeetingTranscript, actionNoteDeadlineChecker } from "@/lib/inngest/functions/meeting-transcript";
 import { recallBotChecker } from "@/lib/inngest/functions/recall-bot-checker";
+import { reasoningPipeline, reasoningCadenceScheduler } from "@/lib/inngest/functions/skyler-reasoning-pipeline";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -25,5 +26,7 @@ export const { GET, POST, PUT } = serve({
     processMeetingTranscript,
     actionNoteDeadlineChecker,
     recallBotChecker,
+    reasoningPipeline,
+    reasoningCadenceScheduler,
   ],
 });
