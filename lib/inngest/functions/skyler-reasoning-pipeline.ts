@@ -24,8 +24,57 @@ import {
   type ReasoningEvent,
 } from "@/lib/skyler/reasoning/context-assembler";
 
+// ── Event Normalizer ─────────────────────────────────────────────────────────
+// Maps old event shapes to the reasoning pipeline's expected format.
+
+function normalizeEventData(
+  eventName: string,
+  data: Record<string, unknown>
+): {
+  pipelineId: string;
+  workspaceId: string;
+  eventType: ReasoningEvent["type"];
+  eventData: Record<string, unknown>;
+} {
+  // Old pipeline events use flat data shapes — normalize them
+  if (eventName === "skyler/lead.qualified.hot") {
+    return {
+      pipelineId: data.pipelineId as string,
+      workspaceId: data.workspaceId as string,
+      eventType: "lead.qualified.hot",
+      eventData: {
+        contactEmail: data.contactEmail,
+        contactName: data.contactName,
+        companyName: data.companyName,
+        leadScore: data.leadScoreId,
+      },
+    };
+  }
+
+  if (eventName === "skyler/pipeline.reply.received") {
+    return {
+      pipelineId: data.pipelineId as string,
+      workspaceId: data.workspaceId as string,
+      eventType: "lead.reply.received",
+      eventData: {
+        replyContent: data.replyContent,
+        contactEmail: data.contactEmail,
+        stage: data.stage,
+      },
+    };
+  }
+
+  // Reasoning-namespaced events already have the correct shape
+  return {
+    pipelineId: data.pipelineId as string,
+    workspaceId: data.workspaceId as string,
+    eventType: data.eventType as ReasoningEvent["type"],
+    eventData: (data.eventData as Record<string, unknown>) ?? {},
+  };
+}
+
 // ── 1. Main Reasoning Pipeline ───────────────────────────────────────────────
-// Triggered by reasoning-specific events. Runs the full chain:
+// Triggered by reasoning-specific events AND bridged from existing events.
 // reason → guardrail check → execute/queue/escalate
 
 export const reasoningPipeline = inngest.createFunction(
@@ -41,19 +90,21 @@ export const reasoningPipeline = inngest.createFunction(
     { event: "skyler/reasoning.user-directive" },
     { event: "skyler/reasoning.user-response" },
     { event: "skyler/reasoning.lead-qualified" },
+    // Bridge events — also listen to existing pipeline events so both
+    // the old pipeline and the reasoning engine process them in parallel
+    { event: "skyler/lead.qualified.hot" },
+    { event: "skyler/pipeline.reply.received" },
   ],
   async ({ event, step }) => {
-    const {
-      pipelineId,
-      workspaceId,
-      eventType,
-      eventData,
-    } = event.data as {
-      pipelineId: string;
-      workspaceId: string;
-      eventType: ReasoningEvent["type"];
-      eventData: Record<string, unknown>;
-    };
+    // Normalize event data — bridge old event shapes to reasoning format
+    const normalized = normalizeEventData(event.name, event.data as Record<string, unknown>);
+
+    const { pipelineId, workspaceId, eventType, eventData } = normalized;
+
+    if (!pipelineId || !workspaceId) {
+      console.warn(`[reasoning-pipeline] Missing pipelineId or workspaceId for event ${event.name}`);
+      return { status: "skipped", reason: "missing_ids" };
+    }
 
     console.log(`[reasoning-pipeline] Starting: ${eventType} for pipeline ${pipelineId}`);
 
