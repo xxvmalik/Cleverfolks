@@ -26,6 +26,8 @@ import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
 import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
 import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
+import { classifyDirective } from "@/lib/skyler/directives/classify-directive";
+import { saveDirective } from "@/lib/skyler/directives/directive-store";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -370,6 +372,96 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
         console.log(`[skyler-chat] Fired clarification event for pipeline ${clarificationPipelineId}`);
       } catch (err) {
         console.error("[skyler-chat] Clarification event failed:", err);
+      }
+    });
+  }
+
+  // ── Directive detection + request response (for pipeline-tagged messages) ──
+  if (pipelineContext?.pipeline_id && !isClarification) {
+    const taggedPipelineId = pipelineContext.pipeline_id as string;
+
+    after(async () => {
+      try {
+        // 1. Check if this is a response to a pending info request
+        const { data: pendingReqs } = await db
+          .from("skyler_requests")
+          .select("id, request_description")
+          .eq("pipeline_id", taggedPipelineId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (pendingReqs && pendingReqs.length > 0) {
+          const req = pendingReqs[0];
+          console.log(`[skyler-chat] Fulfilling info request ${req.id}: "${req.request_description}"`);
+
+          // Mark request as fulfilled
+          await db
+            .from("skyler_requests")
+            .update({
+              status: "fulfilled",
+              response_content: message,
+              fulfilled_at: new Date().toISOString(),
+            })
+            .eq("id", req.id);
+
+          // Clear the skyler_note banner on the lead card
+          await db
+            .from("skyler_sales_pipeline")
+            .update({
+              skyler_note: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", taggedPipelineId);
+
+          // Fire event to resume the paused Inngest function
+          const { inngest } = await import("@/lib/inngest/client");
+          await inngest.send({
+            name: "skyler/reasoning.user-response",
+            data: {
+              pipelineId: taggedPipelineId,
+              workspaceId,
+              eventType: "user.response" as const,
+              eventData: {
+                response: message,
+                requestId: req.id,
+                originalRequest: req.request_description,
+              },
+            },
+          });
+          console.log(`[skyler-chat] Fired user-response event for pipeline ${taggedPipelineId}`);
+        }
+
+        // 2. Check if this is a directive (persistent instruction about the lead)
+        const classification = await classifyDirective(message);
+        if (classification.is_directive && classification.directive_text) {
+          const result = await saveDirective(
+            db,
+            workspaceId,
+            taggedPipelineId,
+            classification.directive_text
+          );
+          if (result) {
+            console.log(`[skyler-chat] Saved directive for ${taggedPipelineId}: "${classification.directive_text}"`);
+
+            // Also fire event so reasoning engine re-evaluates with the directive
+            const { inngest } = await import("@/lib/inngest/client");
+            await inngest.send({
+              name: "skyler/reasoning.user-directive",
+              data: {
+                pipelineId: taggedPipelineId,
+                workspaceId,
+                eventType: "user.directive" as const,
+                eventData: {
+                  directive: classification.directive_text,
+                  directiveId: result.id,
+                },
+              },
+            });
+          }
+        }
+      } catch (err) {
+        console.error("[skyler-chat] Directive/request processing failed:", err);
       }
     });
   }

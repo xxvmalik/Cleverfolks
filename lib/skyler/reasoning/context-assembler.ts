@@ -12,6 +12,7 @@ import {
   DEFAULT_WORKFLOW_SETTINGS,
 } from "@/app/api/skyler/workflow-settings/route";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
+import { getActiveDirectives, type Directive } from "@/lib/skyler/directives/directive-store";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +74,8 @@ export type ReasoningContext = {
   pipeline: PipelineRecord;
   memories: string[];
   sender: SenderIdentity;
+  directives: Directive[];
+  pendingRequests: Array<{ id: string; request_description: string; created_at: string }>;
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -85,7 +88,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -108,6 +111,17 @@ export async function assembleReasoningContext(
       .is("superseded_by", null)
       .order("times_reinforced", { ascending: false })
       .limit(20),
+
+    // Active directives for this lead
+    getActiveDirectives(db, pipelineId),
+
+    // Pending info requests for this lead
+    db
+      .from("skyler_requests")
+      .select("id, request_description, created_at")
+      .eq("pipeline_id", pipelineId)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false }),
   ]);
 
   // Extract workflow settings
@@ -161,13 +175,15 @@ export async function assembleReasoningContext(
     pipeline,
     memories,
     sender: { ownerName, companyName },
+    directives: directivesResult,
+    pendingRequests: (requestsResult.data ?? []) as Array<{ id: string; request_description: string; created_at: string }>,
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -233,6 +249,8 @@ ${memoryBlock}
 
 ## Sender
 - From: ${sender.ownerName ?? "Sales Team"} at ${sender.companyName}
+${directives.length > 0 ? `\n## User Instructions for This Lead\nThese are specific instructions from your human manager. Follow them.\n${directives.map((d) => `- "${d.directive_text}" (given on ${new Date(d.created_at).toLocaleDateString()})`).join("\n")}` : ""}
+${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously asked the user for information. These are still unanswered:\n${pendingRequests.map((r) => `- ${r.request_description} (asked on ${new Date(r.created_at).toLocaleDateString()})`).join("\n")}` : ""}
 
 ## Your Task
 Based on everything above, decide the single best action to take right now.

@@ -31,6 +31,8 @@ import {
   FileText,
   CheckCircle,
   Clock,
+  ScrollText,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
@@ -501,6 +503,12 @@ type PipelineRecord = {
       pipelineId?: string;
     };
   }>;
+  directive_count?: number;
+  pending_requests?: Array<{
+    id: string;
+    request_description: string;
+    created_at: string;
+  }>;
 };
 
 type PerformanceMetrics = {
@@ -543,6 +551,81 @@ function getSkylerUnavailableMessage(): string {
   if (hour >= 14 && hour < 17) return "Skyler is recharging with a quick power nap. Back in a moment!";
   if (hour >= 17 && hour < 21) return "Skyler has clocked out for the evening 🌅 She'll be back shortly!";
   return "Skyler is getting her beauty sleep 🌙 She'll be fresh and ready soon!";
+}
+
+// ── Directives Badge (hover popover on lead cards) ──────────────────────────
+
+function DirectivesBadge({ pipelineId, count }: { pipelineId: string; count: number }) {
+  const [open, setOpen] = useState(false);
+  const [directives, setDirectives] = useState<Array<{ id: string; directive_text: string; created_at: string }>>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const handleOpen = async () => {
+    setOpen(true);
+    if (!loaded) {
+      try {
+        const res = await fetch(`/api/skyler/directives?pipelineId=${pipelineId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setDirectives(data.directives ?? []);
+        }
+      } catch { /* ignore */ }
+      setLoaded(true);
+    }
+  };
+
+  const handleDeactivate = async (directiveId: string) => {
+    try {
+      await fetch(`/api/skyler/directives?id=${directiveId}`, { method: "DELETE" });
+      setDirectives((prev) => prev.filter((d) => d.id !== directiveId));
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onMouseEnter={handleOpen}
+        onMouseLeave={() => setOpen(false)}
+        className="flex items-center gap-1 px-2 py-1 bg-[#7C3AED]/10 border border-[#7C3AED]/30 rounded-full text-[#7C3AED] text-[10px] font-medium"
+        title="Active directives for this lead"
+      >
+        <ScrollText className="w-3 h-3" />
+        {count}
+      </button>
+      {open && (
+        <div
+          onMouseEnter={() => setOpen(true)}
+          onMouseLeave={() => setOpen(false)}
+          className="absolute right-0 top-full mt-1 z-50 w-64 bg-[#1C1F24] border border-[#2A2D35] rounded-lg shadow-xl p-3"
+        >
+          <p className="text-[#7C3AED] text-[10px] font-semibold uppercase mb-2">Your Instructions</p>
+          {directives.length === 0 && loaded ? (
+            <p className="text-[#8B8F97] text-xs">No active directives</p>
+          ) : (
+            <div className="space-y-2 max-h-[200px] overflow-y-auto">
+              {directives.map((d) => (
+                <div key={d.id} className="flex items-start gap-2 group">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[#E0E0E0] text-xs leading-relaxed">&ldquo;{d.directive_text}&rdquo;</p>
+                    <p className="text-[#555A63] text-[10px] mt-0.5">
+                      {new Date(d.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </p>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleDeactivate(d.id); }}
+                    className="opacity-0 group-hover:opacity-100 p-0.5 text-[#8B8F97] hover:text-[#F87171] transition-all"
+                    title="Remove directive"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 const QUICK_ACTIONS = [
@@ -1406,15 +1489,58 @@ export function SkylerClient({
                                 {rec.company_name ?? "No company"} &bull; {rec.emails_sent} sent, {rec.emails_opened} opened, {rec.emails_replied} replied
                               </p>
                             </div>
-                            <button
-                              onClick={() => handlePromptPipeline(rec)}
-                              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] hover:bg-[#353535] border border-[#3A3A3A] rounded-full text-white text-xs font-medium transition-colors flex-shrink-0"
-                              title="Tag this lead into chat"
-                            >
-                              <Target className="w-3 h-3 text-[#F2903D]" />
-                              Tag
-                            </button>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {/* Directives indicator */}
+                              {rec.directive_count != null && rec.directive_count > 0 && (
+                                <DirectivesBadge pipelineId={rec.id} count={rec.directive_count} />
+                              )}
+                              <button
+                                onClick={() => handlePromptPipeline(rec)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] hover:bg-[#353535] border border-[#3A3A3A] rounded-full text-white text-xs font-medium transition-colors"
+                                title="Tag this lead into chat"
+                              >
+                                <Target className="w-3 h-3 text-[#F2903D]" />
+                                Tag
+                              </button>
+                            </div>
                           </div>
+
+                          {/* Pending info request banner */}
+                          {rec.pending_requests && rec.pending_requests.length > 0 && (
+                            <div className="mt-2 rounded-lg bg-[#7C3AED]/10 border border-[#7C3AED]/30 p-2.5">
+                              <div className="flex items-start gap-2">
+                                <HelpCircle className="w-3.5 h-3.5 text-[#7C3AED] mt-0.5 flex-shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-[#7C3AED] text-[10px] font-semibold uppercase mb-0.5">Skyler needs your input</p>
+                                  <p className="text-[#E0E0E0] text-xs leading-relaxed">{rec.pending_requests[0].request_description}</p>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    setPinnedContext({
+                                      source: "pipeline",
+                                      sourceId: rec.id,
+                                      contactName: rec.contact_name || rec.contact_email,
+                                      companyName: rec.company_name ?? "",
+                                      contactEmail: rec.contact_email,
+                                      stage: rec.stage,
+                                      email: {
+                                        role: "skyler",
+                                        subject: "Info request",
+                                        content: rec.pending_requests![0].request_description,
+                                        timestamp: rec.pending_requests![0].created_at,
+                                        status: "clarification_needed",
+                                      },
+                                    });
+                                    setTimeout(() => textareaRef.current?.focus(), 50);
+                                  }}
+                                  className="flex items-center gap-1 px-2 py-1 bg-[#7C3AED]/20 text-[#7C3AED] rounded-md text-[10px] font-medium hover:bg-[#7C3AED]/30 transition-colors flex-shrink-0"
+                                >
+                                  <CornerUpLeft className="w-3 h-3" />
+                                  Respond
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
                           {/* Convo Thread toggle */}
                           {rec.conversation_thread && rec.conversation_thread.length > 0 && (

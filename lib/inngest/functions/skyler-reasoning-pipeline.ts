@@ -121,7 +121,36 @@ export const reasoningPipeline = inngest.createFunction(
       `[reasoning-pipeline] Execution: ${executionResult.success ? "SUCCESS" : "FAILED"} — ${executionResult.details ?? executionResult.error}`
     );
 
-    // Step 4: If schedule_followup was executed, schedule the next event
+    // Step 4: If request_info, wait for user response then re-run reasoning
+    if (
+      decision.action_type === "request_info" &&
+      executionResult.success
+    ) {
+      const userResponse = await step.waitForEvent("wait-for-user-response", {
+        event: "skyler/reasoning.user-response",
+        match: "data.pipelineId",
+        timeout: "7d",
+      });
+
+      if (userResponse) {
+        // User responded — fire a new reasoning event with the response
+        await step.sendEvent("resume-with-response", {
+          name: "skyler/reasoning.user-response",
+          data: {
+            pipelineId,
+            workspaceId,
+            eventType: "user.response" as const,
+            eventData: {
+              response: userResponse.data.eventData?.response ?? "",
+              originalRequest: executionResult.details,
+            },
+          },
+        });
+      }
+      // If timeout, the request stays pending — user can still respond later
+    }
+
+    // Step 5: If schedule_followup was executed, schedule the next event
     if (
       decision.action_type === "schedule_followup" &&
       executionResult.success &&

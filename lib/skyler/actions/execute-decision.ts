@@ -354,25 +354,34 @@ async function createInfoRequest(ctx: ExecutionContext): Promise<ExecutionResult
   const { db, workspaceId, pipeline, decision } = ctx;
   const requestDescription = decision.parameters.request_description ?? "Skyler needs more information about this lead.";
 
-  // Store as a pending skyler_action with a special tool_name
+  // Store in skyler_requests table
   const { data, error } = await db
-    .from("skyler_actions")
+    .from("skyler_requests")
     .insert({
       workspace_id: workspaceId,
       pipeline_id: pipeline.id,
-      tool_name: "reasoning_request_info",
-      tool_input: {
-        action_type: "request_info",
-        request_description: requestDescription,
-        reasoning: decision.reasoning,
-      },
-      description: `Info needed for ${pipeline.contact_name}: ${requestDescription}`,
+      request_description: requestDescription,
       status: "pending",
     })
     .select("id")
     .single();
 
   if (error) return { success: false, action: "request_info", error: error.message };
+
+  // Also set a skyler_note on the pipeline so the banner appears on the lead card
+  await db
+    .from("skyler_sales_pipeline")
+    .update({
+      skyler_note: {
+        type: "action_required",
+        message: requestDescription,
+        created_at: new Date().toISOString(),
+        resolved: false,
+        request_id: data?.id,
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", pipeline.id);
 
   // Notify the user
   await dispatchNotification(db, {
@@ -384,6 +393,7 @@ async function createInfoRequest(ctx: ExecutionContext): Promise<ExecutionResult
     metadata: {
       requestDescription,
       reasoning: decision.reasoning,
+      requestId: data?.id,
     },
   });
 

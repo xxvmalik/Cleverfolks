@@ -64,6 +64,34 @@ export async function GET(req: NextRequest) {
     pendingActions = actions ?? [];
   }
 
+  // Fetch active directives for these pipeline records
+  let directivesByPipeline: Record<string, number> = {};
+  if (pipelineIds.length > 0) {
+    const { data: directives } = await db
+      .from("skyler_directives")
+      .select("pipeline_id")
+      .in("pipeline_id", pipelineIds)
+      .eq("is_active", true);
+    for (const d of directives ?? []) {
+      directivesByPipeline[d.pipeline_id] = (directivesByPipeline[d.pipeline_id] ?? 0) + 1;
+    }
+  }
+
+  // Fetch pending requests for these pipeline records
+  let requestsByPipeline: Record<string, Array<Record<string, unknown>>> = {};
+  if (pipelineIds.length > 0) {
+    const { data: requests } = await db
+      .from("skyler_requests")
+      .select("id, pipeline_id, request_description, created_at")
+      .in("pipeline_id", pipelineIds)
+      .eq("status", "pending");
+    for (const r of requests ?? []) {
+      const pId = r.pipeline_id as string;
+      if (!requestsByPipeline[pId]) requestsByPipeline[pId] = [];
+      requestsByPipeline[pId].push(r);
+    }
+  }
+
   // Map pending actions to their pipeline records
   const actionsByPipeline: Record<string, Array<Record<string, unknown>>> = {};
   for (const action of pendingActions) {
@@ -77,6 +105,8 @@ export async function GET(req: NextRequest) {
   const records = (data ?? []).map((p) => ({
     ...p,
     pending_actions: actionsByPipeline[p.id] ?? [],
+    directive_count: directivesByPipeline[p.id] ?? 0,
+    pending_requests: requestsByPipeline[p.id] ?? [],
   }));
 
   return NextResponse.json({ records });
