@@ -128,6 +128,10 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
                   meetingUrl: result.meetingLink,
                   botName: "Skyler Notetaker",
                   joinAt: result.startTime,
+                  metadata: {
+                    workspace_id: workspaceId,
+                    lead_id: result.pipeline_id!,
+                  },
                 });
 
                 // Store bot ID on pipeline record for webhook matching
@@ -135,6 +139,17 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
                   .from("skyler_sales_pipeline")
                   .update({ recall_bot_id: bot.id, updated_at: new Date().toISOString() })
                   .eq("id", result.pipeline_id);
+
+                // Also store in recall_bots table
+                await db.from("recall_bots").insert({
+                  recall_bot_id: bot.id,
+                  workspace_id: workspaceId,
+                  lead_id: result.pipeline_id,
+                  meeting_url: result.meetingLink,
+                  scheduled_join_at: result.startTime,
+                  status: "scheduled",
+                  bot_name: "Skyler Notetaker",
+                });
 
                 console.log(`[meeting-check] Recall bot ${bot.id} scheduled for pipeline ${result.pipeline_id}`);
               } catch (recallErr) {
