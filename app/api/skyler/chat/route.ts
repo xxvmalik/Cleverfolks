@@ -28,6 +28,8 @@ import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
 import { classifyDirective } from "@/lib/skyler/directives/classify-directive";
 import { saveDirective } from "@/lib/skyler/directives/directive-store";
+import { extractFacts } from "@/lib/skyler/memory/fact-extractor";
+import { setMemory } from "@/lib/skyler/memory/agent-memory-store";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -445,6 +447,28 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
               fulfilled_at: new Date().toISOString(),
             })
             .eq("id", req.id);
+
+          // Extract facts from the user's response and store permanently
+          try {
+            const facts = await extractFacts(message, req.request_description);
+            if (facts.length > 0) {
+              for (const fact of facts) {
+                await setMemory(
+                  db,
+                  workspaceId,
+                  fact.fact_key,
+                  fact.fact_value,
+                  fact.category,
+                  "user_provided",
+                  fact.is_workspace_level ? undefined : taggedPipelineId
+                );
+                console.log(`[skyler-chat] Stored fact: ${fact.fact_key} = ${fact.fact_value} (${fact.category}, ${fact.is_workspace_level ? "workspace" : "lead"})`);
+              }
+              console.log(`[skyler-chat] Extracted and stored ${facts.length} facts from user response`);
+            }
+          } catch (factErr) {
+            console.error("[skyler-chat] Fact extraction failed:", factErr);
+          }
 
           // Clear the skyler_note banner on the lead card
           await db

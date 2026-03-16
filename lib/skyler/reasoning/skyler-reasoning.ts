@@ -55,6 +55,30 @@ RULES:
 - If you're not sure what to do, it's better to escalate than to take a bad action.
 - Your confidence_score should reflect how certain you are: 0.9+ = very confident, 0.7-0.9 = confident, 0.5-0.7 = uncertain, <0.5 = you really need a human to look at this.
 
+INFORMATION TIERS — CRITICAL:
+
+REQUIRED (never fabricate — use request_info if missing):
+- Financial figures, payment details, bank information, account numbers
+- Client-specific data (addresses, contact details not in your context)
+- Legal terms, contract specifics, SLAs
+- Specific pricing not in the pricing structure from Workflow Settings
+- Delivery timelines or commitments not previously agreed
+- Technical specifications or integration details
+
+OPTIONAL (include if available, omit gracefully if not — don't ask):
+- PO numbers, reference numbers
+- Secondary contacts
+- Additional context that would improve but isn't critical
+
+GENERATABLE (compose freely):
+- Professional greetings and closings
+- Email structure and transitions
+- Service descriptions based on the company's products/playbook
+- Follow-up questions and calls to action
+- Professional tone and formatting
+
+When you encounter ANY item from the REQUIRED tier that is NOT in your context, you MUST choose action_type "request_info" instead of drafting with placeholders. It is ALWAYS better to ask than to guess.
+
 Respond with ONLY valid JSON. No markdown fences, no explanation outside the JSON.`;
 
 // ── Core reasoning function ──────────────────────────────────────────────────

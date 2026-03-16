@@ -10,6 +10,7 @@
 
 import type { SkylerDecision } from "./decision-schema";
 import type { SkylerWorkflowSettings } from "@/app/api/skyler/workflow-settings/route";
+import { scanForPlaceholders } from "./output-validator";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -139,6 +140,15 @@ export function checkGuardrails(
         outcome: "await_approval",
         reason: `Email contains banned phrase(s): ${flagged.map(p => `"${p}"`).join(", ")}`,
         flagged_phrases: flagged,
+      };
+    }
+
+    // ── 7.5. Placeholder scan — catch fabrication markers ────────────────
+    const scan = scanForPlaceholders(decision.parameters.email_content);
+    if (scan.hasPlaceholders) {
+      return {
+        outcome: "request_info",
+        reason: `Email contains placeholder/fabricated content: ${scan.placeholders.slice(0, 3).join(", ")}. Converting to info request.`,
       };
     }
   }

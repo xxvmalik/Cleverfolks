@@ -25,6 +25,7 @@ const EVENT_EMOJI: Record<NotificationEventType, string> = {
   objection_received: ":warning:",
   meeting_booked: ":calendar:",
   action_note_due: ":bell:",
+  info_requested: ":raised_hand:",
 };
 
 /**

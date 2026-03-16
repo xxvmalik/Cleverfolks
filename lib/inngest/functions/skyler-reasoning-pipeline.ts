@@ -23,6 +23,8 @@ import {
   assembleReasoningContext,
   type ReasoningEvent,
 } from "@/lib/skyler/reasoning/context-assembler";
+import { inferTaskType, checkKnowledge } from "@/lib/skyler/reasoning/knowledge-checker";
+import { scanForPlaceholders } from "@/lib/skyler/reasoning/output-validator";
 
 // ── Event Normalizer ─────────────────────────────────────────────────────────
 // Maps old event shapes to the reasoning pipeline's expected format.
@@ -108,6 +110,70 @@ export const reasoningPipeline = inngest.createFunction(
 
     console.log(`[reasoning-pipeline] Starting: ${eventType} for pipeline ${pipelineId}`);
 
+    // Step 0: Pre-generation knowledge check (deterministic, no AI)
+    // If critical data is missing, short-circuit before calling Claude → saves API cost
+    const knowledgeGap = await step.run("knowledge-check", async () => {
+      const taskType = inferTaskType(eventType, eventData);
+      if (!taskType) return null;
+
+      const ctx = await assembleReasoningContext(
+        { type: eventType, data: eventData },
+        workspaceId,
+        pipelineId
+      );
+      const check = checkKnowledge(taskType, ctx.pipeline, ctx.workflowSettings, ctx.agentMemories);
+
+      if (!check.isComplete) {
+        console.log(`[reasoning-pipeline] Knowledge gap detected for ${taskType}: ${check.missingFields.join(", ")}`);
+        return {
+          action_type: "request_info" as const,
+          parameters: {
+            request_description: check.requestDescription,
+          },
+          reasoning: `Missing required data for ${taskType}: ${check.missingFields.join(", ")}. Asking user rather than fabricating.`,
+          confidence_score: 1.0,
+          urgency: "same_day" as const,
+        };
+      }
+
+      return null;
+    });
+
+    // If knowledge check found gaps, skip reasoning entirely
+    if (knowledgeGap) {
+      console.log(`[reasoning-pipeline] Short-circuited: knowledge gap → request_info`);
+
+      const executionResult = await step.run("execute-knowledge-gap", async () => {
+        const db = createAdminSupabaseClient();
+        const { data: pipeline } = await db
+          .from("skyler_sales_pipeline")
+          .select("*")
+          .eq("id", pipelineId)
+          .single();
+
+        if (!pipeline) throw new Error(`Pipeline record ${pipelineId} not found`);
+
+        const execCtx: ExecutionContext = {
+          db,
+          workspaceId,
+          pipeline: pipeline as unknown as ExecutionContext["pipeline"],
+          decision: knowledgeGap,
+          guardrail: { outcome: "request_info", reason: "Pre-generation knowledge check failed" },
+          eventType,
+        };
+        return await executeDecision(execCtx);
+      });
+
+      return {
+        pipelineId,
+        eventType,
+        decision: knowledgeGap,
+        guardrail: { outcome: "request_info", reason: "Pre-generation knowledge check" },
+        execution: executionResult,
+        short_circuited: true,
+      };
+    }
+
     // Step 1: Reason — call Claude Sonnet for a structured decision
     const reasoningResult = await step.run("reason", async () => {
       const reasoningEvent: ReasoningEvent = {
@@ -117,7 +183,25 @@ export const reasoningPipeline = inngest.createFunction(
       return await reasonAboutEvent(reasoningEvent, workspaceId, pipelineId);
     });
 
-    const decision = reasoningResult.decision;
+    let decision = reasoningResult.decision;
+
+    // Step 1.5: Post-generation placeholder scan (Layer 5)
+    // If the AI drafted content with placeholders, convert to request_info
+    if (decision.action_type === "draft_email" && decision.parameters.email_content) {
+      const scan = scanForPlaceholders(decision.parameters.email_content);
+      if (scan.hasPlaceholders) {
+        console.log(`[reasoning-pipeline] Placeholder detected in draft: ${scan.placeholders.join(", ")}`);
+        decision = {
+          action_type: "request_info",
+          parameters: {
+            request_description: scan.missingDescription,
+          },
+          reasoning: `Draft contained placeholder content (${scan.placeholders.length} markers found). Asking user for the actual details instead of sending placeholders.`,
+          confidence_score: 1.0,
+          urgency: "same_day",
+        };
+      }
+    }
     console.log(
       `[reasoning-pipeline] Decision: ${decision.action_type} (confidence: ${decision.confidence_score}, fallback: ${reasoningResult.is_fallback})`
     );

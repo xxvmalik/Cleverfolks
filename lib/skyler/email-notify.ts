@@ -24,6 +24,7 @@ const EVENT_LABELS: Record<NotificationEventType, string> = {
   objection_received: "Objection Received",
   meeting_booked: "Meeting Booked",
   action_note_due: "Action Note Due",
+  info_requested: "Information Requested",
 };
 
 /**

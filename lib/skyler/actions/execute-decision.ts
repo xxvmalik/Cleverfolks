@@ -383,10 +383,10 @@ async function createInfoRequest(ctx: ExecutionContext): Promise<ExecutionResult
     })
     .eq("id", pipeline.id);
 
-  // Notify the user
+  // Notify the user — uses info_requested event type so it fires even in Full Autonomy mode
   await dispatchNotification(db, {
     workspaceId,
-    eventType: "draft_awaiting_approval",
+    eventType: "info_requested",
     pipelineId: pipeline.id,
     title: `Skyler needs info: ${pipeline.contact_name}`,
     body: requestDescription,

@@ -19,7 +19,8 @@ export type NotificationEventType =
   | "deal_closed_lost"
   | "objection_received"
   | "meeting_booked"
-  | "action_note_due";
+  | "action_note_due"
+  | "info_requested";
 
 export type NotificationParams = {
   workspaceId: string;
@@ -53,10 +54,11 @@ type WorkflowSettings = {
   notifications?: NotificationSettings;
 };
 
-// Events that fire even in full autonomy mode
+// Events that fire even in full autonomy mode — these always need human attention
 const FULL_AUTONOMY_EVENTS: Set<NotificationEventType> = new Set([
   "escalation_triggered",
   "objection_received",
+  "info_requested",
 ]);
 
 // ── Dispatcher ───────────────────────────────────────────────────────────────

@@ -14,6 +14,11 @@ import {
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { getActiveDirectives, type Directive } from "@/lib/skyler/directives/directive-store";
 import { getLeadMeetingContext } from "@/lib/skyler/meetings/meeting-search";
+import {
+  getMemories,
+  formatMemoriesForPrompt,
+  type AgentMemory,
+} from "@/lib/skyler/memory/agent-memory-store";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -77,6 +82,7 @@ export type ReasoningContext = {
   sender: SenderIdentity;
   directives: Directive[];
   pendingRequests: Array<{ id: string; request_description: string; created_at: string }>;
+  agentMemories: AgentMemory[];
   meetingContext: {
     hasMeetings: boolean;
     meetingCount: number;
@@ -100,7 +106,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -137,6 +143,9 @@ export async function assembleReasoningContext(
 
     // Meeting intelligence for this lead
     getLeadMeetingContext(pipelineId),
+
+    // Permanent agent memories (workspace-level + lead-level)
+    getMemories(db, workspaceId, pipelineId),
   ]);
 
   // Extract workflow settings
@@ -192,6 +201,7 @@ export async function assembleReasoningContext(
     sender: { ownerName, companyName },
     directives: directivesResult,
     pendingRequests: (requestsResult.data ?? []) as Array<{ id: string; request_description: string; created_at: string }>,
+    agentMemories: agentMemoriesResult,
     meetingContext: meetingContextResult,
   };
 }
@@ -199,7 +209,7 @@ export async function assembleReasoningContext(
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -285,6 +295,7 @@ ${memoryBlock}
 - From: ${sender.ownerName ?? "Sales Team"} at ${sender.companyName}
 ${directives.length > 0 ? `\n## User Instructions for This Lead\nThese are specific instructions from your human manager. Follow them.\n${directives.map((d) => `- "${d.directive_text}" (given on ${new Date(d.created_at).toLocaleDateString()})`).join("\n")}` : ""}
 ${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously asked the user for information. These are still unanswered:\n${pendingRequests.map((r) => `- ${r.request_description} (asked on ${new Date(r.created_at).toLocaleDateString()})`).join("\n")}` : ""}
+${agentMemories.length > 0 ? `\n## What You Know About This Business\nThese are verified facts provided by the user. NEVER ask for information that is already listed here.\n${formatMemoriesForPrompt(agentMemories)}\n\nCRITICAL: If you need information NOT listed above, use request_info. Do NOT fabricate, guess, or use placeholders.` : "\n## What You Know About This Business\n(No stored facts yet. If you need specific business data — payment details, legal terms, pricing — use request_info to ask the user.)"}
 
 ## Your Task
 Based on everything above, decide the single best action to take right now.
@@ -294,7 +305,7 @@ Available actions:
 - update_stage: Move the lead to a different pipeline stage (provide new_stage). Valid stages: initial_outreach, follow_up_1, follow_up_2, follow_up_3, replied, negotiation, demo_booked, meeting_booked, follow_up_meeting, proposal, closed_won, closed_lost
 - schedule_followup: Schedule a follow-up for later (provide delay in hours + reason)
 - create_note: Add a note to the lead record (provide note_text)
-- request_info: Ask the user for information you need (provide request_description)
+- request_info: Use this when you need specific business data that is NOT in your context — payment details, bank info, account numbers, pricing specifics, contract terms, delivery timelines, legal terms, technical specs, or ANY factual detail you weren't explicitly given. It is ALWAYS better to ask than to guess. Use this BEFORE generating placeholder values, brackets like [details here], or generic stand-ins. (provide request_description)
 - escalate: Flag this for human attention (provide escalation_reason)
 - do_nothing: No action needed right now (explain why in reasoning)
 - close_won: Mark the deal as won (provide close_reason, won_amount)
