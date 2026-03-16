@@ -6,6 +6,10 @@ import {
   formatKnowledgeProfile,
 } from "@/lib/cleverbrain/system-prompt";
 import { type SkylerWorkflowSettings, DEFAULT_WORKFLOW_SETTINGS } from "@/app/api/skyler/workflow-settings/route";
+import {
+  type AgentMemory,
+  formatMemoriesForPrompt,
+} from "@/lib/skyler/memory/agent-memory-store";
 
 // Re-export types for convenience
 export type { WorkspaceRow, OnboardingRow, KnowledgeProfileRow };
@@ -175,7 +179,8 @@ export function buildSkylerSystemPrompt(
   }>,
   autonomyLevel: "full" | "approval_required" | "read_only" = "approval_required",
   pendingActions?: Array<{ id: string; description: string }>,
-  workflowSettings?: SkylerWorkflowSettings | null
+  workflowSettings?: SkylerWorkflowSettings | null,
+  agentMemories?: AgentMemory[]
 ): string {
   const settings = workspace?.settings ?? {};
   const orgData = onboarding?.org_data ?? {};
@@ -445,35 +450,45 @@ READ / SEARCH TOOLS:
 
 INVOICING / PROPOSALS:
 You do NOT have invoicing tools yet (Stripe integration is coming). When a user asks you to "draft an invoice", "send the invoice", or "create a proposal":
-- Draft the invoice/proposal as an EMAIL to the lead with all the details (service description, pricing, payment instructions)
+- BEFORE drafting, check if you have ALL required information: payment methods, bank details, pricing agreed, service description. Check your STORED BUSINESS FACTS section below.
+- If ANY required detail is missing (especially payment methods, bank info, billing address), ASK THE USER FIRST. Do NOT draft with placeholders or fabricated details.
 - If the user tells you WHERE to draft it or gives specific instructions, follow their instructions exactly
-- Use whatever pricing and service details you know from the conversation thread, meeting notes, and workspace memories
+- Only use pricing and service details that are explicitly in your context (conversation thread, meeting notes, stored business facts)
 - Move the lead to "proposal" stage if not already there
-- NEVER say "I don't have invoicing tools" — just draft it as an email and explain that you've prepared it as an email draft
+- NEVER say "I don't have invoicing tools" — just draft it as an email
+- NEVER fabricate payment details (PayPal addresses, bank accounts, sort codes). If you don't have them, ask.
 
-INFORMATION TIERS — WHAT YOU CAN AND CANNOT COMPOSE:
+KNOWLEDGE GAP DETECTION — CRITICAL BEHAVIOUR RULE:
 
-REQUIRED (never fabricate — ASK the user if missing):
-- Financial figures, payment details, bank information, account numbers
+You must NEVER fabricate specific business information you don't have. This includes:
+
+NEVER FABRICATE (always ask the user BEFORE drafting):
+- Payment details, bank information, account numbers, PayPal addresses
 - Client-specific data (addresses, contact details not in your context)
-- Legal terms, contract specifics, SLAs
+- Legal terms, contract specifics, SLAs, governing law
 - Specific pricing not in your pricing structure from Workflow Settings
-- Delivery timelines or commitments not previously agreed
+- Delivery timelines or commitments not previously discussed
 - Technical specifications or integration details
+- How the user's business delivers services, onboarding processes, refund policies
+- Fulfilment timelines, team structure, internal processes
+- Any specific factual claim about the user's business you weren't explicitly told
 
-OPTIONAL (include if available, omit gracefully if not — don't ask):
+INCLUDE IF AVAILABLE, OMIT IF NOT (don't ask):
 - PO numbers, reference numbers
 - Secondary contacts
 - Additional context that would improve but isn't critical
 
-GENERATABLE (compose freely):
+COMPOSE FREELY:
 - Professional greetings and closings
 - Email structure and transitions
-- Service descriptions based on the company's products/playbook
 - Follow-up questions and calls to action
 - Professional tone and formatting
 
-If you need ANY item from the REQUIRED tier that isn't in your context, workspace memories, or meeting notes — ASK THE USER before drafting. It is ALWAYS better to ask than to guess. Never use placeholder text like [bank details], {insert here}, or "TBD".
+THE RULE: If you are about to write ANYTHING specific about this business that you were not explicitly told — whether it's a payment method, a process, a policy, a timeline, or any operational detail — STOP and ask the user first. It is ALWAYS better to ask than to guess.
+
+NEVER use placeholder text like [bank details], {insert here}, "TBD", "will be provided separately", or any generic stand-in. If you don't have the information, ask for it — don't draft around the gap.
+
+When you need to ask, tell the user exactly what you need and why. Example: "Before I draft this invoice, I need to know: what payment methods do you accept? (bank transfer, PayPal, etc.) And what are the payment terms (net 30, due on receipt, etc.)?"
 
 Never search "just to be thorough." If you know the answer, give it.
 When tool results include a "TOTAL RECORDS RETURNED" line, ALWAYS use that exact count.
@@ -591,9 +606,32 @@ These rules OVERRIDE the "MANDATORY TOOL CALLING RULE" above. When pending actio
 - CRITICAL: Do NOT call create_deal, create_contact, create_task, etc. when a pending action for the same thing already exists. That will create a DUPLICATE. Use execute_pending_action instead.
 - After executing, confirm naturally: "Done — I've created the contact for Sarah Chen in our CRM."
 - After rejecting, acknowledge: "Got it, I've cancelled that action."
-` : ""}LIMITATIONS:
+` : ""}${formatAgentMemoriesSection(agentMemories)}LIMITATIONS:
 - Cannot send emails or messages directly (email integration coming soon)
 - Data syncs periodically, so the most recent changes may not appear yet
 - Cannot access private Slack channels unless the bot is invited
 - Write tools require HubSpot to be connected`;
+}
+
+// ── Agent memories formatter (for chat system prompt) ───────────────────────
+
+function formatAgentMemoriesSection(agentMemories?: AgentMemory[]): string {
+  if (!agentMemories || agentMemories.length === 0) {
+    return `
+STORED BUSINESS FACTS:
+(No business facts stored yet. If you need specific business data to complete a task — payment details, processes, policies, timelines — ask the user. Once they tell you, it will be stored permanently.)
+
+`;
+  }
+
+  const formatted = formatMemoriesForPrompt(agentMemories);
+  return `
+STORED BUSINESS FACTS — VERIFIED INFORMATION:
+These are facts the user has explicitly provided. Use them. NEVER ask for information that is already listed here.
+
+${formatted}
+
+If you need information NOT listed above, ask the user. Do NOT guess or fabricate.
+
+`;
 }

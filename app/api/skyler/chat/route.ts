@@ -29,7 +29,7 @@ import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
 import { classifyDirective } from "@/lib/skyler/directives/classify-directive";
 import { saveDirective } from "@/lib/skyler/directives/directive-store";
 import { extractFacts } from "@/lib/skyler/memory/fact-extractor";
-import { setMemory } from "@/lib/skyler/memory/agent-memory-store";
+import { setMemory, getMemories, type AgentMemory } from "@/lib/skyler/memory/agent-memory-store";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -191,12 +191,19 @@ export async function POST(request: NextRequest) {
     { data: onboardingRow },
     { data: profileRow },
     { data: integrationsRows },
+    agentMemoriesResult,
   ] = await Promise.all([
     db.from("workspaces").select("name, settings").eq("id", workspaceId).single(),
     db.from("onboarding_state").select("org_data, skyler_data").eq("workspace_id", workspaceId).maybeSingle(),
     db.from("knowledge_profiles").select("profile, status").eq("workspace_id", workspaceId).maybeSingle(),
     db.from("integrations").select("provider").eq("workspace_id", workspaceId).eq("status", "connected"),
+    getMemories(db, workspaceId),
   ]);
+
+  const agentMemories: AgentMemory[] = agentMemoriesResult;
+  if (agentMemories.length > 0) {
+    console.log(`[skyler-chat] Loaded ${agentMemories.length} agent memories for workspace`);
+  }
 
   const connectedProviders = ((integrationsRows ?? []) as IntegrationRow[]).map((r) => r.provider);
   const integrationManifest: IntegrationInfo[] = buildIntegrationManifest(connectedProviders);
@@ -249,6 +256,16 @@ export async function POST(request: NextRequest) {
     console.log(`[skyler-chat] No conversationId provided — cannot fetch pending actions`);
   }
 
+  // If a lead is tagged, also load lead-specific memories (they override workspace-level)
+  let effectiveAgentMemories = agentMemories;
+  if (pipelineContext?.pipeline_id) {
+    try {
+      effectiveAgentMemories = await getMemories(db, workspaceId, pipelineContext.pipeline_id as string);
+    } catch {
+      // Fall back to workspace-only memories
+    }
+  }
+
   let systemPrompt = buildSkylerSystemPrompt(
     workspaceRow as WorkspaceRow | null,
     onboardingRow as OnboardingRow | null,
@@ -257,7 +274,8 @@ export async function POST(request: NextRequest) {
     memories,
     autonomyLevel,
     pendingActions,
-    workflowSettings
+    workflowSettings,
+    effectiveAgentMemories
   );
 
   // ── Inject lead/pipeline tag context ────────────────────────────────────
