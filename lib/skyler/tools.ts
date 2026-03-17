@@ -316,6 +316,57 @@ const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
+// ── Meeting booking tool ─────────────────────────────────────────────────────
+
+const SKYLER_MEETING_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "book_meeting",
+    description:
+      "Book a meeting with a lead. Checks real calendar availability (Outlook/Google), scores time slots, and either suggests the best times or sends a Calendly link — depending on workspace settings. Use when the user asks to 'book a meeting', 'schedule a call', 'set up a demo', or 'find a time' with a lead. IMPORTANT: This triggers the full booking flow — do NOT draft a manual email with times instead.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        pipeline_id: {
+          type: "string",
+          description: "Pipeline record ID of the lead to book with",
+        },
+        contact_email: {
+          type: "string",
+          description: "Lead's email address",
+        },
+        contact_name: {
+          type: "string",
+          description: "Lead's name",
+        },
+        company_name: {
+          type: "string",
+          description: "Lead's company name",
+        },
+        duration_minutes: {
+          type: "number",
+          description: "Meeting duration in minutes. Default 30.",
+        },
+        booking_method: {
+          type: "string",
+          enum: ["calendly_link", "suggest_times", "direct_invite", "ask_availability"],
+          description:
+            "Override booking method. If omitted, auto-detected from workspace settings (Calendly connected → calendly_link, calendar connected → suggest_times, neither → ask_availability).",
+        },
+        additional_attendees: {
+          type: "array",
+          items: { type: "string" },
+          description: "Extra email addresses to invite (optional)",
+        },
+      },
+      required: ["pipeline_id", "contact_email", "contact_name"],
+    },
+  },
+];
+
+export const SKYLER_MEETING_TOOL_NAMES = new Set(
+  SKYLER_MEETING_TOOLS.map((t) => t.name)
+);
+
 // ── Export combined set ──────────────────────────────────────────────────────
 
 export const SKYLER_WRITE_TOOL_NAMES = new Set(
@@ -340,4 +391,5 @@ export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_LEAD_TOOLS,
   ...SKYLER_SALES_CLOSER_TOOLS,
   ...SKYLER_ACTION_TOOLS,
+  ...SKYLER_MEETING_TOOLS,
 ];

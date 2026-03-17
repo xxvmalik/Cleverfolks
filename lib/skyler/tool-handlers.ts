@@ -8,7 +8,7 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES, SKYLER_MEETING_TOOL_NAMES } from "@/lib/skyler/tools";
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
@@ -1022,6 +1022,67 @@ ${dims}${referral}
 ${r.scoring_reasoning}`;
 }
 
+// ── Meeting booking handler ──────────────────────────────────────────────────
+
+async function handleBookMeetingTool(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const pipelineId = input.pipeline_id as string;
+  const contactEmail = input.contact_email as string;
+  const contactName = input.contact_name as string;
+  const companyName = (input.company_name as string) ?? "";
+  const durationMinutes = (input.duration_minutes as number) ?? 30;
+  const bookingMethod = input.booking_method as string | undefined;
+  const additionalAttendees = (input.additional_attendees as string[]) ?? [];
+
+  if (!pipelineId || !contactEmail || !contactName) {
+    return {
+      results: [],
+      summary: "Missing required fields: pipeline_id, contact_email, and contact_name are all required for booking.",
+    };
+  }
+
+  try {
+    const { inngest } = await import("@/lib/inngest/client");
+
+    await inngest.send({
+      name: "skyler/meeting.book-requested",
+      data: {
+        workspaceId,
+        pipelineId,
+        leadEmail: contactEmail,
+        leadName: contactName,
+        companyName,
+        bookingMethodOverride: bookingMethod,
+        suggestedDuration: durationMinutes,
+        additionalAttendees: additionalAttendees.length > 0 ? additionalAttendees : undefined,
+      },
+    });
+
+    // Also update pipeline stage to reflect meeting is being booked
+    await adminSupabase
+      .from("skyler_sales_pipeline")
+      .update({
+        stage: "demo_booked",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", pipelineId);
+
+    return {
+      results: [],
+      summary: `Meeting booking flow triggered for ${contactName} (${contactEmail}). The system is now checking calendar availability, scoring time slots, and will ${bookingMethod === "calendly_link" ? "send a Calendly link" : "suggest the best available times"} via the configured booking method. Duration: ${durationMinutes} minutes.`,
+    };
+  } catch (err) {
+    console.error("[book_meeting] Failed to trigger booking flow:", err instanceof Error ? err.message : err);
+    return {
+      results: [],
+      summary: `Failed to trigger meeting booking: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ── Main dispatcher with autonomy enforcement ────────────────────────────────
 
 export async function executeSkylerToolCall(
@@ -1046,6 +1107,11 @@ export async function executeSkylerToolCall(
   // ── Sales Closer tools: no autonomy check (read-like + pipeline management) ──
   if (SKYLER_SALES_CLOSER_TOOL_NAMES.has(toolName)) {
     return handleSalesCloserTool(toolName, input, workspaceId, adminSupabase);
+  }
+
+  // ── Meeting booking tool: triggers Inngest book-meeting-flow ──────────
+  if (SKYLER_MEETING_TOOL_NAMES.has(toolName)) {
+    return handleBookMeetingTool(input, workspaceId, adminSupabase);
   }
 
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──
