@@ -684,6 +684,8 @@ export function SkylerClient({
   const [pipelineLoading, setPipelineLoading] = useState(false);
   const [previewActionId, setPreviewActionId] = useState<string | null>(null);
   const [rejectFeedback, setRejectFeedback] = useState<Record<string, string>>({});
+  const [rejectingActionId, setRejectingActionId] = useState<string | null>(null);
+  const [rejectError, setRejectError] = useState<Record<string, string>>({});
   const [threadOpenId, setThreadOpenId] = useState<string | null>(null);
   const [transcriptOpenId, setTranscriptOpenId] = useState<string | null>(null);
   const [meetingsOpenId, setMeetingsOpenId] = useState<string | null>(null);
@@ -1178,16 +1180,29 @@ export function SkylerClient({
     }
   }
 
-  async function handleRejectDraft(pipelineId: string, actionId: string, feedback?: string) {
+  async function handleRejectDraft(pipelineId: string, actionId: string) {
+    const feedback = rejectFeedback[actionId]?.trim();
+    if (!feedback) {
+      setRejectError((prev) => ({ ...prev, [actionId]: "Please tell Skyler why you're rejecting this" }));
+      return;
+    }
+    setRejectError((prev) => { const next = { ...prev }; delete next[actionId]; return next; });
     try {
-      await fetch(`/api/skyler/sales-pipeline/${pipelineId}/reject`, {
+      const res = await fetch(`/api/skyler/sales-pipeline/${pipelineId}/reject`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actionId, feedback }),
       });
-      fetchSalesCloserData();
+      if (res.ok) {
+        setRejectingActionId(null);
+        setRejectFeedback((prev) => { const next = { ...prev }; delete next[actionId]; return next; });
+        fetchSalesCloserData();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setRejectError((prev) => ({ ...prev, [actionId]: data.error ?? "Rejection failed" }));
+      }
     } catch {
-      // Silently handle
+      setRejectError((prev) => ({ ...prev, [actionId]: "Network error — please try again" }));
     }
   }
 
@@ -1896,48 +1911,108 @@ export function SkylerClient({
                                             {isSending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                                             {isSending ? "Sending..." : error ? "Retry Send" : "Approve and Send"}
                                           </button>
-                                          <button
-                                            disabled={isSending}
-                                            onClick={() => {
-                                              handleRejectDraft(rec.id, pa.id, rejectFeedback[pa.id]);
-                                              setPreviewActionId(null);
-                                              setRejectFeedback((prev) => { const next = { ...prev }; delete next[pa.id]; return next; });
-                                            }}
-                                            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
-                                          >
-                                            <X className="w-3 h-3" />
-                                            Reject
-                                          </button>
+                                          {rejectingActionId !== pa.id && (
+                                            <button
+                                              disabled={isSending}
+                                              onClick={() => setRejectingActionId(pa.id)}
+                                              className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
+                                            >
+                                              <X className="w-3 h-3" />
+                                              Reject
+                                            </button>
+                                          )}
                                         </div>
 
-                                        {/* Rejection feedback input */}
-                                        <input
-                                          type="text"
-                                          placeholder="Optional: correction feedback (e.g. &quot;be more direct&quot;, &quot;don't mention pricing&quot;)"
-                                          value={rejectFeedback[pa.id] ?? ""}
-                                          onChange={(e) => setRejectFeedback((prev) => ({ ...prev, [pa.id]: e.target.value }))}
-                                          className="w-full bg-[#111111] border border-[#2A2D35]/50 rounded-lg px-3 py-2 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F87171]/50 transition-colors"
-                                        />
+                                        {/* Rejection feedback — appears after clicking Reject */}
+                                        {rejectingActionId === pa.id && (
+                                          <div className="space-y-2">
+                                            <input
+                                              type="text"
+                                              autoFocus
+                                              placeholder="Why are you rejecting this? (e.g. &quot;tone was too pushy&quot;, &quot;wrong pricing&quot;, &quot;I'll handle this myself&quot;)"
+                                              value={rejectFeedback[pa.id] ?? ""}
+                                              onChange={(e) => {
+                                                setRejectFeedback((prev) => ({ ...prev, [pa.id]: e.target.value }));
+                                                if (e.target.value.trim()) setRejectError((prev) => { const next = { ...prev }; delete next[pa.id]; return next; });
+                                              }}
+                                              onKeyDown={(e) => { if (e.key === "Enter") handleRejectDraft(rec.id, pa.id); }}
+                                              className={`w-full bg-[#111111] border rounded-lg px-3 py-2 text-xs text-white placeholder-[#555A63] outline-none transition-colors ${rejectError[pa.id] ? "border-[#F87171]" : "border-[#2A2D35]/50 focus:border-[#F87171]/50"}`}
+                                            />
+                                            {rejectError[pa.id] && (
+                                              <p className="text-[#F87171] text-[10px]">{rejectError[pa.id]}</p>
+                                            )}
+                                            <div className="flex gap-2">
+                                              <button
+                                                onClick={() => handleRejectDraft(rec.id, pa.id)}
+                                                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                              >
+                                                <X className="w-3 h-3" />
+                                                Confirm Rejection
+                                              </button>
+                                              <button
+                                                onClick={() => { setRejectingActionId(null); setRejectError((prev) => { const next = { ...prev }; delete next[pa.id]; return next; }); }}
+                                                className="px-3 py-1.5 text-[#8B8F97] rounded-lg text-xs hover:text-white transition-colors"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
                                     )}
 
                                     {/* Compact approve/reject when preview is closed */}
                                     {!isOpen && (
-                                      <div className="px-3 pb-3 flex gap-2">
-                                        <button
-                                          disabled={isSending}
-                                          onClick={() => handleApproveDraft(rec.id, pa.id)}
-                                          className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors disabled:opacity-50"
-                                        >
-                                          {isSending ? "Sending..." : error ? "Retry Send" : "Approve and Send"}
-                                        </button>
-                                        <button
-                                          disabled={isSending}
-                                          onClick={() => handleRejectDraft(rec.id, pa.id)}
-                                          className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
-                                        >
-                                          Reject
-                                        </button>
+                                      <div className="px-3 pb-3 space-y-2">
+                                        <div className="flex gap-2">
+                                          <button
+                                            disabled={isSending}
+                                            onClick={() => handleApproveDraft(rec.id, pa.id)}
+                                            className="px-3 py-1 bg-[#4ADE80]/20 text-[#4ADE80] rounded-lg text-xs font-medium hover:bg-[#4ADE80]/30 transition-colors disabled:opacity-50"
+                                          >
+                                            {isSending ? "Sending..." : error ? "Retry Send" : "Approve and Send"}
+                                          </button>
+                                          {rejectingActionId !== pa.id && (
+                                            <button
+                                              disabled={isSending}
+                                              onClick={() => setRejectingActionId(pa.id)}
+                                              className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors disabled:opacity-50"
+                                            >
+                                              Reject
+                                            </button>
+                                          )}
+                                        </div>
+                                        {rejectingActionId === pa.id && (
+                                          <div className="space-y-2">
+                                            <input
+                                              type="text"
+                                              autoFocus
+                                              placeholder="Why are you rejecting this?"
+                                              value={rejectFeedback[pa.id] ?? ""}
+                                              onChange={(e) => {
+                                                setRejectFeedback((prev) => ({ ...prev, [pa.id]: e.target.value }));
+                                                if (e.target.value.trim()) setRejectError((prev) => { const next = { ...prev }; delete next[pa.id]; return next; });
+                                              }}
+                                              onKeyDown={(e) => { if (e.key === "Enter") handleRejectDraft(rec.id, pa.id); }}
+                                              className={`w-full bg-[#111111] border rounded-lg px-3 py-2 text-xs text-white placeholder-[#555A63] outline-none transition-colors ${rejectError[pa.id] ? "border-[#F87171]" : "border-[#2A2D35]/50 focus:border-[#F87171]/50"}`}
+                                            />
+                                            {rejectError[pa.id] && <p className="text-[#F87171] text-[10px]">{rejectError[pa.id]}</p>}
+                                            <div className="flex gap-2">
+                                              <button
+                                                onClick={() => handleRejectDraft(rec.id, pa.id)}
+                                                className="px-3 py-1 bg-[#F87171]/20 text-[#F87171] rounded-lg text-xs font-medium hover:bg-[#F87171]/30 transition-colors"
+                                              >
+                                                Confirm Rejection
+                                              </button>
+                                              <button
+                                                onClick={() => { setRejectingActionId(null); setRejectError((prev) => { const next = { ...prev }; delete next[pa.id]; return next; }); }}
+                                                className="px-3 py-1 text-[#8B8F97] text-xs hover:text-white transition-colors"
+                                              >
+                                                Cancel
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
                                       </div>
                                     )}
                                   </div>

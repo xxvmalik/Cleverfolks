@@ -1,6 +1,7 @@
 /**
  * Approve a pending email draft for a pipeline record.
  * Sends Inngest event + executes the email send + syncs to HubSpot.
+ * Also captures golden example + updates confidence tracking (Stage 11).
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -9,6 +10,8 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { executeEmailSend } from "@/lib/email/email-sender";
 import { inngest } from "@/lib/inngest/client";
 import { syncEmailSentToHubSpot } from "@/lib/hubspot/crm-sync";
+import { createGoldenExample } from "@/lib/skyler/learning/golden-examples";
+import { recordOutcome, inferTrackedTaskType } from "@/lib/skyler/learning/confidence-tracking";
 
 export async function POST(
   req: NextRequest,
@@ -62,8 +65,61 @@ export async function POST(
       console.error("[approve] Inngest event failed (email still sent):", inngestErr);
     }
 
+    // ── Stage 11: Golden example + confidence tracking (fire-and-forget) ──
+    try {
+      // Find the skyler_decisions record linked to this action
+      const { data: decision } = await db
+        .from("skyler_decisions")
+        .select("id, decision, created_at, pipeline_id, workspace_id")
+        .eq("pipeline_id", pipelineId)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
+      if (decision) {
+        const decisionData = decision.decision as Record<string, unknown>;
+        const approvalSpeedMs = Date.now() - new Date(decision.created_at).getTime();
+        const approvalSpeedSeconds = Math.round(approvalSpeedMs / 1000);
+
+        // Update decision record with approval speed
+        await db
+          .from("skyler_decisions")
+          .update({
+            approval_speed_seconds: approvalSpeedSeconds,
+            action_id: targetActionId,
+          })
+          .eq("id", decision.id);
+
+        // Create golden example
+        const actionType = (decisionData.action_type as string) ?? "draft_email";
+        await createGoldenExample(db, {
+          workspaceId: decision.workspace_id,
+          leadId: pipelineId,
+          decisionId: decision.id,
+          taskType: actionType,
+          inputContext: {
+            stage: decisionData.parameters ? "unknown" : "unknown",
+            eventType: actionType,
+          },
+          agentOutput: decisionData,
+          approvalSpeedSeconds,
+          editDistance: 0.0, // No edit tracking yet — will be added when edit UI is built
+        });
+
+        // Update confidence tracking
+        const taskType = inferTrackedTaskType(actionType, {
+          isObjection: !!(decisionData.parameters as Record<string, unknown>)?.is_objection_response,
+          isMeetingFollowup: !!(decisionData.parameters as Record<string, unknown>)?.is_meeting_request,
+        });
+        if (taskType) {
+          await recordOutcome(db, decision.workspace_id, taskType, "approved");
+        }
+      }
+    } catch (learningErr) {
+      console.error("[approve] Learning capture failed (email still sent):", learningErr);
+    }
+
     // Fire-and-forget CRM sync to HubSpot
-    // Fetch pipeline record for context
     const { data: pipeline } = await db
       .from("skyler_sales_pipeline")
       .select("contact_email, contact_name, company_name, cadence_step, stage, hubspot_deal_id")
@@ -71,7 +127,6 @@ export async function POST(
       .single();
 
     if (pipeline) {
-      // Fetch the action's email content
       const { data: action } = await db
         .from("skyler_actions")
         .select("tool_input")

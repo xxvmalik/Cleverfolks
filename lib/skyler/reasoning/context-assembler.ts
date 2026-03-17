@@ -19,6 +19,27 @@ import {
   formatMemoriesForPrompt,
   type AgentMemory,
 } from "@/lib/skyler/memory/agent-memory-store";
+import {
+  getActiveCorrections,
+  formatCorrectionsForPrompt,
+  type AgentCorrection,
+} from "@/lib/skyler/learning/correction-store";
+import {
+  getGoldenExamples,
+  formatGoldenExamplesForPrompt,
+  type GoldenExample,
+} from "@/lib/skyler/learning/golden-examples";
+import {
+  getDimensions,
+  formatDimensionsForPrompt,
+  type BehaviouralDimension,
+} from "@/lib/skyler/learning/behavioural-dimensions";
+import {
+  getConfidence,
+  formatConfidenceForPrompt,
+  inferTrackedTaskType,
+  type ConfidenceRecord,
+} from "@/lib/skyler/learning/confidence-tracking";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,6 +115,11 @@ export type ReasoningContext = {
       participants: Array<{ name: string }> | null;
     } | null;
   } | null;
+  // Stage 11: Learning context
+  corrections: AgentCorrection[];
+  goldenExamples: GoldenExample[];
+  behaviouralDimensions: BehaviouralDimension[];
+  confidenceRecord: ConfidenceRecord | null;
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -106,7 +132,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult, correctionsResult, dimensionsResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -146,6 +172,10 @@ export async function assembleReasoningContext(
 
     // Permanent agent memories (workspace-level + lead-level)
     getMemories(db, workspaceId, pipelineId),
+
+    // Stage 11: Learning data
+    getActiveCorrections(db, workspaceId, { leadId: pipelineId, limit: 10 }),
+    getDimensions(db, workspaceId),
   ]);
 
   // Extract workflow settings
@@ -165,6 +195,13 @@ export async function assembleReasoningContext(
     throw new Error(`Pipeline record ${pipelineId} not found`);
   }
   const pipeline = pipelineResult.data as unknown as PipelineRecord;
+
+  // Stage 11: Load golden examples + confidence (depend on inferred task type)
+  const inferredTaskType = inferTrackedTaskType("draft_email", { stage: pipeline.stage });
+  const [goldenExamplesResult, confidenceResult] = await Promise.all([
+    inferredTaskType ? getGoldenExamples(db, workspaceId, inferredTaskType, 3) : Promise.resolve([]),
+    inferredTaskType ? getConfidence(db, workspaceId, inferredTaskType) : Promise.resolve(null),
+  ]);
 
   // Memories (filtered for relevance)
   const rawMemories = (memoriesResult.data ?? []).map(
@@ -203,13 +240,17 @@ export async function assembleReasoningContext(
     pendingRequests: (requestsResult.data ?? []) as Array<{ id: string; request_description: string; created_at: string }>,
     agentMemories: agentMemoriesResult,
     meetingContext: meetingContextResult,
+    corrections: correctionsResult,
+    goldenExamples: goldenExamplesResult as GoldenExample[],
+    behaviouralDimensions: dimensionsResult,
+    confidenceRecord: confidenceResult as ConfidenceRecord | null,
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -296,6 +337,7 @@ ${memoryBlock}
 ${directives.length > 0 ? `\n## User Instructions for This Lead\nThese are specific instructions from your human manager. Follow them.\n${directives.map((d) => `- "${d.directive_text}" (given on ${new Date(d.created_at).toLocaleDateString()})`).join("\n")}` : ""}
 ${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously asked the user for information. These are still unanswered:\n${pendingRequests.map((r) => `- ${r.request_description} (asked on ${new Date(r.created_at).toLocaleDateString()})`).join("\n")}` : ""}
 ${agentMemories.length > 0 ? `\n## What You Know About This Business\nThese are verified facts provided by the user. NEVER ask for information that is already listed here.\n${formatMemoriesForPrompt(agentMemories)}\n\nCRITICAL: If you need information NOT listed above, use request_info. Do NOT fabricate, guess, or use placeholders.` : "\n## What You Know About This Business\n(No stored facts yet. If you need specific business data — payment details, legal terms, pricing — use request_info to ask the user.)"}
+${formatLearningContext(corrections, goldenExamples, behaviouralDimensions, confidenceRecord)}
 
 ## Your Task
 Based on everything above, decide the single best action to take right now.
@@ -335,6 +377,34 @@ Respond with ONLY valid JSON matching this EXACT format:
   "confidence_score": 0.0-1.0,
   "urgency": "immediate" | "same_day" | "next_day" | "standard"
 }`;
+}
+
+// ── Learning context formatter ───────────────────────────────────────────────
+
+function formatLearningContext(
+  corrections: AgentCorrection[],
+  goldenExamples: GoldenExample[],
+  dimensions: BehaviouralDimension[],
+  confidence: ConfidenceRecord | null,
+): string {
+  const sections: string[] = [];
+
+  const dimBlock = formatDimensionsForPrompt(dimensions);
+  if (dimBlock) sections.push(dimBlock);
+
+  const corrBlock = formatCorrectionsForPrompt(corrections);
+  if (corrBlock) sections.push(corrBlock);
+
+  const exBlock = formatGoldenExamplesForPrompt(goldenExamples);
+  if (exBlock) sections.push(exBlock);
+
+  if (confidence && confidence.total_decisions > 0) {
+    const taskType = confidence.task_type.replace(/_/g, " ");
+    sections.push(formatConfidenceForPrompt(confidence, taskType));
+  }
+
+  if (sections.length === 0) return "";
+  return `\n## What You've Learned\n${sections.join("\n\n")}`;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

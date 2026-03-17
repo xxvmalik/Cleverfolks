@@ -543,6 +543,31 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
             });
           }
         }
+
+        // 3. Check if this is a behaviour correction (Stage 11, Part B)
+        if (!classification.is_directive) {
+          try {
+            const { classifyUserMessage } = await import("@/lib/skyler/learning/correction-classifier");
+            const correctionResult = await classifyUserMessage(message);
+
+            if (correctionResult && correctionResult.type === "behaviour_correction") {
+              const { inngest } = await import("@/lib/inngest/client");
+              await inngest.send({
+                name: "skyler/correction.received",
+                data: {
+                  correctionType: correctionResult.type,
+                  correctionText: correctionResult.correction_text,
+                  isVague: correctionResult.is_vague,
+                  pipelineId: taggedPipelineId,
+                  workspaceId,
+                },
+              });
+              console.log(`[skyler-chat] Behaviour correction detected: "${correctionResult.correction_text}" (vague: ${correctionResult.is_vague})`);
+            }
+          } catch (corrErr) {
+            console.error("[skyler-chat] Correction classification failed:", corrErr);
+          }
+        }
       } catch (err) {
         console.error("[skyler-chat] Directive/request processing failed:", err);
       }
