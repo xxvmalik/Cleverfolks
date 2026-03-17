@@ -61,6 +61,12 @@ const PROVIDER_CONFIG: Record<string, Omit<IntegrationInfo, "provider">> = {
     sourceTypes: ["outlook_email", "outlook_event", "outlook_contact"],
     signalPattern: /\b(outlook|microsoft\s+mail|hotmail|live\.com)\b/i,
   },
+  "calendly": {
+    name: "Calendly",
+    description: "scheduled meetings and booking events",
+    sourceTypes: ["calendly_event"],
+    signalPattern: /\b(calendly|booking|scheduled?\s+(?:meeting|call|event))\b/i,
+  },
 };
 
 // ── Manifest builder ──────────────────────────────────────────────────────────

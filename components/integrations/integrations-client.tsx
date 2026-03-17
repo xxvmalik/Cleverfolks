@@ -17,6 +17,7 @@ const PROVIDER_LOGOS: Record<string, string> = {
   outlook: "/integration-logos/outlook.svg",
   "google-calendar": "/integration-logos/google-calendar.svg",
   "google-drive": "/integration-logos/google-drive.svg",
+  "calendly": "/integration-logos/calendly.svg",
 };
 
 type Integration = {
@@ -45,6 +46,7 @@ const CORE_INTEGRATIONS: IntegrationConfig[] = [
   { provider: "hubspot",         name: "HubSpot",         category: "CRM",           color: "#FF7A59" },
   { provider: "google-drive",    name: "Google Drive",    category: "Knowledge",     color: "#34A853" },
   { provider: "outlook",         name: "Outlook",         category: "Email",         color: "#0072C6" },
+  { provider: "calendly",        name: "Calendly",        category: "Scheduling",    color: "#006BFF" },
 ];
 
 const COMING_SOON_INTEGRATIONS: IntegrationConfig[] = [
