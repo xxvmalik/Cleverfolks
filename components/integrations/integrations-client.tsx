@@ -290,11 +290,44 @@ export function IntegrationsClient({
       }
 
       const { token } = (await tokenRes.json()) as { token: string };
+      const nango = new Nango({ connectSessionToken: token });
 
-      // 2. Open Nango Connect UI
+      // Google Calendar: use nango.auth() directly to pass authorization_params
+      // that force a refresh token (Connect UI ignores these params)
+      if (provider === "google-calendar") {
+        const connectionId = workspaceId; // Use workspace ID as connection ID
+        const result = await nango.auth("google-calendar", connectionId, {
+          authorization_params: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any);
+
+        const nangoConnectionId = (result as { connectionId?: string }).connectionId ?? connectionId;
+
+        const actionResult = await connectIntegrationAction(
+          workspaceId,
+          "google-calendar",
+          nangoConnectionId
+        );
+
+        if (actionResult.error) throw new Error(actionResult.error);
+
+        if (actionResult.integrationId) {
+          fetch("/api/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ integrationId: actionResult.integrationId }),
+          }).catch(console.error);
+        }
+
+        router.refresh();
+        return;
+      }
+
+      // 2. All other providers: Open Nango Connect UI
       await new Promise<void>((resolve, reject) => {
-        const nango = new Nango({ connectSessionToken: token });
-
         const connectUI = nango.openConnectUI({
           onEvent: async (event: ConnectUIEvent) => {
             if (event.type === "connect") {
