@@ -53,7 +53,15 @@ export async function POST(request: NextRequest) {
         display_name: profile?.full_name ?? undefined,
       },
       allowed_integrations: ["slack", "google-mail", "outlook", "hubspot", "google-calendar"],
-    });
+      integrations_config_defaults: {
+        "google-calendar": {
+          authorization_params: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      },
+    } as Parameters<typeof nango.createConnectSession>[0]);
 
     return NextResponse.json({ token: session.data.token });
   } catch (err) {
