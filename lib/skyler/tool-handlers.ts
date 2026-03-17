@@ -1072,7 +1072,7 @@ async function handleBookMeetingTool(
 
     return {
       results: [],
-      summary: `Meeting booking flow triggered for ${contactName} (${contactEmail}). The system is now checking calendar availability, scoring time slots, and will ${bookingMethod === "calendly_link" ? "send a Calendly link" : "suggest the best available times"} via the configured booking method. Duration: ${durationMinutes} minutes.`,
+      summary: `Meeting booking initiated for ${contactName} (${contactEmail}). Checking calendar availability, scoring optimal time slots, and will ${bookingMethod === "calendly_link" ? "send a Calendly link" : "suggest the best available times"}. Duration: ${durationMinutes} minutes.`,
     };
   } catch (err) {
     console.error("[book_meeting] Failed to trigger booking flow:", err instanceof Error ? err.message : err);
