@@ -46,6 +46,7 @@ type WorkflowSettings = {
     negativeSentiment: boolean;
     firstContact: boolean;
     cSuiteContact: boolean;
+    pricingNegotiation: boolean;
   };
   primaryGoal: string;
   salesJourney: string;
@@ -64,6 +65,7 @@ type WorkflowSettings = {
     bookMeetings: boolean;
     firstOutreachApproval: boolean;
   };
+  knowledgeGapHandling: "ask_first" | "draft_best_attempt";
 };
 
 type MeetingSettings = {
@@ -837,6 +839,7 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                   ["negativeSentiment", "Negative sentiment detected in prospect reply"],
                   ["firstContact", "First contact with a new lead"],
                   ["cSuiteContact", "Any action involving C-suite contacts"],
+                  ["pricingNegotiation", "Pricing negotiation detected"],
                 ] as const).map(([key, label]) => (
                   <div key={key} className="flex items-center justify-between">
                     <p className="text-[#E0E0E0] text-sm">{label}</p>
@@ -1227,6 +1230,60 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                     enabled={settings.autonomyToggles.firstOutreachApproval}
                     onToggle={() => updateAutonomyToggle("firstOutreachApproval", !settings.autonomyToggles.firstOutreachApproval)}
                   />
+                </div>
+
+                {/* Knowledge Gap Handling */}
+                <div className="pt-4 border-t border-[#2A2D35]">
+                  <p className="text-[#E0E0E0] text-sm font-medium mb-1">When SKYLER needs information she doesn&apos;t have</p>
+                  <p className="text-[#555A63] text-xs mb-3">
+                    Controls how SKYLER handles missing data when drafting emails, proposals, or contracts.
+                  </p>
+                  <div className="space-y-2">
+                    <label
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors",
+                        settings.knowledgeGapHandling === "ask_first"
+                          ? "border-[#3A89FF] bg-[#3A89FF]/10"
+                          : "border-[#2A2D35] bg-transparent hover:border-[#3A3D45]"
+                      )}
+                      onClick={() => { updateSettings({ knowledgeGapHandling: "ask_first" }); }}
+                    >
+                      <div className={cn(
+                        "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                        settings.knowledgeGapHandling === "ask_first" ? "border-[#3A89FF]" : "border-[#555A63]"
+                      )}>
+                        {settings.knowledgeGapHandling === "ask_first" && (
+                          <div className="w-2 h-2 rounded-full bg-[#3A89FF]" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[#E0E0E0] text-sm font-medium">Ask me first</p>
+                        <p className="text-[#555A63] text-xs">SKYLER pauses and asks you for the missing details before proceeding</p>
+                      </div>
+                    </label>
+                    <label
+                      className={cn(
+                        "flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors",
+                        settings.knowledgeGapHandling === "draft_best_attempt"
+                          ? "border-[#3A89FF] bg-[#3A89FF]/10"
+                          : "border-[#2A2D35] bg-transparent hover:border-[#3A3D45]"
+                      )}
+                      onClick={() => { updateSettings({ knowledgeGapHandling: "draft_best_attempt" }); }}
+                    >
+                      <div className={cn(
+                        "w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0",
+                        settings.knowledgeGapHandling === "draft_best_attempt" ? "border-[#3A89FF]" : "border-[#555A63]"
+                      )}>
+                        {settings.knowledgeGapHandling === "draft_best_attempt" && (
+                          <div className="w-2 h-2 rounded-full bg-[#3A89FF]" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-[#E0E0E0] text-sm font-medium">Draft best attempt and flag for review</p>
+                        <p className="text-[#555A63] text-xs">SKYLER proceeds with a draft, marks gaps explicitly, and sends it to your approval queue with a warning</p>
+                      </div>
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>

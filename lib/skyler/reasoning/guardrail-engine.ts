@@ -77,10 +77,10 @@ export function checkGuardrails(
   }
 
   if (
+    esc.pricingNegotiation &&
     decision.action_type === "draft_email" &&
     decision.parameters.involves_pricing
   ) {
-    // Pricing negotiation — always escalate (no toggle for this, it's implicit)
     return result("escalate", "Pricing negotiation detected in email", settings);
   }
 

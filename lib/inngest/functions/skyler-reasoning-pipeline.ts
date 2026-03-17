@@ -112,9 +112,10 @@ export const reasoningPipeline = inngest.createFunction(
 
     // Step 0: Pre-generation knowledge check (deterministic, no AI)
     // If critical data is missing, short-circuit before calling Claude → saves API cost
-    const knowledgeGap = await step.run("knowledge-check", async () => {
+    // If knowledgeGapHandling = "draft_best_attempt", non-critical gaps proceed with a warning
+    const knowledgeResult = await step.run("knowledge-check", async () => {
       const taskType = inferTaskType(eventType, eventData);
-      if (!taskType) return null;
+      if (!taskType) return { gap: null, draftedWithGaps: false, gapWarning: null };
 
       const ctx = await assembleReasoningContext(
         { type: eventType, data: eventData },
@@ -126,18 +127,33 @@ export const reasoningPipeline = inngest.createFunction(
       if (!check.isComplete) {
         console.log(`[reasoning-pipeline] Knowledge gap detected for ${taskType}: ${check.missingFields.join(", ")}`);
         return {
-          action_type: "request_info" as const,
-          parameters: {
-            request_description: check.requestDescription,
+          gap: {
+            action_type: "request_info" as const,
+            parameters: {
+              request_description: check.requestDescription,
+            },
+            reasoning: `Missing required data for ${taskType}: ${check.missingFields.join(", ")}. Asking user rather than fabricating.`,
+            confidence_score: 1.0,
+            urgency: "same_day" as const,
           },
-          reasoning: `Missing required data for ${taskType}: ${check.missingFields.join(", ")}. Asking user rather than fabricating.`,
-          confidence_score: 1.0,
-          urgency: "same_day" as const,
+          draftedWithGaps: false,
+          gapWarning: null,
         };
       }
 
-      return null;
+      // Proceeding but with gaps flagged (draft_best_attempt mode)
+      if (check.draftedWithGaps) {
+        console.log(`[reasoning-pipeline] Proceeding with gaps (draft_best_attempt): ${check.missingFields.join(", ")}`);
+      }
+
+      return {
+        gap: null,
+        draftedWithGaps: check.draftedWithGaps ?? false,
+        gapWarning: check.gapWarning ?? null,
+      };
     });
+
+    const knowledgeGap = knowledgeResult.gap;
 
     // If knowledge check found gaps, skip reasoning entirely
     if (knowledgeGap) {
@@ -207,7 +223,7 @@ export const reasoningPipeline = inngest.createFunction(
     );
 
     // Step 2: Guardrail check — pure logic, no AI
-    const guardrailResult = await step.run("check-guardrails", async () => {
+    let guardrailResult = await step.run("check-guardrails", async () => {
       const ctx = await assembleReasoningContext(
         { type: eventType, data: eventData },
         workspaceId,
@@ -220,6 +236,16 @@ export const reasoningPipeline = inngest.createFunction(
         is_c_suite: ctx.pipeline.is_c_suite,
       });
     });
+
+    // If drafted with gaps, force approval queue regardless of guardrail outcome
+    if (knowledgeResult.draftedWithGaps && guardrailResult.outcome === "auto_execute") {
+      guardrailResult = {
+        ...guardrailResult,
+        outcome: "await_approval",
+        reason: knowledgeResult.gapWarning ?? "Drafted with missing information — requires review",
+      };
+      console.log(`[reasoning-pipeline] Overriding to await_approval: drafted with knowledge gaps`);
+    }
 
     console.log(
       `[reasoning-pipeline] Guardrail: ${guardrailResult.outcome} — ${guardrailResult.reason}`

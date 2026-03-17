@@ -42,6 +42,7 @@ export type SkylerWorkflowSettings = {
     negativeSentiment: boolean;
     firstContact: boolean;
     cSuiteContact: boolean;
+    pricingNegotiation: boolean;
   };
 
   // Sales Closer — Your Sales Process
@@ -68,6 +69,9 @@ export type SkylerWorkflowSettings = {
     bookMeetings: boolean;
     firstOutreachApproval: boolean;
   };
+
+  // Knowledge Gap Handling
+  knowledgeGapHandling: "ask_first" | "draft_best_attempt";
 };
 
 export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
@@ -98,6 +102,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
     negativeSentiment: true,
     firstContact: true,
     cSuiteContact: true,
+    pricingNegotiation: true,
   },
   primaryGoal: "Book demos",
   salesJourney: "",
@@ -116,6 +121,7 @@ export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
     bookMeetings: true,
     firstOutreachApproval: true,
   },
+  knowledgeGapHandling: "ask_first",
 };
 
 export async function GET(req: NextRequest) {

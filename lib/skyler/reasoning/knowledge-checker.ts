@@ -40,6 +40,10 @@ export type KnowledgeCheckResult = {
   completenessScore: number;
   /** Human-readable description of what's missing */
   requestDescription: string;
+  /** When true, Skyler drafted despite gaps — send to approval queue with warning */
+  draftedWithGaps?: boolean;
+  /** Warning message for the approval queue when drafted with gaps */
+  gapWarning?: string;
 };
 
 // ── Task Schemas ─────────────────────────────────────────────────────────────
@@ -172,11 +176,28 @@ export function checkKnowledge(
   const completenessScore = totalRequired > 0 ? presentRequired / totalRequired : 1;
 
   // Decision logic:
-  // - ANY critical field missing → always request_info
-  // - Below 80% completeness → request_info
+  // - ANY critical field missing → always request_info (even in draft_best_attempt)
+  // - Below 80% completeness → request_info OR draft_best_attempt depending on setting
   // - 80-99% → proceed (missing only non-critical fields)
   // - 100% → proceed
-  const isComplete = !hasCriticalMissing && completenessScore >= 0.8;
+  const wouldBlock = !(!hasCriticalMissing && completenessScore >= 0.8);
+  const gapMode = workflowSettings.knowledgeGapHandling ?? "ask_first";
+
+  // In "draft_best_attempt" mode: proceed with non-critical gaps, but flag them
+  // Critical gaps ALWAYS block regardless of mode
+  if (wouldBlock && gapMode === "draft_best_attempt" && !hasCriticalMissing) {
+    const humanReadable = missingRequired.map(formatFieldName);
+    return {
+      isComplete: true, // Allow proceeding
+      missingFields: missingRequired,
+      completenessScore,
+      requestDescription: "",
+      draftedWithGaps: true,
+      gapWarning: `Drafted with missing information: ${humanReadable.join(", ")}. Please review carefully before sending.`,
+    };
+  }
+
+  const isComplete = !wouldBlock;
 
   let requestDescription = "";
   if (!isComplete && missingRequired.length > 0) {
