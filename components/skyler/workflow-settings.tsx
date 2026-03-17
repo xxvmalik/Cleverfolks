@@ -1377,7 +1377,7 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                   </div>
                   <div className="flex gap-3">
                     <button
-                      onClick={() => window.open(`/api/skyler/calendar/connect?provider=google&workspaceId=${workspaceId}`, "_blank")}
+                      onClick={() => window.open(`/api/skyler/calendar/authorize?workspaceId=${workspaceId}`, "_blank")}
                       className="px-4 py-2 bg-[#1C1F24] border border-[#2A2D35] rounded-lg text-white text-sm hover:bg-[#2A2D35]/50 transition-colors flex items-center gap-2"
                     >
                       <Calendar className="w-4 h-4" />
