@@ -2,23 +2,25 @@
  * Test route: Check Outlook calendar availability via the new calendar service.
  * GET /api/test/calendar-check
  *
- * Uses the existing Outlook Nango connection (integrations table) directly,
- * since calendar_connections table may not be populated yet.
+ * Each step is wrapped individually so the exact failure point is visible.
  */
 
 import { NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import * as msGraph from "@/lib/skyler/calendar/microsoft-graph-client";
+import { Nango } from "@nangohq/node";
 import { scoreTimeSlots, type TimeSlot } from "@/lib/skyler/calendar/calendar-service";
 
 const WORKSPACE_ID = "ab25098b-45fd-40ba-ba6f-d67032dcdbbc";
 
 export async function GET() {
+  const steps: Record<string, unknown> = {};
+
   try {
     const db = createAdminSupabaseClient();
+    const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-    // 1. Check for Outlook integration
-    const { data: integration } = await db
+    // ── Step 1: Check integration row exists ──────────────────────────────
+    const { data: integration, error: intErr } = await db
       .from("integrations")
       .select("id, provider, status, nango_connection_id")
       .eq("workspace_id", WORKSPACE_ID)
@@ -26,56 +28,144 @@ export async function GET() {
       .eq("status", "connected")
       .single();
 
+    steps.integration = integration ?? { error: intErr?.message };
     if (!integration) {
-      return NextResponse.json({
-        error: "No connected Outlook integration found",
-        workspace: WORKSPACE_ID,
-      }, { status: 404 });
+      return NextResponse.json({ steps, error: "No connected Outlook integration" }, { status: 404 });
     }
 
-    // 2. Get working hours from Outlook
-    const workingHours = await msGraph.getWorkingHours(WORKSPACE_ID);
+    // ── Step 2: Get Nango connection to find user email ───────────────────
+    let userEmail = "";
+    let nangoConnectionRaw: unknown = null;
+    try {
+      const conn = await nango.getConnection("outlook", WORKSPACE_ID);
+      nangoConnectionRaw = {
+        connectionId: (conn as Record<string, unknown>).connection_id,
+        providerConfigKey: (conn as Record<string, unknown>).provider_config_key,
+        // Dump credential keys to find where email lives
+        credentialKeys: Object.keys((conn as Record<string, unknown>).credentials ?? {}),
+        credentialRawKeys: Object.keys(
+          ((conn as Record<string, unknown>).credentials as Record<string, unknown>)?.raw ?? {}
+        ),
+        rawSample: JSON.stringify(
+          ((conn as Record<string, unknown>).credentials as Record<string, unknown>)?.raw ?? {}
+        ).slice(0, 500),
+      };
 
-    // 3. Check availability for the next 3 business days
+      // Try common paths where email might live
+      const creds = (conn as Record<string, unknown>).credentials as Record<string, unknown>;
+      const raw = (creds?.raw ?? {}) as Record<string, unknown>;
+      userEmail =
+        (raw.userPrincipalName as string) ??
+        (raw.mail as string) ??
+        (raw.email as string) ??
+        (creds?.email as string) ??
+        "";
+    } catch (err) {
+      nangoConnectionRaw = { error: err instanceof Error ? err.message : String(err) };
+    }
+    steps.nangoConnection = nangoConnectionRaw;
+    steps.resolvedEmail = userEmail;
+
+    // ── Step 3: Try getWorkingHours ───────────────────────────────────────
+    let workingHours = null;
+    try {
+      const resp = await nango.proxy({
+        method: "GET",
+        baseUrlOverride: "https://graph.microsoft.com/v1.0",
+        endpoint: "/me/mailboxSettings/workingHours",
+        providerConfigKey: "outlook",
+        connectionId: WORKSPACE_ID,
+      });
+      workingHours = resp.data;
+      steps.workingHours = { status: "ok", data: workingHours };
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: unknown }; message?: string };
+      steps.workingHours = {
+        status: "error",
+        statusCode: e.response?.status,
+        responseBody: JSON.stringify(e.response?.data ?? "").slice(0, 500),
+        message: e.message,
+      };
+    }
+
+    // ── Step 4: Try getSchedule (availability) ────────────────────────────
     const now = new Date();
     const endRange = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
-    // Find the user's email from Nango connection
-    let userEmail = "";
-    try {
-      const { Nango } = await import("@nangohq/node");
-      const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
-      const conn = await nango.getConnection("outlook", WORKSPACE_ID);
-      userEmail = (conn as unknown as { credentials?: { raw?: { userPrincipalName?: string } } })
-        ?.credentials?.raw?.userPrincipalName ?? "";
-    } catch {
-      userEmail = "unknown";
+    // If we don't have a userEmail, try /me/profile instead
+    if (!userEmail) {
+      try {
+        const meResp = await nango.proxy({
+          method: "GET",
+          baseUrlOverride: "https://graph.microsoft.com/v1.0",
+          endpoint: "/me",
+          providerConfigKey: "outlook",
+          connectionId: WORKSPACE_ID,
+        });
+        const me = meResp.data as Record<string, unknown>;
+        userEmail = (me.mail as string) ?? (me.userPrincipalName as string) ?? "";
+        steps.meProfile = { mail: me.mail, userPrincipalName: me.userPrincipalName };
+      } catch (err: unknown) {
+        const e = err as { response?: { status?: number; data?: unknown }; message?: string };
+        steps.meProfile = {
+          status: "error",
+          statusCode: e.response?.status,
+          message: e.message,
+        };
+      }
     }
 
-    const availability = await msGraph.checkAvailability(
-      WORKSPACE_ID,
-      userEmail,
-      now.toISOString(),
-      endRange.toISOString()
-    );
+    steps.finalEmail = userEmail;
 
-    // 4. Invert busy blocks into free 30-min slots within work hours
-    const workStart = workingHours?.startTime ?? "09:00";
-    const workEnd = workingHours?.endTime ?? "17:00";
-    const workDays = workingHours?.daysOfWeek ?? ["monday", "tuesday", "wednesday", "thursday", "friday"];
+    let availability = null;
+    try {
+      const resp = await nango.proxy({
+        method: "POST",
+        baseUrlOverride: "https://graph.microsoft.com/v1.0",
+        endpoint: "/me/calendar/getSchedule",
+        providerConfigKey: "outlook",
+        connectionId: WORKSPACE_ID,
+        data: {
+          schedules: [userEmail],
+          startTime: { dateTime: now.toISOString(), timeZone: "UTC" },
+          endTime: { dateTime: endRange.toISOString(), timeZone: "UTC" },
+          availabilityViewInterval: 30,
+        },
+      });
+      availability = resp.data;
+      steps.getSchedule = { status: "ok", resultCount: (availability as Record<string, unknown[]>)?.value?.length };
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: unknown }; message?: string };
+      steps.getSchedule = {
+        status: "error",
+        statusCode: e.response?.status,
+        responseBody: JSON.stringify(e.response?.data ?? "").slice(0, 1000),
+        message: e.message,
+      };
+      // Return early with all debug info
+      return NextResponse.json({ steps, error: "getSchedule failed" }, { status: 500 });
+    }
 
-    // Convert Outlook day names to ISO numbers
+    // ── Step 5: Parse and score ───────────────────────────────────────────
+    const scheduleData = ((availability as Record<string, unknown[]>)?.value?.[0] ?? {}) as Record<string, unknown>;
+    const busyBlocks = (scheduleData.scheduleItems ?? []) as Array<{
+      start: { dateTime: string };
+      end: { dateTime: string };
+      status: string;
+    }>;
+
+    const wh = (scheduleData.workingHours ?? workingHours) as Record<string, unknown> | null;
+    const workStart = (wh?.startTime as string) ?? "09:00";
+    const workEnd = (wh?.endTime as string) ?? "17:00";
+    const workDayNames = (wh?.daysOfWeek as string[]) ?? ["monday", "tuesday", "wednesday", "thursday", "friday"];
     const dayMap: Record<string, number> = {
       monday: 1, tuesday: 2, wednesday: 3, thursday: 4,
       friday: 5, saturday: 6, sunday: 7,
     };
-    const workDayNumbers = workDays.map((d) => dayMap[d.toLowerCase()] ?? 0).filter(Boolean);
+    const workDayNumbers = workDayNames.map((d) => dayMap[d.toLowerCase()] ?? 0).filter(Boolean);
 
     const freeSlots = invertBusyToFree(
-      availability.busyBlocks.map((b) => ({
-        start: b.start.dateTime,
-        end: b.end.dateTime,
-      })),
+      busyBlocks.map((b) => ({ start: b.start.dateTime, end: b.end.dateTime })),
       now.toISOString(),
       endRange.toISOString(),
       30,
@@ -84,19 +174,13 @@ export async function GET() {
       workDayNumbers
     );
 
-    // 5. Score the slots
     const scored = scoreTimeSlots(freeSlots);
 
     return NextResponse.json({
       status: "ok",
-      workspace: WORKSPACE_ID,
-      provider: "outlook",
-      userEmail,
-      workingHours: workingHours
-        ? { start: workingHours.startTime, end: workingHours.endTime, days: workingHours.daysOfWeek, tz: workingHours.timeZone }
-        : null,
-      busyBlockCount: availability.busyBlocks.length,
-      busyBlocks: availability.busyBlocks.slice(0, 10).map((b) => ({
+      steps,
+      busyBlockCount: busyBlocks.length,
+      busyBlocks: busyBlocks.slice(0, 10).map((b) => ({
         start: b.start.dateTime,
         end: b.end.dateTime,
         status: b.status,
@@ -110,14 +194,15 @@ export async function GET() {
       })),
     });
   } catch (err) {
-    console.error("[test/calendar-check] Error:", err);
     return NextResponse.json({
+      steps,
       error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack?.split("\n").slice(0, 5) : undefined,
     }, { status: 500 });
   }
 }
 
-// ── Helper: invert busy blocks into free slots ──────────────────────────────
+// ── Helper ───────────────────────────────────────────────────────────────────
 
 function invertBusyToFree(
   busyBlocks: Array<{ start: string; end: string }>,
@@ -132,69 +217,46 @@ function invertBusyToFree(
   const start = new Date(rangeStart);
   const end = new Date(rangeEnd);
   const durationMs = durationMinutes * 60 * 1000;
-
   const sorted = [...busyBlocks].sort(
     (a, b) => new Date(a.start).getTime() - new Date(b.start).getTime()
   );
-
   const current = new Date(start);
   current.setUTCHours(0, 0, 0, 0);
 
   while (current < end) {
     const dayOfWeek = current.getUTCDay();
     const isoDay = dayOfWeek === 0 ? 7 : dayOfWeek;
-
     if (workDays.includes(isoDay)) {
       const [startH, startM] = workHoursStart.split(":").map(Number);
       const [endH, endM] = workHoursEnd.split(":").map(Number);
-
       const dayStart = new Date(current);
       dayStart.setUTCHours(startH, startM, 0, 0);
-
       const dayEnd = new Date(current);
       dayEnd.setUTCHours(endH, endM, 0, 0);
-
-      // Skip if day is in the past
       if (dayEnd.getTime() <= new Date().getTime()) {
         current.setUTCDate(current.getUTCDate() + 1);
         continue;
       }
-
       let cursor = Math.max(dayStart.getTime(), new Date().getTime());
-
       const dayBusy = sorted.filter((b) => {
         const bs = new Date(b.start).getTime();
         const be = new Date(b.end).getTime();
         return be > dayStart.getTime() && bs < dayEnd.getTime();
       });
-
       for (const block of dayBusy) {
         const blockStart = new Date(block.start).getTime();
-        // Generate slots in the gap before this busy block
         while (cursor + durationMs <= blockStart && cursor + durationMs <= dayEnd.getTime()) {
-          slots.push({
-            start: new Date(cursor).toISOString(),
-            end: new Date(cursor + durationMs).toISOString(),
-            score: 0,
-          });
+          slots.push({ start: new Date(cursor).toISOString(), end: new Date(cursor + durationMs).toISOString(), score: 0 });
           cursor += durationMs;
         }
         cursor = Math.max(cursor, new Date(block.end).getTime());
       }
-
-      // Fill remaining time after last busy block
       while (cursor + durationMs <= dayEnd.getTime()) {
-        slots.push({
-          start: new Date(cursor).toISOString(),
-          end: new Date(cursor + durationMs).toISOString(),
-          score: 0,
-        });
+        slots.push({ start: new Date(cursor).toISOString(), end: new Date(cursor + durationMs).toISOString(), score: 0 });
         cursor += durationMs;
       }
     }
-
     current.setUTCDate(current.getUTCDate() + 1);
   }
-
   return slots;
 }
