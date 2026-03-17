@@ -277,6 +277,13 @@ export function IntegrationsClient({
 
   const handleConnect = useCallback(
     async (provider: string) => {
+      // Google Calendar: direct OAuth flow to force refresh token
+      // Nango Connect UI doesn't support authorization_params
+      if (provider === "google-calendar") {
+        window.location.href = `/api/skyler/calendar/authorize?workspaceId=${workspaceId}`;
+        return;
+      }
+
       // 1. Get Nango session token
       const tokenRes = await fetch("/api/nango-session", {
         method: "POST",
@@ -290,13 +297,6 @@ export function IntegrationsClient({
       }
 
       const { token } = (await tokenRes.json()) as { token: string };
-
-      // Google Calendar: direct OAuth flow to force refresh token
-      // Nango Connect UI doesn't support authorization_params
-      if (provider === "google-calendar") {
-        window.location.href = `/api/skyler/calendar/authorize?workspaceId=${workspaceId}`;
-        return;
-      }
 
       // 2. All other providers: Open Nango Connect UI
       await new Promise<void>((resolve, reject) => {
