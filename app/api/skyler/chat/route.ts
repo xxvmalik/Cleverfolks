@@ -312,6 +312,10 @@ export async function POST(request: NextRequest) {
     effectiveAgentMemories
   );
 
+  // Cache boundary: everything up to here is semi-static (identity + settings + tools).
+  // Dynamic content (clarification, entity block) is appended after this point.
+  const systemPromptCacheBreakpoint = systemPrompt.length;
+
   // ── Stage 12: Build active entity context (appended LAST to prompt) ──
   // Entity data is loaded fresh and placed at the END of the system prompt
   // for highest attention. Replaces the old inline HIGHLIGHTED LEAD CONTEXT.
@@ -707,6 +711,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
             integrationManifest,
             tools: SKYLER_TOOLS,
             toolExecutor: skylerToolExecutor,
+            systemPromptCacheBreakpoint,
           },
           (event: SSEEvent) => {
             send(event);

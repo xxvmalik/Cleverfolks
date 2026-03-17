@@ -32,6 +32,14 @@ export type AgentLoopParams = {
     workspaceId: string,
     adminSupabase: AdminDb
   ) => Promise<ToolHandlerResult>;
+  /**
+   * Character index in systemPrompt where the cache boundary goes.
+   * Everything before this index is semi-static (identity + settings) and gets
+   * cache_control: { type: "ephemeral" }. Everything after is dynamic (memories,
+   * directives, entity context) and is NOT cached.
+   * When omitted, the entire system prompt is sent without caching.
+   */
+  systemPromptCacheBreakpoint?: number;
 };
 
 export type AgentLoopResult = {
@@ -380,6 +388,43 @@ function formatToolResultForClaude(
   return parts.join("\n\n===\n\n");
 }
 
+// ── Prompt caching helper ──────────────────────────────────────────────────────
+
+/**
+ * Build the system content for Anthropic API calls with optional prompt caching.
+ * When a cache breakpoint is provided, splits the prompt into two blocks:
+ * - Block 1 (before breakpoint): marked with cache_control for reuse across turns
+ * - Block 2 (after breakpoint): dynamic content, not cached
+ */
+function buildSystemContent(
+  systemPrompt: string,
+  cacheBreakpoint?: number
+): string | Anthropic.Messages.TextBlockParam[] {
+  if (!cacheBreakpoint || cacheBreakpoint <= 0 || cacheBreakpoint >= systemPrompt.length) {
+    return systemPrompt;
+  }
+
+  const staticPart = systemPrompt.slice(0, cacheBreakpoint);
+  const dynamicPart = systemPrompt.slice(cacheBreakpoint);
+
+  const blocks: Anthropic.Messages.TextBlockParam[] = [
+    {
+      type: "text" as const,
+      text: staticPart,
+      cache_control: { type: "ephemeral" as const },
+    },
+  ];
+
+  if (dynamicPart.trim()) {
+    blocks.push({
+      type: "text" as const,
+      text: dynamicPart,
+    });
+  }
+
+  return blocks;
+}
+
 // ── Agent loop ────────────────────────────────────────────────────────────────
 
 const MAX_ITERATIONS = 10;
@@ -396,7 +441,10 @@ export async function runAgentLoop(
     adminSupabase,
     tools: customTools,
     toolExecutor: customToolExecutor,
+    systemPromptCacheBreakpoint,
   } = params;
+
+  const systemContent = buildSystemContent(systemPrompt, systemPromptCacheBreakpoint);
 
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
   const activeTools = customTools ?? CLEVERBRAIN_TOOLS;
@@ -423,7 +471,7 @@ export async function runAgentLoop(
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 4096,
-      system: systemPrompt,
+      system: systemContent,
       tools: activeTools,
       messages,
     });
@@ -434,7 +482,13 @@ export async function runAgentLoop(
         b.type === "tool_use"
     );
 
-    console.log(`[agent-loop] iteration ${iterations}: stop_reason=${response.stop_reason}, tool_use_blocks=${toolUseBlocks.length}, content_types=[${response.content.map(b => b.type).join(",")}]`);
+    // Log cache usage if available
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const usage = response.usage as any;
+    const cacheInfo = usage.cache_read_input_tokens != null
+      ? ` | cache: ${usage.cache_read_input_tokens} read, ${usage.cache_creation_input_tokens ?? 0} created`
+      : "";
+    console.log(`[agent-loop] iteration ${iterations}: stop_reason=${response.stop_reason}, tool_use_blocks=${toolUseBlocks.length}, tokens=${usage.input_tokens}in+${usage.output_tokens}out${cacheInfo}`);
 
     if (toolUseBlocks.length === 0) {
       // No tool calls — this is the final text response.
@@ -528,7 +582,7 @@ export async function runAgentLoop(
   const finalResponse = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 4096,
-    system: systemPrompt,
+    system: systemContent,
     messages,
   });
 
