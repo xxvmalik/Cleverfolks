@@ -517,6 +517,7 @@ const INTEGRATIONS: IntegrationItem[] = [
   { id: "outlook", provider: "outlook", name: "Outlook", category: "Email Platform", color: "#0078D4", letter: "O" },
   { id: "google-calendar", provider: "google-calendar", name: "Google Calendar", category: "Scheduling Platform", color: "#4285F4", letter: "C" },
   { id: "google-drive", provider: "google-drive", name: "Google Drive", category: "Cloud Storage", color: "#0F9D58", letter: "D" },
+  { id: "calendly", provider: "calendly", name: "Calendly", category: "Scheduling Platform", color: "#006BFF", letter: "C" },
 ];
 
 type DbIntegration = {
@@ -572,6 +573,12 @@ function ConnectorsView({
 
   // Nango OAuth connect handler
   const handleConnect = useCallback(async (provider: string) => {
+    // Google Calendar: direct OAuth to force refresh token
+    if (provider === "google-calendar") {
+      window.location.href = `/api/skyler/calendar/authorize?workspaceId=${workspaceId}`;
+      return;
+    }
+
     setConnectingProvider(provider);
     try {
       const tokenRes = await fetch("/api/nango-session", {
