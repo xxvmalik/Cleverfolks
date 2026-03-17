@@ -19,6 +19,7 @@ export const SkylerDecisionSchema = z.object({
     "do_nothing",
     "close_won",
     "close_lost",
+    "book_meeting",
   ]),
   parameters: z.object({
     // Email actions (draft_email)
@@ -57,6 +58,13 @@ export const SkylerDecisionSchema = z.object({
     close_reason: z.string().optional(),
     won_amount: z.number().optional(),
     lost_reason: z.string().optional(),
+
+    // Meeting booking (book_meeting)
+    booking_method: z.enum(["calendly_link", "suggest_times", "direct_invite", "ask_availability"]).optional(),
+    suggested_times: z.array(z.string()).optional(),
+    meeting_duration_minutes: z.number().optional(),
+    additional_attendees: z.array(z.string()).optional(),
+    calendly_event_type: z.string().optional(),
   }),
   reasoning: z
     .string()

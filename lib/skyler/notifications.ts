@@ -20,7 +20,13 @@ export type NotificationEventType =
   | "objection_received"
   | "meeting_booked"
   | "action_note_due"
-  | "info_requested";
+  | "info_requested"
+  | "meeting_cancelled"
+  | "meeting_no_show"
+  | "meeting_rescheduled"
+  | "new_attendee_detected"
+  | "pre_call_brief"
+  | "health_signal";
 
 export type NotificationParams = {
   workspaceId: string;

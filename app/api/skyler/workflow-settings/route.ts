@@ -72,6 +72,13 @@ export type SkylerWorkflowSettings = {
 
   // Knowledge Gap Handling
   knowledgeGapHandling: "ask_first" | "draft_best_attempt";
+
+  // Meeting Intelligence
+  defaultMeetingDuration: 15 | 30 | 45 | 60;
+  preCallBriefEnabled: boolean;
+  preCallBriefTiming: "30min" | "1hr" | "24hr";
+  noShowFollowUp: "auto_draft" | "notify_only";
+  calendlyStageMapping: Record<string, string>;
 };
 
 export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
@@ -122,6 +129,11 @@ export const DEFAULT_WORKFLOW_SETTINGS: SkylerWorkflowSettings = {
     firstOutreachApproval: true,
   },
   knowledgeGapHandling: "ask_first",
+  defaultMeetingDuration: 30,
+  preCallBriefEnabled: true,
+  preCallBriefTiming: "30min",
+  noShowFollowUp: "auto_draft",
+  calendlyStageMapping: {},
 };
 
 export async function GET(req: NextRequest) {

@@ -26,6 +26,12 @@ const EVENT_EMOJI: Record<NotificationEventType, string> = {
   meeting_booked: ":calendar:",
   action_note_due: ":bell:",
   info_requested: ":raised_hand:",
+  meeting_cancelled: ":no_entry_sign:",
+  meeting_no_show: ":eyes:",
+  meeting_rescheduled: ":arrows_counterclockwise:",
+  new_attendee_detected: ":bust_in_silhouette:",
+  pre_call_brief: ":clipboard:",
+  health_signal: ":chart_with_downwards_trend:",
 };
 
 /**

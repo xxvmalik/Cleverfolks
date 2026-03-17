@@ -66,6 +66,29 @@ function normalizeEventData(
     };
   }
 
+  // Stage 13: Meeting events
+  if (eventName === "skyler/meeting.no-show") {
+    return {
+      pipelineId: data.pipelineId as string,
+      workspaceId: data.workspaceId as string,
+      eventType: "user.directive" as const,
+      eventData: {
+        directive: `The prospect missed a meeting (no-show). Draft a polite "we missed you" follow-up email with a new booking link. Calendar event: ${data.calendarEventId}`,
+      },
+    };
+  }
+
+  if (eventName === "skyler/meeting.cancelled") {
+    return {
+      pipelineId: data.pipelineId as string,
+      workspaceId: data.workspaceId as string,
+      eventType: "user.directive" as const,
+      eventData: {
+        directive: `The prospect cancelled a meeting${data.reason ? ` (reason: ${data.reason})` : ""}. Draft a rebooking email with alternative times. Cancelled by: ${data.canceledBy ?? "unknown"}.`,
+      },
+    };
+  }
+
   // Reasoning-namespaced events already have the correct shape
   return {
     pipelineId: data.pipelineId as string,
@@ -96,6 +119,9 @@ export const reasoningPipeline = inngest.createFunction(
     // the old pipeline and the reasoning engine process them in parallel
     { event: "skyler/lead.qualified.hot" },
     { event: "skyler/pipeline.reply.received" },
+    // Stage 13: Meeting lifecycle events
+    { event: "skyler/meeting.no-show" },
+    { event: "skyler/meeting.cancelled" },
   ],
   async ({ event, step }) => {
     // Normalize event data — bridge old event shapes to reasoning format

@@ -16,7 +16,7 @@ import type { SkylerWorkflowSettings } from "@/app/api/skyler/workflow-settings/
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type FieldSource = "pipeline_record" | "agent_memories" | "workflow_settings";
+export type FieldSource = "pipeline_record" | "agent_memories" | "workflow_settings" | "calendar_connection";
 
 export type RequiredField = {
   /** Human-readable name (shown when requesting info) */
@@ -94,6 +94,18 @@ const TASK_SCHEMAS: Record<string, TaskSchema> = {
     ],
     optional: [],
   },
+
+  book_meeting: {
+    required: [
+      { field: "lead_email", source: "pipeline_record", path: "contact_email" },
+      { field: "available_times", source: "calendar_connection", path: "calendar_connection" },
+      { field: "meeting_duration", source: "workflow_settings", path: "defaultMeetingDuration" },
+    ],
+    optional: [
+      { field: "calendly_link", source: "calendar_connection", path: "calendly_event_types" },
+      { field: "prospect_timezone", source: "pipeline_record", path: "timezone" },
+    ],
+  },
 };
 
 // ── Task Type Inference ──────────────────────────────────────────────────────
@@ -117,6 +129,16 @@ export function inferTaskType(
   }
   if (directive.includes("contract") || directive.includes("agreement")) {
     return "draft_contract";
+  }
+
+  if (
+    directive.includes("meeting") ||
+    directive.includes("book") ||
+    directive.includes("schedule") ||
+    directive.includes("demo") ||
+    directive.includes("call")
+  ) {
+    return "book_meeting";
   }
 
   // For reply/follow-up events, it's just a regular email
@@ -237,6 +259,20 @@ function resolveField(
     case "agent_memories": {
       const val = memoryMap.get(field.path);
       return val !== undefined && val !== null ? val : null;
+    }
+
+    case "calendar_connection": {
+      // Calendar connections are checked via agent_memories for manual availability
+      // or workspace-level calendar_connections table. In the knowledge checker,
+      // we treat "user_prefers_manual_availability" memory as a valid substitute.
+      const manualPref = memoryMap.get("user_prefers_manual_availability");
+      if (manualPref) return manualPref;
+      const manualTimes = memoryMap.get("available_times");
+      if (manualTimes) return manualTimes;
+      // Actual calendar connection check happens at runtime in the booking flow
+      // For the knowledge checker, we return null to trigger request_info
+      // unless the workspace has a calendar connected (checked below)
+      return null;
     }
 
     default:

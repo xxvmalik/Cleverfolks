@@ -25,6 +25,12 @@ const EVENT_LABELS: Record<NotificationEventType, string> = {
   meeting_booked: "Meeting Booked",
   action_note_due: "Action Note Due",
   info_requested: "Information Requested",
+  meeting_cancelled: "Meeting Cancelled",
+  meeting_no_show: "No-Show Detected",
+  meeting_rescheduled: "Meeting Rescheduled",
+  new_attendee_detected: "New Attendee Detected",
+  pre_call_brief: "Pre-Call Brief",
+  health_signal: "Meeting Health Signal",
 };
 
 /**

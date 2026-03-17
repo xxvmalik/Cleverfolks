@@ -120,6 +120,13 @@ export type ReasoningContext = {
   goldenExamples: GoldenExample[];
   behaviouralDimensions: BehaviouralDimension[];
   confidenceRecord: ConfidenceRecord | null;
+  // Stage 13: Meeting health signals
+  healthSignals: Array<{
+    signal_type: string;
+    severity: string;
+    details: Record<string, unknown> | null;
+    created_at: string;
+  }>;
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -132,7 +139,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult, correctionsResult, dimensionsResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult, correctionsResult, dimensionsResult, healthSignalsResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -176,6 +183,15 @@ export async function assembleReasoningContext(
     // Stage 11: Learning data
     getActiveCorrections(db, workspaceId, { leadId: pipelineId, limit: 10 }),
     getDimensions(db, workspaceId),
+    // Stage 13: Meeting health signals
+    db
+      .from("meeting_health_signals")
+      .select("signal_type, severity, details, created_at")
+      .eq("lead_id", pipelineId)
+      .eq("acknowledged", false)
+      .in("severity", ["warning", "critical"])
+      .order("created_at", { ascending: false })
+      .limit(5),
   ]);
 
   // Extract workflow settings
@@ -244,13 +260,19 @@ export async function assembleReasoningContext(
     goldenExamples: goldenExamplesResult as GoldenExample[],
     behaviouralDimensions: dimensionsResult,
     confidenceRecord: confidenceResult as ConfidenceRecord | null,
+    healthSignals: (healthSignalsResult.data ?? []) as Array<{
+      signal_type: string;
+      severity: string;
+      details: Record<string, unknown> | null;
+      created_at: string;
+    }>,
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord, healthSignals } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -338,6 +360,7 @@ ${directives.length > 0 ? `\n## User Instructions for This Lead\nThese are speci
 ${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously asked the user for information. These are still unanswered:\n${pendingRequests.map((r) => `- ${r.request_description} (asked on ${new Date(r.created_at).toLocaleDateString()})`).join("\n")}` : ""}
 ${agentMemories.length > 0 ? `\n## What You Know About This Business\nThese are verified facts provided by the user. NEVER ask for information that is already listed here.\n${formatMemoriesForPrompt(agentMemories)}\n\nCRITICAL: If you need information NOT listed above, use request_info. Do NOT fabricate, guess, or use placeholders.` : "\n## What You Know About This Business\n(No stored facts yet. If you need specific business data — payment details, legal terms, pricing — use request_info to ask the user.)"}
 ${formatLearningContext(corrections, goldenExamples, behaviouralDimensions, confidenceRecord)}
+${healthSignals.length > 0 ? `\n## Meeting Health Signals\nThese are active alerts about this lead's meeting behaviour. Factor them into your decision.\n${healthSignals.map((s) => `- [${s.severity.toUpperCase()}] ${s.signal_type}: ${(s.details as Record<string, unknown>)?.message ?? JSON.stringify(s.details)}`).join("\n")}` : ""}
 
 ## Your Task
 Based on everything above, decide the single best action to take right now.
@@ -352,6 +375,7 @@ Available actions:
 - do_nothing: No action needed right now (explain why in reasoning)
 - close_won: Mark the deal as won (provide close_reason, won_amount)
 - close_lost: Mark the deal as lost (provide close_reason, lost_reason)
+- book_meeting: Schedule a meeting with the lead (provide booking_method, meeting_duration_minutes, optional additional_attendees)
 
 For draft_email, also set these EXACT field names in parameters:
 - email_subject: the email subject line

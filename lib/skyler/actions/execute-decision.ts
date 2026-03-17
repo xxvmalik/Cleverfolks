@@ -14,6 +14,7 @@ import type { GuardrailResult } from "@/lib/skyler/reasoning/guardrail-engine";
 import type { PipelineRecord } from "@/lib/skyler/reasoning/context-assembler";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { dispatchNotification } from "@/lib/skyler/notifications";
+import { inngest } from "@/lib/inngest/client";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -97,6 +98,8 @@ async function executeAction(ctx: ExecutionContext): Promise<ExecutionResult> {
       return await executeCloseWon(ctx);
     case "close_lost":
       return await executeCloseLost(ctx);
+    case "book_meeting":
+      return await executeBookMeeting(ctx);
     case "do_nothing":
       return executeDoNothing(ctx);
     default:
@@ -286,6 +289,35 @@ async function executeCloseLost(ctx: ExecutionContext): Promise<ExecutionResult>
   return { success: true, action: "close_lost", details: `Deal closed lost: ${decision.parameters.lost_reason ?? "no reason provided"}` };
 }
 
+// ── book_meeting ─────────────────────────────────────────────────────────────
+
+async function executeBookMeeting(ctx: ExecutionContext): Promise<ExecutionResult> {
+  const { workspaceId, pipeline, decision } = ctx;
+  const params = decision.parameters;
+
+  // Emit booking request to Inngest — orchestrated by book-meeting-flow.ts
+  await inngest.send({
+    name: "skyler/meeting.book-requested",
+    data: {
+      workspaceId,
+      pipelineId: pipeline.id,
+      leadEmail: pipeline.contact_email,
+      leadName: pipeline.contact_name,
+      companyName: pipeline.company_name,
+      bookingMethodOverride: params.booking_method,
+      suggestedDuration: params.meeting_duration_minutes,
+      additionalAttendees: params.additional_attendees,
+      calendlyEventType: params.calendly_event_type,
+    },
+  });
+
+  return {
+    success: true,
+    action: "book_meeting",
+    details: `Meeting booking flow triggered for ${pipeline.contact_name} (method: ${params.booking_method ?? "auto"})`,
+  };
+}
+
 // ── do_nothing ───────────────────────────────────────────────────────────────
 
 function executeDoNothing(ctx: ExecutionContext): ExecutionResult {
@@ -452,6 +484,11 @@ async function handleEscalation(ctx: ExecutionContext): Promise<ExecutionResult>
 // ── Decision audit log ───────────────────────────────────────────────────────
 
 async function logDecision(ctx: ExecutionContext, result: ExecutionResult): Promise<void> {
+  // Fire-and-forget CRM logging for every successful decision
+  if (result.success) {
+    emitCRMLog(ctx, result).catch(() => {});
+  }
+
   try {
     await ctx.db.from("skyler_decisions").insert({
       workspace_id: ctx.workspaceId,
@@ -481,6 +518,36 @@ async function logDecision(ctx: ExecutionContext, result: ExecutionResult): Prom
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/** Emit CRM activity log for every executed decision */
+async function emitCRMLog(ctx: ExecutionContext, result: ExecutionResult): Promise<void> {
+  const activityMap: Record<string, string> = {
+    draft_email: "email_sent",
+    update_stage: "stage_changed",
+    close_won: "stage_changed",
+    close_lost: "stage_changed",
+    book_meeting: "meeting_booked",
+    escalate: "escalation_logged",
+  };
+
+  const activityType = activityMap[ctx.decision.action_type];
+  if (!activityType) return;
+
+  await inngest.send({
+    name: "skyler/crm.log-activity",
+    data: {
+      workspace_id: ctx.workspaceId,
+      lead_id: ctx.pipeline.id,
+      activity_type: activityType,
+      payload: {
+        action_type: ctx.decision.action_type,
+        reasoning: ctx.decision.reasoning,
+        details: result.details,
+        confidence: ctx.decision.confidence_score,
+      },
+    },
+  });
+}
+
 function formatActionDescription(decision: SkylerDecision): string {
   switch (decision.action_type) {
     case "draft_email":
@@ -499,6 +566,8 @@ function formatActionDescription(decision: SkylerDecision): string {
       return `Escalate: ${decision.parameters.escalation_reason ?? "needs attention"}`;
     case "request_info":
       return `Request info: ${decision.parameters.request_description ?? "needs information"}`;
+    case "book_meeting":
+      return `Book meeting (${decision.parameters.booking_method ?? "auto"})`;
     case "do_nothing":
       return "No action needed";
     default:

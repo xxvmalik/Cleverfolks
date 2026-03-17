@@ -40,6 +40,7 @@ function makeSettings(overrides: Partial<SkylerWorkflowSettings> = {}): SkylerWo
       negativeSentiment: true,
       firstContact: true,
       cSuiteContact: true,
+      pricingNegotiation: true,
     },
     primaryGoal: "Book demos",
     salesJourney: "",
@@ -58,6 +59,12 @@ function makeSettings(overrides: Partial<SkylerWorkflowSettings> = {}): SkylerWo
       bookMeetings: true,
       firstOutreachApproval: true,
     },
+    knowledgeGapHandling: "ask_first",
+    defaultMeetingDuration: 30,
+    preCallBriefEnabled: true,
+    preCallBriefTiming: "30min",
+    noShowFollowUp: "auto_draft",
+    calendlyStageMapping: {},
     ...overrides,
   };
 }
@@ -276,6 +283,7 @@ describe("checkGuardrails", () => {
           negativeSentiment: false,
           firstContact: false, // disable escalation rule
           cSuiteContact: false,
+          pricingNegotiation: false,
         },
         autonomyToggles: {
           sendFollowUps: true,
@@ -358,6 +366,7 @@ describe("checkGuardrails", () => {
           negativeSentiment: false,
           firstContact: false,
           cSuiteContact: false,
+          pricingNegotiation: false,
         },
         autonomyToggles: {
           sendFollowUps: true,

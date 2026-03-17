@@ -109,6 +109,10 @@ export function checkGuardrails(
     }
   }
 
+  if (decision.action_type === "book_meeting" && !toggles.bookMeetings) {
+    return { outcome: "await_approval", reason: "Meeting booking autonomy is disabled" };
+  }
+
   // ── 5. First outreach override ──────────────────────────────────────────
   if (
     toggles.firstOutreachApproval &&

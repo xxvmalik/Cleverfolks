@@ -13,6 +13,13 @@ import { processCorrection } from "@/lib/inngest/functions/process-correction";
 import { trackDecisionOutcomes } from "@/lib/inngest/functions/track-decision-outcomes";
 import { evaluateAutonomyLevels } from "@/lib/inngest/functions/evaluate-autonomy-levels";
 import { consolidateMemories } from "@/lib/inngest/functions/consolidate-memories";
+// Stage 13: Meeting Lifecycle System
+import { bookMeetingFlow } from "@/lib/inngest/functions/book-meeting-flow";
+import { generatePreCallBrief } from "@/lib/inngest/functions/generate-pre-call-brief";
+import { detectNoShow } from "@/lib/inngest/functions/detect-no-show";
+import { detectMeetingPatterns } from "@/lib/inngest/functions/detect-meeting-patterns";
+import { enrichNewAttendee } from "@/lib/inngest/functions/enrich-new-attendee";
+import { logCRMActivity } from "@/lib/inngest/functions/log-crm-activity";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -37,5 +44,12 @@ export const { GET, POST, PUT } = serve({
     trackDecisionOutcomes,
     evaluateAutonomyLevels,
     consolidateMemories,
+    // Stage 13: Meeting Lifecycle System
+    bookMeetingFlow,
+    generatePreCallBrief,
+    detectNoShow,
+    detectMeetingPatterns,
+    enrichNewAttendee,
+    logCRMActivity,
   ],
 });
