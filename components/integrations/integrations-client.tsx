@@ -201,6 +201,13 @@ function IntegrationCard({
           >
             {loading === "disconnect" ? "Disconnecting…" : "Disconnect"}
           </button>
+        ) : config.provider === "google-calendar" ? (
+          <a
+            href={`/api/skyler/calendar/authorize?workspaceId=${workspaceId}`}
+            className="flex-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#3A89FF] text-white hover:bg-[#2d7aff] transition-colors text-center"
+          >
+            Connect
+          </a>
         ) : (
           <button
             onClick={handleConnect}
