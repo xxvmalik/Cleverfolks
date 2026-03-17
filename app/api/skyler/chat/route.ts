@@ -27,9 +27,19 @@ import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
 import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
 import { classifyDirective } from "@/lib/skyler/directives/classify-directive";
-import { saveDirective } from "@/lib/skyler/directives/directive-store";
+import { saveDirective, getActiveDirectives } from "@/lib/skyler/directives/directive-store";
 import { extractFacts } from "@/lib/skyler/memory/fact-extractor";
 import { setMemory, getMemories, type AgentMemory } from "@/lib/skyler/memory/agent-memory-store";
+import {
+  resolveActiveEntity,
+  updateFocusStack,
+  updateConversationEntity,
+  loadConversationEntityState,
+  type ResolvedEntity,
+  type EntityFocusEntry,
+} from "@/lib/skyler/entity/entity-resolver";
+import { filterHistoryByEntity, loadEntityScopedHistory } from "@/lib/skyler/entity/history-filter";
+import { buildActiveEntityBlock, validateEntityGrounding } from "@/lib/skyler/entity/entity-validator";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -256,11 +266,35 @@ export async function POST(request: NextRequest) {
     console.log(`[skyler-chat] No conversationId provided — cannot fetch pending actions`);
   }
 
-  // If a lead is tagged, also load lead-specific memories (they override workspace-level)
+  // ── Stage 12: Entity Resolution (BEFORE any LLM call) ────────────────
+  // Load conversation entity state if we have a conversation
+  let conversationEntityState: Awaited<ReturnType<typeof loadConversationEntityState>> = null;
+  if (inputConversationId) {
+    conversationEntityState = await loadConversationEntityState(db, inputConversationId);
+  }
+
+  // Resolve the active entity deterministically
+  const previousEntityId = conversationEntityState?.activeEntityId ?? null;
+  const previousEntityName = conversationEntityState?.activeEntityName ?? null;
+  const resolvedEntity: ResolvedEntity | null = await resolveActiveEntity(
+    db,
+    workspaceId,
+    message,
+    pipelineContext ?? null,
+    conversationEntityState
+  );
+
+  const entitySwitched = resolvedEntity != null && previousEntityId != null && resolvedEntity.entityId !== previousEntityId;
+  if (entitySwitched) {
+    console.log(`[skyler-chat] Entity switched: ${previousEntityName} → ${resolvedEntity!.entityName}`);
+  }
+
+  // If a lead is tagged/resolved, load lead-specific memories
   let effectiveAgentMemories = agentMemories;
-  if (pipelineContext?.pipeline_id) {
+  const activeEntityId = resolvedEntity?.entityId ?? pipelineContext?.pipeline_id as string | undefined;
+  if (activeEntityId) {
     try {
-      effectiveAgentMemories = await getMemories(db, workspaceId, pipelineContext.pipeline_id as string);
+      effectiveAgentMemories = await getMemories(db, workspaceId, activeEntityId);
     } catch {
       // Fall back to workspace-only memories
     }
@@ -278,127 +312,70 @@ export async function POST(request: NextRequest) {
     effectiveAgentMemories
   );
 
-  // ── Inject lead/pipeline tag context ────────────────────────────────────
-  // Case 1: Lead-level tag (no specific email) — user tagged a lead or pipeline card
-  if (pipelineContext && !pipelineContext.referenced_email) {
-    const ctx = pipelineContext;
-    // Fetch pipeline record if it's a pipeline source
-    let pipelineExtra = "";
-    let threadBlock = "";
-    if (ctx.source === "pipeline" && ctx.pipeline_id) {
-      const [{ data: pRec }, { data: meetings }] = await Promise.all([
-        db
-          .from("skyler_sales_pipeline")
-          .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, conversation_thread, meeting_outcome, meeting_transcript")
-          .eq("id", ctx.pipeline_id)
-          .single(),
-        db
-          .from("meeting_transcripts")
-          .select("id, meeting_date, summary, intelligence, participants, processing_status")
-          .eq("lead_id", ctx.pipeline_id)
-          .eq("processing_status", "complete")
-          .order("meeting_date", { ascending: false })
-          .limit(3),
-      ]);
+  // ── Stage 12: Build active entity context (appended LAST to prompt) ──
+  // Entity data is loaded fresh and placed at the END of the system prompt
+  // for highest attention. Replaces the old inline HIGHLIGHTED LEAD CONTEXT.
+  let activeEntityBlock = "";
 
-      if (pRec) {
-        pipelineExtra = `\nPipeline Stage: ${pRec.stage ?? "unknown"}
-Emails Sent: ${pRec.emails_sent ?? 0}, Replies: ${pRec.emails_replied ?? 0}
-Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}`;
+  if (resolvedEntity) {
+    const entityId = resolvedEntity.entityId;
 
-        // Include the actual conversation thread so Skyler can read what was said
-        const thread = (pRec.conversation_thread ?? []) as Array<{
-          role: string; content: string; subject?: string; timestamp: string;
-        }>;
-        if (thread.length > 0) {
-          const threadLines = thread.map((e) =>
-            `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
-          ).join("\n\n");
-          threadBlock = `\n\nCONVERSATION THREAD (read this carefully — this is what was actually said):\n${threadLines}`;
-        }
+    // Load fresh entity data
+    const [{ data: entityPipeline }, entityDirectives, { data: entityMeetings }] = await Promise.all([
+      db
+        .from("skyler_sales_pipeline")
+        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, emails_opened, conversation_thread, deal_value, meeting_outcome, meeting_transcript, updated_at")
+        .eq("id", entityId)
+        .single(),
+      getActiveDirectives(db, entityId),
+      db
+        .from("meeting_transcripts")
+        .select("summary")
+        .eq("lead_id", entityId)
+        .eq("processing_status", "complete")
+        .order("meeting_date", { ascending: false })
+        .limit(1),
+    ]);
 
-        // Include meeting intelligence if available
-        if (meetings && meetings.length > 0) {
-          const meetingLines = meetings.map((m) => {
-            const intel = (m.intelligence ?? {}) as Record<string, unknown>;
-            const participants = ((m.participants ?? []) as Array<{ name: string }>).map((p) => p.name).join(", ");
-            const date = m.meeting_date ? new Date(m.meeting_date as string).toLocaleDateString() : "unknown date";
+    if (entityPipeline) {
+      const thread = (entityPipeline.conversation_thread ?? []) as Array<{
+        role: string; content: string; subject?: string; timestamp: string;
+      }>;
 
-            let block = `\n### Meeting on ${date}\nParticipants: ${participants || "unknown"}`;
-            if (m.summary) block += `\nSummary: ${m.summary}`;
-            if ((intel.action_items as unknown[])?.length) block += `\nAction items: ${(intel.action_items as Array<{ text: string }>).map((a) => a.text).join("; ")}`;
-            if ((intel.commitments as unknown[])?.length) block += `\nCommitments: ${(intel.commitments as Array<{ text: string }>).map((c) => c.text).join("; ")}`;
-            if ((intel.objections as unknown[])?.length) block += `\nObjections: ${(intel.objections as Array<{ text: string }>).map((o) => o.text).join("; ")}`;
-            if ((intel.buying_signals as unknown[])?.length) block += `\nBuying signals: ${(intel.buying_signals as Array<{ text: string }>).map((b) => b.text).join("; ")}`;
-            if ((intel.stakeholders_identified as unknown[])?.length) block += `\nStakeholders: ${(intel.stakeholders_identified as Array<{ name: string; role?: string }>).map((s) => `${s.name}${s.role ? ` (${s.role})` : ""}`).join(", ")}`;
-            if ((intel.pain_points as unknown[])?.length) block += `\nPain points: ${(intel.pain_points as Array<{ text: string }>).map((p) => p.text).join("; ")}`;
-            if ((intel.next_steps_discussed as unknown[])?.length) block += `\nNext steps: ${(intel.next_steps_discussed as Array<{ step: string }>).map((n) => n.step).join("; ")}`;
-            return block;
-          }).join("\n");
+      const meetingSummary = entityMeetings?.[0]?.summary ?? undefined;
 
-          threadBlock += `\n\nMEETING INTELLIGENCE (what was discussed on calls with this lead):${meetingLines}`;
-        } else if (pRec.meeting_outcome) {
-          // Legacy fallback — meeting_outcome on pipeline record
-          const mo = pRec.meeting_outcome as Record<string, unknown>;
-          if (mo && !mo.error) {
-            threadBlock += `\n\nMEETING OUTCOME: ${mo.reasoning ?? "unknown"}`;
-            if (mo.key_discussion_points) {
-              threadBlock += `\nKey points: ${(mo.key_discussion_points as string[]).join("; ")}`;
-            }
-          }
-        }
-      }
+      activeEntityBlock = buildActiveEntityBlock(
+        {
+          entityId,
+          entityName: entityPipeline.contact_name ?? resolvedEntity.entityName,
+          companyName: entityPipeline.company_name ?? resolvedEntity.companyName,
+          contactEmail: entityPipeline.contact_email ?? resolvedEntity.contactEmail,
+          stage: entityPipeline.stage,
+          emailsSent: entityPipeline.emails_sent,
+          emailsReplied: entityPipeline.emails_replied,
+          dealValue: entityPipeline.deal_value,
+          lastActivity: entityPipeline.updated_at,
+        },
+        thread,
+        entityDirectives.map((d) => ({ directive_text: d.directive_text, created_at: d.created_at })),
+        meetingSummary
+      );
     }
-
-    systemPrompt += `\n\n## HIGHLIGHTED LEAD CONTEXT
-The user highlighted this lead. Their message is about this lead — they might be asking for updates, requesting actions, or anything else. Read the conversation thread below and respond using the full context.
-
-Lead: ${ctx.contact_name} at ${ctx.company_name}
-${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}
-${ctx.contact_email ? `Contact Email: ${ctx.contact_email}` : ""}${pipelineExtra}${threadBlock}
-
-You have full context about this lead including the entire email conversation. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
-`;
   }
 
-  // Case 2: Email-level highlight — user highlighted a specific email from a thread
-  if (pipelineContext?.referenced_email) {
-    const ctx = pipelineContext;
-    const email = ctx.referenced_email;
+  // Handle email-level highlight — append to entity block
+  if (pipelineContext?.referenced_email && resolvedEntity) {
+    const email = pipelineContext.referenced_email;
     const emailStatus = email.status ?? (email.role === "skyler" ? "sent" : "received");
     const isPending = emailStatus === "pending";
 
-    // Fetch full pipeline record for complete context
-    let pipelineExtra = "";
-    if (ctx.pipeline_id) {
-      const { data: pRec } = await db
-        .from("skyler_sales_pipeline")
-        .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, emails_opened")
-        .eq("id", ctx.pipeline_id)
-        .single();
-      if (pRec) {
-        pipelineExtra = `
-Pipeline Stage: ${pRec.stage ?? "unknown"}
-Contact Email: ${pRec.contact_email ?? ctx.contact_email ?? "unknown"}
-Emails Sent: ${pRec.emails_sent ?? 0}, Opened: ${pRec.emails_opened ?? 0}, Replied: ${pRec.emails_replied ?? 0}`;
-      }
-    }
-
-    systemPrompt += `\n\n## HIGHLIGHTED EMAIL CONTEXT
-The user highlighted a specific email from the conversation thread with this lead. Their message is about this lead and this email — they might be asking for updates, giving feedback, requesting a re-draft, or anything else. Read their message carefully and respond accordingly.
-
-Lead: ${ctx.contact_name} at ${ctx.company_name}
-${ctx.pipeline_id ? `Pipeline ID: ${ctx.pipeline_id}` : ""}${pipelineExtra}
-
-Highlighted email (${emailStatus}):
+    activeEntityBlock += `\n\n<highlighted_email status="${emailStatus}">
 Subject: ${email.subject ?? "(no subject)"}
 Content:
 ${email.content}
+</highlighted_email>
 
-${isPending ? `This email is a pending draft (not sent yet). If the user gives feedback, offer to redraft it.` : `This email was already sent. If the user gives feedback on the email content, store it as a workspace memory for future emails AND use draft_correction_email to create a corrected follow-up if they want one (pipeline_id: "${ctx.pipeline_id}", to: the contact's email).`}
-
-You have full context about this lead and the highlighted email. Do NOT ask "what are you referring to" or request more context — the user's message is about this lead.
-`;
+${isPending ? `This email is a pending draft (not sent yet). If the user gives feedback, offer to redraft it.` : `This email was already sent. If the user gives feedback on the email content, store it as a workspace memory for future emails AND use draft_correction_email to create a corrected follow-up if they want one (pipeline_id: "${resolvedEntity.entityId}", to: "${resolvedEntity.contactEmail}").`}`;
   }
 
   // ── Handle clarification replies (low-confidence research pause) ─────────
@@ -625,6 +602,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
           p_role: "user",
           p_content: savedUserContent,
           p_sources: null,
+          p_active_entity_id: resolvedEntity?.entityId ?? null,
         });
 
         // ── Step 2: Load conversation history ───────────────────────────
@@ -662,64 +640,39 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
           console.error("[skyler-chat] Failed to load history:", histErr);
         }
 
-        // ── Step 2b: Re-inject pipeline context from history ────────────
-        // If this is a follow-up message (no pipelineContext in request body)
-        // but a previous message embedded [Pipeline context: ...], recover it
-        // and inject into the system prompt so Skyler remembers the lead.
-        if (!pipelineContext && history.length > 0) {
-          const pipelineMarkerRegex = /\[Pipeline context: (.+?) at (.+?) \(pipeline_id: ([a-f0-9-]+), email: (.+?)\)\]/;
-          // Scan history backwards to find the most recent pipeline context marker
-          let parsedCtx: { contactName: string; companyName: string; pipelineId: string; emailSubject: string } | null = null;
-          for (let i = history.length - 1; i >= 0; i--) {
-            const match = history[i].content.match(pipelineMarkerRegex);
-            if (match) {
-              parsedCtx = {
-                contactName: match[1],
-                companyName: match[2],
-                pipelineId: match[3],
-                emailSubject: match[4],
-              };
-              break;
-            }
+        // ── Step 2b: Entity-scoped history filtering (Stage 12, Part C) ──
+        if (resolvedEntity && entitySwitched && conversationId) {
+          // Load messages with entity IDs for proper filtering
+          const entityHistory = await loadEntityScopedHistory(db, conversationId, 30);
+          // Remove the last message (current user message, not yet complete)
+          const pastMessages = entityHistory.slice(0, -1);
+
+          if (pastMessages.length > 0) {
+            history = filterHistoryByEntity(
+              pastMessages,
+              resolvedEntity.entityId,
+              resolvedEntity.entityName,
+              previousEntityId,
+              previousEntityName
+            );
+            console.log(`[skyler-chat] Filtered history: ${pastMessages.length} → ${history.length} messages (entity switch)`);
           }
+        }
 
-          if (parsedCtx) {
-            console.log(`[skyler-chat] Re-injecting pipeline context from history: ${parsedCtx.contactName} at ${parsedCtx.companyName} (${parsedCtx.pipelineId})`);
-            // Fetch pipeline record to get contact email and current state
-            const { data: pipelineRecord } = await db
-              .from("skyler_sales_pipeline")
-              .select("contact_email, contact_name, company_name, stage, conversation_thread")
-              .eq("id", parsedCtx.pipelineId)
-              .single();
+        // ── Step 2c: Append active entity block LAST (highest attention) ──
+        if (activeEntityBlock) {
+          systemPrompt += `\n\n${activeEntityBlock}`;
+        }
 
-            if (pipelineRecord) {
-              // Include the actual conversation thread
-              const reinjectedThread = (pipelineRecord.conversation_thread ?? []) as Array<{
-                role: string; content: string; subject?: string; timestamp: string;
-              }>;
-              let reinjectedThreadBlock = "";
-              if (reinjectedThread.length > 0) {
-                const threadLines = reinjectedThread.map((e) =>
-                  `[${e.role}]${e.subject ? ` Subject: "${e.subject}"` : ""} (${e.timestamp}):\n${e.content}`
-                ).join("\n\n");
-                reinjectedThreadBlock = `\n\nCONVERSATION THREAD (read this — this is the actual email exchange):\n${threadLines}`;
-              }
-
-              systemPrompt += `\n\n## ACTIVE PIPELINE CONTEXT (from conversation history)
-You are currently discussing a specific lead from the Sales Closer pipeline.
-Pipeline ID: ${parsedCtx.pipelineId}
-Contact: ${pipelineRecord.contact_name ?? parsedCtx.contactName} at ${pipelineRecord.company_name ?? parsedCtx.companyName}
-Contact Email: ${pipelineRecord.contact_email ?? "unknown"}
-Stage: ${pipelineRecord.stage ?? "unknown"}
-Last Email Subject: ${parsedCtx.emailSubject}${reinjectedThreadBlock}
-
-IMPORTANT: You already have all the context about this lead from the conversation including the full email thread. When the user asks you to re-draft, send a correction email, or take any action on this lead:
-- Use pipeline_id: "${parsedCtx.pipelineId}"
-- Use contact email: "${pipelineRecord.contact_email ?? ""}"
-- Do NOT ask the user for the pipeline_id or email — you already have them.
-`;
-            }
-          }
+        // ── Step 2d: Update conversation entity state ──────────────────
+        if (resolvedEntity && conversationId) {
+          const currentStack = conversationEntityState?.entityFocusStack ?? [];
+          const turnNumber = history.length + 1;
+          const newStack = updateFocusStack(currentStack, resolvedEntity, turnNumber);
+          // Fire-and-forget — don't block the response
+          updateConversationEntity(db, conversationId, resolvedEntity, newStack).catch((err) =>
+            console.error("[skyler-chat] Failed to update conversation entity:", err)
+          );
         }
 
         // ── Step 3: Run agent loop (reusing CleverBrain's) ──────────────
@@ -779,12 +732,30 @@ IMPORTANT: You already have all the context about this lead from the conversatio
           p_role: "assistant",
           p_content: savedContent,
           p_sources: sources.length > 0 ? sources : null,
+          p_active_entity_id: resolvedEntity?.entityId ?? null,
         });
+
+        // ── Stage 12 Part D: Post-generation entity validation ──────
+        let entityWarning: string | undefined;
+        if (resolvedEntity && conversationEntityState?.entityFocusStack?.length) {
+          const otherEntities = conversationEntityState.entityFocusStack
+            .filter((e) => e.entity_id !== resolvedEntity.entityId)
+            .map((e) => ({ entityName: e.entity_name, companyName: e.company_name }));
+
+          if (otherEntities.length > 0) {
+            const validation = validateEntityGrounding(fullResponse, resolvedEntity, otherEntities);
+            if (!validation.isClean) {
+              entityWarning = validation.warning;
+              console.warn(`[skyler-chat] Entity contamination: ${entityWarning}`);
+            }
+          }
+        }
 
         send({
           type: "metadata",
           conversationId,
           messageId: assistantMsgId ?? null,
+          entityWarning,
         });
         send({ type: "done" });
 
