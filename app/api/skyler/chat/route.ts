@@ -364,6 +364,26 @@ export async function POST(request: NextRequest) {
         entityDirectives.map((d) => ({ directive_text: d.directive_text, created_at: d.created_at })),
         meetingSummary
       );
+    } else {
+      // Pipeline record not found by ID (e.g. tagged from lead_scores).
+      // Build a minimal entity block so Claude still knows who the user means.
+      console.warn(`[skyler-chat] No pipeline record for entity ${entityId} — using tag info only`);
+      activeEntityBlock = buildActiveEntityBlock(
+        {
+          entityId,
+          entityName: resolvedEntity.entityName,
+          companyName: resolvedEntity.companyName,
+          contactEmail: resolvedEntity.contactEmail,
+          stage: pipelineContext?.stage as string | undefined,
+          emailsSent: 0,
+          emailsReplied: 0,
+          dealValue: undefined,
+          lastActivity: undefined,
+        },
+        [],
+        [],
+        undefined
+      );
     }
   }
 

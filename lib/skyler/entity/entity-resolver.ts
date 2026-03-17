@@ -47,18 +47,64 @@ export async function resolveActiveEntity(
 ): Promise<ResolvedEntity | null> {
   // Priority 1: Explicit tag in current message (from UI pipeline context)
   if (pipelineContext?.pipeline_id) {
-    const entityId = pipelineContext.pipeline_id as string;
+    const taggedId = pipelineContext.pipeline_id as string;
     const entityName = (pipelineContext.contact_name as string) ?? "Unknown";
     const companyName = (pipelineContext.company_name as string) ?? "";
     const contactEmail = (pipelineContext.contact_email as string) ?? "";
 
-    console.log(`[entity-resolver] Priority 1: Explicit tag → ${entityName} (${entityId})`);
+    // First try: taggedId IS a pipeline record
+    const { data: directMatch } = await db
+      .from("skyler_sales_pipeline")
+      .select("id, contact_name, company_name, contact_email")
+      .eq("id", taggedId)
+      .single();
+
+    if (directMatch) {
+      console.log(`[entity-resolver] Priority 1: Explicit tag (pipeline) → ${directMatch.contact_name} (${directMatch.id})`);
+      return {
+        entityId: directMatch.id,
+        entityName: directMatch.contact_name ?? entityName,
+        companyName: directMatch.company_name ?? companyName,
+        contactEmail: directMatch.contact_email ?? contactEmail,
+        confidence: 1.0,
+        source: "explicit_tag",
+      };
+    }
+
+    // Fallback: taggedId is from lead_scores or another table — match by email
+    if (contactEmail) {
+      const { data: emailMatch } = await db
+        .from("skyler_sales_pipeline")
+        .select("id, contact_name, company_name, contact_email")
+        .eq("workspace_id", workspaceId)
+        .ilike("contact_email", contactEmail)
+        .is("resolution", null)
+        .limit(1)
+        .single();
+
+      if (emailMatch) {
+        console.log(`[entity-resolver] Priority 1: Explicit tag (email fallback) → ${emailMatch.contact_name} (${emailMatch.id})`);
+        return {
+          entityId: emailMatch.id,
+          entityName: emailMatch.contact_name ?? entityName,
+          companyName: emailMatch.company_name ?? companyName,
+          contactEmail: emailMatch.contact_email ?? contactEmail,
+          confidence: 1.0,
+          source: "explicit_tag",
+        };
+      }
+    }
+
+    // Last resort: taggedId doesn't match pipeline, no email match.
+    // Return with the tagged info so Skyler at least knows WHO the user means,
+    // even if we can't load full pipeline data.
+    console.log(`[entity-resolver] Priority 1: Explicit tag (no pipeline match) → ${entityName} (${taggedId})`);
     return {
-      entityId,
+      entityId: taggedId,
       entityName,
       companyName,
       contactEmail,
-      confidence: 1.0,
+      confidence: 0.9,
       source: "explicit_tag",
     };
   }
