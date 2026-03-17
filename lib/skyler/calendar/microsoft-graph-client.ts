@@ -48,7 +48,7 @@ function getNango(): Nango {
 }
 
 async function graphGet<T>(
-  workspaceId: string,
+  nangoConnectionId: string,
   path: string,
   params?: Record<string, string>
 ): Promise<T> {
@@ -58,14 +58,14 @@ async function graphGet<T>(
     baseUrlOverride: GRAPH_BASE,
     endpoint: path,
     providerConfigKey: "outlook",
-    connectionId: workspaceId,
+    connectionId: nangoConnectionId,
     params,
   });
   return resp.data as T;
 }
 
 async function graphPost<T>(
-  workspaceId: string,
+  nangoConnectionId: string,
   path: string,
   body: Record<string, unknown>
 ): Promise<T> {
@@ -75,14 +75,14 @@ async function graphPost<T>(
     baseUrlOverride: GRAPH_BASE,
     endpoint: path,
     providerConfigKey: "outlook",
-    connectionId: workspaceId,
+    connectionId: nangoConnectionId,
     data: body,
   });
   return resp.data as T;
 }
 
 async function graphPatch<T>(
-  workspaceId: string,
+  nangoConnectionId: string,
   path: string,
   body: Record<string, unknown>
 ): Promise<T> {
@@ -92,10 +92,29 @@ async function graphPatch<T>(
     baseUrlOverride: GRAPH_BASE,
     endpoint: path,
     providerConfigKey: "outlook",
-    connectionId: workspaceId,
+    connectionId: nangoConnectionId,
     data: body,
   });
   return resp.data as T;
+}
+
+/**
+ * Resolve the Nango connection ID for the Outlook provider.
+ * Looks up the `integrations` table by workspace ID.
+ */
+export async function resolveNangoConnectionId(
+  workspaceId: string
+): Promise<string | null> {
+  const { createAdminSupabaseClient } = await import("@/lib/supabase-admin");
+  const db = createAdminSupabaseClient();
+  const { data } = await db
+    .from("integrations")
+    .select("nango_connection_id")
+    .eq("workspace_id", workspaceId)
+    .eq("provider", "outlook")
+    .eq("status", "connected")
+    .single();
+  return data?.nango_connection_id ?? null;
 }
 
 // ── API methods ──────────────────────────────────────────────────────────────
@@ -110,12 +129,15 @@ export async function checkAvailability(
   busyBlocks: ScheduleItem[];
   workingHours: WorkingHours | null;
 }> {
+  const connId = await resolveNangoConnectionId(workspaceId);
+  if (!connId) throw new Error("No connected Outlook integration found");
+
   const data = await graphPost<{
     value: Array<{
       scheduleItems: ScheduleItem[];
       workingHours?: WorkingHours;
     }>;
-  }>(workspaceId, "/me/calendar/getSchedule", {
+  }>(connId, "/me/calendar/getSchedule", {
     schedules: [userEmail],
     startTime: { dateTime: startDate, timeZone: "UTC" },
     endTime: { dateTime: endDate, timeZone: "UTC" },
@@ -141,7 +163,9 @@ export async function createEventWithTeams(
     body?: string;
   }
 ): Promise<OutlookEvent> {
-  return graphPost<OutlookEvent>(workspaceId, "/me/events", {
+  const connId = await resolveNangoConnectionId(workspaceId);
+  if (!connId) throw new Error("No connected Outlook integration found");
+  return graphPost<OutlookEvent>(connId, "/me/events", {
     subject: eventData.subject,
     body: eventData.body
       ? { contentType: "HTML", content: eventData.body }
@@ -163,7 +187,9 @@ export async function updateEventAttendees(
   eventId: string,
   attendees: Array<{ email: string; name?: string; type?: string }>
 ): Promise<OutlookEvent> {
-  return graphPatch<OutlookEvent>(workspaceId, `/me/events/${eventId}`, {
+  const connId = await resolveNangoConnectionId(workspaceId);
+  if (!connId) throw new Error("No connected Outlook integration found");
+  return graphPatch<OutlookEvent>(connId, `/me/events/${eventId}`, {
     attendees: attendees.map((a) => ({
       emailAddress: { address: a.email, name: a.name ?? a.email },
       type: a.type ?? "required",
@@ -176,10 +202,29 @@ export async function getWorkingHours(
   workspaceId: string
 ): Promise<WorkingHours | null> {
   try {
+    const connId = await resolveNangoConnectionId(workspaceId);
+    if (!connId) return null;
     const data = await graphGet<{
       workingHours: WorkingHours;
-    }>(workspaceId, "/me/mailboxSettings/workingHours");
+    }>(connId, "/me/mailboxSettings/workingHours");
     return data.workingHours ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Get the user's email from Microsoft Graph /me endpoint */
+export async function getUserEmail(
+  workspaceId: string
+): Promise<string | null> {
+  const connId = await resolveNangoConnectionId(workspaceId);
+  if (!connId) return null;
+  try {
+    const me = await graphGet<{ mail?: string; userPrincipalName?: string }>(
+      connId,
+      "/me"
+    );
+    return me.mail ?? me.userPrincipalName ?? null;
   } catch {
     return null;
   }

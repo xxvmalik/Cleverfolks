@@ -1,8 +1,8 @@
 /**
- * Test route: Check Outlook calendar availability via the new calendar service.
+ * Test route: Check Outlook calendar availability via Nango proxy.
  * GET /api/test/calendar-check
  *
- * Each step is wrapped individually so the exact failure point is visible.
+ * Uses nango_connection_id from the integrations table (same as email-sender).
  */
 
 import { NextResponse } from "next/server";
@@ -19,7 +19,7 @@ export async function GET() {
     const db = createAdminSupabaseClient();
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-    // ── Step 1: Check integration row exists ──────────────────────────────
+    // ── Step 1: Get integration row + nango_connection_id ──────────────────
     const { data: integration, error: intErr } = await db
       .from("integrations")
       .select("id, provider, status, nango_connection_id")
@@ -29,44 +29,39 @@ export async function GET() {
       .single();
 
     steps.integration = integration ?? { error: intErr?.message };
-    if (!integration) {
-      return NextResponse.json({ steps, error: "No connected Outlook integration" }, { status: 404 });
+    if (!integration?.nango_connection_id) {
+      return NextResponse.json({ steps, error: "No connected Outlook integration or missing nango_connection_id" }, { status: 404 });
     }
 
-    // ── Step 2: Get Nango connection to find user email ───────────────────
+    const connectionId = integration.nango_connection_id;
+    steps.usingConnectionId = connectionId;
+
+    // ── Step 2: Get user email via /me ─────────────────────────────────────
     let userEmail = "";
-    let nangoConnectionRaw: unknown = null;
     try {
-      const conn = await nango.getConnection("outlook", WORKSPACE_ID);
-      nangoConnectionRaw = {
-        connectionId: (conn as Record<string, unknown>).connection_id,
-        providerConfigKey: (conn as Record<string, unknown>).provider_config_key,
-        // Dump credential keys to find where email lives
-        credentialKeys: Object.keys((conn as Record<string, unknown>).credentials ?? {}),
-        credentialRawKeys: Object.keys(
-          ((conn as Record<string, unknown>).credentials as Record<string, unknown>)?.raw ?? {}
-        ),
-        rawSample: JSON.stringify(
-          ((conn as Record<string, unknown>).credentials as Record<string, unknown>)?.raw ?? {}
-        ).slice(0, 500),
+      const meResp = await nango.proxy({
+        method: "GET",
+        baseUrlOverride: "https://graph.microsoft.com/v1.0",
+        endpoint: "/me",
+        providerConfigKey: "outlook",
+        connectionId,
+      });
+      const me = meResp.data as Record<string, unknown>;
+      userEmail = (me.mail as string) ?? (me.userPrincipalName as string) ?? "";
+      steps.meProfile = { mail: me.mail, userPrincipalName: me.userPrincipalName };
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: unknown }; message?: string };
+      steps.meProfile = {
+        status: "error",
+        statusCode: e.response?.status,
+        responseBody: JSON.stringify(e.response?.data ?? "").slice(0, 500),
+        message: e.message,
       };
-
-      // Try common paths where email might live
-      const creds = (conn as Record<string, unknown>).credentials as Record<string, unknown>;
-      const raw = (creds?.raw ?? {}) as Record<string, unknown>;
-      userEmail =
-        (raw.userPrincipalName as string) ??
-        (raw.mail as string) ??
-        (raw.email as string) ??
-        (creds?.email as string) ??
-        "";
-    } catch (err) {
-      nangoConnectionRaw = { error: err instanceof Error ? err.message : String(err) };
     }
-    steps.nangoConnection = nangoConnectionRaw;
+
     steps.resolvedEmail = userEmail;
 
-    // ── Step 3: Try getWorkingHours ───────────────────────────────────────
+    // ── Step 3: Try getWorkingHours ─────────────────────────────────────────
     let workingHours = null;
     try {
       const resp = await nango.proxy({
@@ -74,7 +69,7 @@ export async function GET() {
         baseUrlOverride: "https://graph.microsoft.com/v1.0",
         endpoint: "/me/mailboxSettings/workingHours",
         providerConfigKey: "outlook",
-        connectionId: WORKSPACE_ID,
+        connectionId,
       });
       workingHours = resp.data;
       steps.workingHours = { status: "ok", data: workingHours };
@@ -83,39 +78,17 @@ export async function GET() {
       steps.workingHours = {
         status: "error",
         statusCode: e.response?.status,
-        responseBody: JSON.stringify(e.response?.data ?? "").slice(0, 500),
         message: e.message,
       };
     }
 
-    // ── Step 4: Try getSchedule (availability) ────────────────────────────
+    // ── Step 4: getSchedule (availability) ──────────────────────────────────
     const now = new Date();
     const endRange = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
 
-    // If we don't have a userEmail, try /me/profile instead
     if (!userEmail) {
-      try {
-        const meResp = await nango.proxy({
-          method: "GET",
-          baseUrlOverride: "https://graph.microsoft.com/v1.0",
-          endpoint: "/me",
-          providerConfigKey: "outlook",
-          connectionId: WORKSPACE_ID,
-        });
-        const me = meResp.data as Record<string, unknown>;
-        userEmail = (me.mail as string) ?? (me.userPrincipalName as string) ?? "";
-        steps.meProfile = { mail: me.mail, userPrincipalName: me.userPrincipalName };
-      } catch (err: unknown) {
-        const e = err as { response?: { status?: number; data?: unknown }; message?: string };
-        steps.meProfile = {
-          status: "error",
-          statusCode: e.response?.status,
-          message: e.message,
-        };
-      }
+      return NextResponse.json({ steps, error: "Could not resolve user email — getSchedule requires it" }, { status: 400 });
     }
-
-    steps.finalEmail = userEmail;
 
     let availability = null;
     try {
@@ -124,7 +97,7 @@ export async function GET() {
         baseUrlOverride: "https://graph.microsoft.com/v1.0",
         endpoint: "/me/calendar/getSchedule",
         providerConfigKey: "outlook",
-        connectionId: WORKSPACE_ID,
+        connectionId,
         data: {
           schedules: [userEmail],
           startTime: { dateTime: now.toISOString(), timeZone: "UTC" },
@@ -142,11 +115,10 @@ export async function GET() {
         responseBody: JSON.stringify(e.response?.data ?? "").slice(0, 1000),
         message: e.message,
       };
-      // Return early with all debug info
       return NextResponse.json({ steps, error: "getSchedule failed" }, { status: 500 });
     }
 
-    // ── Step 5: Parse and score ───────────────────────────────────────────
+    // ── Step 5: Parse and score ─────────────────────────────────────────────
     const scheduleData = ((availability as Record<string, unknown[]>)?.value?.[0] ?? {}) as Record<string, unknown>;
     const busyBlocks = (scheduleData.scheduleItems ?? []) as Array<{
       start: { dateTime: string };
