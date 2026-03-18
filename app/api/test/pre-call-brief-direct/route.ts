@@ -12,6 +12,8 @@ import { Nango } from "@nangohq/node";
 import { routedLLMCall } from "@/lib/skyler/routing/model-router";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 import { resolveLeadFromAttendees } from "@/lib/skyler/calendar/calendar-service";
+import { getMemories, formatMemoriesForPrompt } from "@/lib/skyler/memory/agent-memory-store";
+import { researchCompany, type CompanyResearch } from "@/lib/skyler/company-research";
 
 const WORKSPACE_ID = "ab25098b-45fd-40ba-ba6f-d67032dcdbbc";
 const LEAD_EMAIL = "prominessltd@gmail.com";
@@ -136,23 +138,35 @@ export async function GET() {
       ? { id: pipeline.id, name: pipeline.contact_name, company: pipeline.company_name, resolvedVia: calEvent.lead_id ? "lead_id" : "attendee_email_match" }
       : "Not found";
 
-    // ── Step 3: Load agent memories ─────────────────────────────────────
+    // ── Step 3: Load agent memories (using correct getMemories function) ─
     const pipelineId = (pipeline?.id as string) ?? null;
-    let memories: Array<{ fact_key: string; fact_value: unknown }> = [];
-    if (pipelineId) {
-      const { data } = await db
-        .from("agent_memories")
-        .select("fact_key, fact_value")
-        .or(
-          `scope_type.eq.workspace,and(scope_type.eq.lead,scope_id.eq.${pipelineId})`
-        )
-        .eq("workspace_id", WORKSPACE_ID)
-        .eq("is_current", true);
-      memories = data ?? [];
-    }
-    steps.memories = { count: memories.length };
+    const memories = await getMemories(db, WORKSPACE_ID, pipelineId ?? undefined);
+    steps.memories = { count: memories.length, keys: memories.map((m) => m.fact_key) };
 
-    // ── Step 4: Classify meeting type ───────────────────────────────────
+    // ── Step 4: Company research (use cached or fetch fresh) ────────────
+    let companyResearch: CompanyResearch | null = (pipeline?.company_research as CompanyResearch | null) ?? null;
+    if (!companyResearch?.summary && pipeline) {
+      try {
+        companyResearch = await researchCompany({
+          companyName: (pipeline.company_name as string) ?? "",
+          contactName: (pipeline.contact_name as string) ?? "",
+          contactEmail: (pipeline.contact_email as string) ?? "",
+          workspaceId: WORKSPACE_ID,
+          pipelineId: pipelineId ?? undefined,
+          db,
+        });
+        steps.companyResearch = { status: "fetched_fresh", confidence: companyResearch.confidence };
+      } catch (err: unknown) {
+        const e = err as { message?: string };
+        steps.companyResearch = { status: "error", message: e.message };
+      }
+    } else if (companyResearch?.summary) {
+      steps.companyResearch = { status: "cached", confidence: companyResearch.confidence };
+    } else {
+      steps.companyResearch = { status: "no_pipeline_record" };
+    }
+
+    // ── Step 5: Classify meeting type ───────────────────────────────────
     const title = ((calEvent.title as string) ?? "").toLowerCase();
     let meetingType = "general";
     if (title.includes("demo")) meetingType = "demo";
@@ -160,9 +174,27 @@ export async function GET() {
     else if (title.includes("deep dive")) meetingType = "deep_dive";
     steps.meetingType = meetingType;
 
-    // ── Step 5: Generate brief via Claude ────────────────────────────────
+    // ── Step 6: Generate brief via Claude ────────────────────────────────
     const attendees = (calEvent.attendees as Array<{ email: string; name?: string }>) ?? [];
     const thread = (pipeline?.conversation_thread as Array<{ role: string; content: string; subject?: string; timestamp: string }>) ?? [];
+
+    const memoriesText = memories.length > 0 ? formatMemoriesForPrompt(memories) : "(None)";
+
+    let companyResearchText = "(No company research available)";
+    if (companyResearch?.summary) {
+      const cr = companyResearch;
+      companyResearchText = [
+        cr.summary && `Summary: ${cr.summary}`,
+        cr.industry && `Industry: ${cr.industry}`,
+        cr.estimated_size && `Size: ${cr.estimated_size}`,
+        cr.trigger_event && `Trigger Event: ${cr.trigger_event}`,
+        cr.pain_points?.length && `Pain Points: ${cr.pain_points.join("; ")}`,
+        cr.talking_points?.length && `Talking Points: ${cr.talking_points.join("; ")}`,
+        cr.service_alignment_points?.length && `Service Alignment: ${cr.service_alignment_points.join("; ")}`,
+        cr.recent_news?.length && `Recent News: ${cr.recent_news.join("; ")}`,
+        cr.website_insights && `Website Insights: ${cr.website_insights}`,
+      ].filter(Boolean).join("\n");
+    }
 
     const prompt = `Generate a pre-call brief for an upcoming ${meetingType} meeting.
 
@@ -187,6 +219,9 @@ ${
     : "(No pipeline record linked)"
 }
 
+## Company Research
+${companyResearchText}
+
 ## Conversation History (last 5 messages)
 ${
   thread.length > 0
@@ -197,24 +232,24 @@ ${
     : "(No conversation history)"
 }
 
-## Known Facts
-${memories.length > 0 ? memories.map((m) => `- ${m.fact_key}: ${JSON.stringify(m.fact_value)}`).join("\n") : "(None)"}
+## Known Facts (Agent Memories)
+${memoriesText}
 
 Generate a brief with EXACTLY these 5 sections:
 1. WHO: Lead name, company, role, how they found us, previous interactions
 2. CONTEXT: Pipeline stage, deal value, last activity, outstanding items
-3. THEIR WORLD: Company info, challenges mentioned in conversations
+3. THEIR WORLD: Company info, challenges, industry insights from research
 4. ATTENDEES: Name, role for each attendee. Flag new/unknown attendees.
-5. TALKING POINTS: 3-5 specific things to bring up based on meeting type and context.
+5. TALKING POINTS: 3-5 specific things to bring up based on meeting type, company research, and conversation history.
 
-Keep it concise. Each section should be 2-4 bullet points max.`;
+Keep it concise. Each section should be 2-4 bullet points max. Use the company research and conversation history to make talking points specific — never generic.`;
 
     let brief: string;
     try {
       const result = await routedLLMCall({
         task: "pre_call_brief",
         tier: "complex",
-        systemPrompt: "You are Skyler, an AI sales assistant. Generate concise, actionable pre-call briefs.",
+        systemPrompt: "You are Skyler, an AI sales assistant. Generate concise, actionable pre-call briefs. Never say 'Unknown' when you have data.",
         userContent: prompt,
         maxTokens: 1500,
       });

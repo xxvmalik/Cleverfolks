@@ -518,7 +518,7 @@ export async function resolveLeadFromAttendees(
 
   // Get the workspace owner's email so we can exclude it from matching
   const { data: members } = await db
-    .from("workspace_members")
+    .from("workspace_memberships")
     .select("user_id")
     .eq("workspace_id", workspaceId)
     .eq("role", "owner")
