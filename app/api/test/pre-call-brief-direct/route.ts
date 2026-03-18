@@ -92,7 +92,7 @@ export async function GET() {
     }
 
     // ── Step 2: Find pipeline record ────────────────────────────────────
-    const leadId = calEvent.lead_id as string | null;
+    const leadId = calEvent!.lead_id as string | null;
     let pipeline: Record<string, unknown> | null = null;
 
     if (leadId) {
