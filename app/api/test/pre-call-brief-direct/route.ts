@@ -1,12 +1,16 @@
 /**
- * Test route: Run pre-call brief generation DIRECTLY (no Inngest).
- * GET /api/test/pre-call-brief-direct
+ * Test route: Create a meeting and run pre-call brief generation DIRECTLY.
  *
- * This bypasses Inngest entirely so we can see exactly which step fails.
- * It reuses the most recent calendar_events row, or creates a new one.
+ * GET /api/test/pre-call-brief-direct?email=someone@example.com&name=John&minutes=32
+ *
+ * Query params:
+ *  - email: lead's email (required) — used to find pipeline record + create event
+ *  - name: lead's name (optional, resolved from pipeline if omitted)
+ *  - minutes: minutes from now to schedule meeting (default: 35)
+ *  - reuse: if "true", reuse latest calendar event instead of creating new one
  */
 
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { Nango } from "@nangohq/node";
 import { routedLLMCall } from "@/lib/skyler/routing/model-router";
@@ -16,38 +20,63 @@ import { getMemories, formatMemoriesForPrompt } from "@/lib/skyler/memory/agent-
 import { researchCompany, type CompanyResearch } from "@/lib/skyler/company-research";
 
 const WORKSPACE_ID = "ab25098b-45fd-40ba-ba6f-d67032dcdbbc";
-const LEAD_EMAIL = "prominessltd@gmail.com";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const steps: Record<string, unknown> = {};
+  const url = new URL(request.url);
+  const leadEmail = url.searchParams.get("email");
+  const leadNameParam = url.searchParams.get("name");
+  const minutesFromNow = parseInt(url.searchParams.get("minutes") ?? "35", 10);
+  const reuseExisting = url.searchParams.get("reuse") === "true";
+
+  if (!leadEmail) {
+    return NextResponse.json({
+      error: "Missing required query param: email",
+      usage: "/api/test/pre-call-brief-direct?email=someone@example.com&name=John&minutes=32",
+    }, { status: 400 });
+  }
 
   try {
     const db = createAdminSupabaseClient();
 
-    // ── Step 1: Find existing calendar event or create one ──────────────
+    // ── Step 1: Find pipeline record by email ───────────────────────────
+    const { data: pipeline } = await db
+      .from("skyler_sales_pipeline")
+      .select("*")
+      .ilike("contact_email", leadEmail)
+      .is("resolution", null)
+      .maybeSingle();
+
+    const leadName = leadNameParam || (pipeline?.contact_name as string) || leadEmail.split("@")[0];
+    const companyName = (pipeline?.company_name as string) || "";
+
+    steps.pipeline = pipeline
+      ? { id: pipeline.id, name: pipeline.contact_name, company: pipeline.company_name, email: pipeline.contact_email, stage: pipeline.stage }
+      : `No pipeline record found for ${leadEmail}`;
+
+    // ── Step 2: Get or create calendar event ────────────────────────────
     let calEvent: Record<string, unknown> | null = null;
     let calEventId = "";
 
-    // Check for a recent calendar event for this lead
-    const { data: existingEvent } = await db
-      .from("calendar_events")
-      .select("*")
-      .eq("workspace_id", WORKSPACE_ID)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (existingEvent) {
-      calEvent = existingEvent;
-      calEventId = existingEvent.id;
-      // Reset the brief_sent flag so we can re-run
-      await db
+    if (reuseExisting) {
+      const { data: existing } = await db
         .from("calendar_events")
-        .update({ pre_call_brief_sent: false })
-        .eq("id", calEventId);
-      steps.calendarEvent = { source: "existing", id: calEventId, title: existingEvent.title };
-    } else {
-      // Create a new calendar event (Outlook + DB) 35 min from now
+        .select("*")
+        .eq("workspace_id", WORKSPACE_ID)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        calEvent = existing;
+        calEventId = existing.id;
+        await db.from("calendar_events").update({ pre_call_brief_sent: false }).eq("id", calEventId);
+        steps.calendarEvent = { source: "reused_existing", id: calEventId, title: existing.title };
+      }
+    }
+
+    if (!calEvent) {
+      // Create Outlook event + DB row
       const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
       const { data: integration } = await db
         .from("integrations")
@@ -61,24 +90,82 @@ export async function GET() {
         return NextResponse.json({ steps, error: "No Outlook integration" }, { status: 404 });
       }
 
-      const startTime = new Date(Date.now() + 35 * 60 * 1000);
-      const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
+      const connectionId = integration.nango_connection_id;
 
+      // Get timezone
+      let timeZone = "UTC";
+      try {
+        const tzResp = await nango.proxy({
+          method: "GET",
+          baseUrlOverride: "https://graph.microsoft.com/v1.0",
+          endpoint: "/me/mailboxSettings",
+          providerConfigKey: "outlook",
+          connectionId,
+        });
+        timeZone = ((tzResp.data as Record<string, unknown>).timeZone as string) ?? "UTC";
+      } catch { /* fallback UTC */ }
+
+      // Get organizer email
+      let organizerEmail = "";
+      try {
+        const meResp = await nango.proxy({
+          method: "GET",
+          baseUrlOverride: "https://graph.microsoft.com/v1.0",
+          endpoint: "/me",
+          providerConfigKey: "outlook",
+          connectionId,
+        });
+        const me = meResp.data as Record<string, unknown>;
+        organizerEmail = (me.mail as string) ?? (me.userPrincipalName as string) ?? "";
+      } catch { /* non-critical */ }
+
+      const startTime = new Date(Date.now() + minutesFromNow * 60 * 1000);
+      const endTime = new Date(startTime.getTime() + 30 * 60 * 1000);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+
+      const meetingTitle = `Demo Call with ${leadName}${companyName ? ` — ${companyName}` : ""}`;
+
+      // Create Outlook event
+      const eventResp = await nango.proxy({
+        method: "POST",
+        baseUrlOverride: "https://graph.microsoft.com/v1.0",
+        endpoint: "/me/events",
+        providerConfigKey: "outlook",
+        connectionId,
+        data: {
+          subject: meetingTitle,
+          body: { contentType: "HTML", content: `<p>Meeting with ${leadName} to discuss services.</p>` },
+          start: { dateTime: fmt(startTime), timeZone },
+          end: { dateTime: fmt(endTime), timeZone },
+          attendees: [{ emailAddress: { address: leadEmail, name: leadName }, type: "required" }],
+          isOnlineMeeting: true,
+          onlineMeetingProvider: "teamsForBusiness",
+        },
+      });
+
+      const outlookEvent = eventResp.data as Record<string, unknown>;
+      const onlineMeeting = outlookEvent.onlineMeeting as Record<string, unknown> | null;
+      const meetingUrl = (onlineMeeting?.joinUrl as string) ?? null;
+
+      // Insert calendar_events row with lead_id resolved
       const { data: newEvent, error: insertErr } = await db
         .from("calendar_events")
         .insert({
           workspace_id: WORKSPACE_ID,
           provider: "microsoft_outlook",
-          provider_event_id: `test-${Date.now()}`,
-          title: "Demo Call — Pre-Call Brief Test",
+          provider_event_id: outlookEvent.id as string,
+          title: meetingTitle,
           start_time: startTime.toISOString(),
           end_time: endTime.toISOString(),
-          timezone: "UTC",
-          meeting_url: null,
+          timezone: timeZone,
+          meeting_url: meetingUrl,
           meeting_provider: "teams",
-          attendees: [{ email: LEAD_EMAIL, name: "Malik" }],
+          organizer_email: organizerEmail,
+          attendees: [{ email: leadEmail, name: leadName }],
           status: "confirmed",
           event_type: "demo",
+          lead_id: pipeline?.id ?? null,
           pre_call_brief_sent: false,
         })
         .select("*")
@@ -91,79 +178,44 @@ export async function GET() {
 
       calEvent = newEvent;
       calEventId = newEvent.id;
-      steps.calendarEvent = { source: "created_new", id: calEventId };
+      steps.calendarEvent = {
+        source: "created_new",
+        id: calEventId,
+        title: meetingTitle,
+        meetingUrl,
+        startsIn: `${minutesFromNow} minutes`,
+      };
     }
 
     if (!calEvent) {
-      return NextResponse.json({ steps, error: "No calendar event available" }, { status: 404 });
+      return NextResponse.json({ steps, error: "No calendar event" }, { status: 404 });
     }
 
-    // ── Step 2: Find pipeline record (lead_id > attendee email match) ──
-    let resolvedLeadId = calEvent.lead_id as string | null;
-    let pipeline: Record<string, unknown> | null = null;
-
-    if (resolvedLeadId) {
-      const { data } = await db
-        .from("skyler_sales_pipeline")
-        .select("*")
-        .eq("id", resolvedLeadId)
-        .single();
-      pipeline = data;
-    }
-
-    if (!pipeline) {
-      // Match attendee emails against pipeline records
-      const attendees = (calEvent.attendees as Array<{ email: string }>) ?? [];
-      const emails = attendees.map((a) => a.email).filter(Boolean);
-      resolvedLeadId = await resolveLeadFromAttendees(WORKSPACE_ID, emails);
-
-      if (resolvedLeadId) {
-        const { data } = await db
-          .from("skyler_sales_pipeline")
-          .select("*")
-          .eq("id", resolvedLeadId)
-          .single();
-        pipeline = data;
-
-        // Backfill lead_id on the calendar event
-        await db
-          .from("calendar_events")
-          .update({ lead_id: resolvedLeadId, updated_at: new Date().toISOString() })
-          .eq("id", calEventId);
-        steps.leadIdBackfilled = resolvedLeadId;
-      }
-    }
-
-    steps.pipeline = pipeline
-      ? { id: pipeline.id, name: pipeline.contact_name, company: pipeline.company_name, resolvedVia: calEvent.lead_id ? "lead_id" : "attendee_email_match" }
-      : "Not found";
-
-    // ── Step 3: Load agent memories (using correct getMemories function) ─
+    // ── Step 3: Load agent memories ─────────────────────────────────────
     const pipelineId = (pipeline?.id as string) ?? null;
     const memories = await getMemories(db, WORKSPACE_ID, pipelineId ?? undefined);
     steps.memories = { count: memories.length, keys: memories.map((m) => m.fact_key) };
 
-    // ── Step 4: Company research (use cached or fetch fresh) ────────────
+    // ── Step 4: Company research ────────────────────────────────────────
     let companyResearch: CompanyResearch | null = (pipeline?.company_research as CompanyResearch | null) ?? null;
-    if (!companyResearch?.summary && pipeline) {
+    if (!companyResearch?.summary && (companyName || leadEmail)) {
       try {
         companyResearch = await researchCompany({
-          companyName: (pipeline.company_name as string) ?? "",
-          contactName: (pipeline.contact_name as string) ?? "",
-          contactEmail: (pipeline.contact_email as string) ?? "",
+          companyName: companyName || leadEmail.split("@")[1]?.split(".")[0] || "",
+          contactName: leadName,
+          contactEmail: leadEmail,
           workspaceId: WORKSPACE_ID,
           pipelineId: pipelineId ?? undefined,
           db,
         });
         steps.companyResearch = { status: "fetched_fresh", confidence: companyResearch.confidence };
       } catch (err: unknown) {
-        const e = err as { message?: string };
-        steps.companyResearch = { status: "error", message: e.message };
+        steps.companyResearch = { status: "error", message: (err as { message?: string }).message };
       }
     } else if (companyResearch?.summary) {
       steps.companyResearch = { status: "cached", confidence: companyResearch.confidence };
     } else {
-      steps.companyResearch = { status: "no_pipeline_record" };
+      steps.companyResearch = { status: "skipped" };
     }
 
     // ── Step 5: Classify meeting type ───────────────────────────────────
@@ -174,10 +226,9 @@ export async function GET() {
     else if (title.includes("deep dive")) meetingType = "deep_dive";
     steps.meetingType = meetingType;
 
-    // ── Step 6: Generate brief via Claude ────────────────────────────────
+    // ── Step 6: Generate brief ──────────────────────────────────────────
     const attendees = (calEvent.attendees as Array<{ email: string; name?: string }>) ?? [];
     const thread = (pipeline?.conversation_thread as Array<{ role: string; content: string; subject?: string; timestamp: string }>) ?? [];
-
     const memoriesText = memories.length > 0 ? formatMemoriesForPrompt(memories) : "(None)";
 
     let companyResearchText = "(No company research available)";
@@ -256,38 +307,33 @@ Keep it concise. Each section should be 2-4 bullet points max. Use the company r
       brief = result.text;
       steps.briefGeneration = { status: "ok", length: brief.length, preview: brief.slice(0, 200) + "..." };
     } catch (err: unknown) {
-      const e = err as { message?: string; status?: number };
+      const e = err as { message?: string };
       steps.briefGeneration = { status: "error", message: e.message };
       return NextResponse.json({ steps, error: `Brief generation failed: ${e.message}` }, { status: 500 });
     }
 
-    // ── Step 6: Mark as sent ────────────────────────────────────────────
-    await db
-      .from("calendar_events")
-      .update({ pre_call_brief_sent: true, updated_at: new Date().toISOString() })
-      .eq("id", calEventId);
-    steps.markedAsSent = true;
+    // ── Step 7: Mark as sent ────────────────────────────────────────────
+    await db.from("calendar_events").update({ pre_call_brief_sent: true, updated_at: new Date().toISOString() }).eq("id", calEventId);
 
-    // ── Step 7: Dispatch notification ───────────────────────────────────
+    // ── Step 8: Dispatch notification ───────────────────────────────────
     try {
       await dispatchNotification(db, {
         workspaceId: WORKSPACE_ID,
         eventType: "pre_call_brief",
         pipelineId: pipelineId ?? undefined,
-        title: `Pre-call brief: ${calEvent.title ?? "Meeting"} with ${pipeline?.contact_name ?? "Unknown"}`,
+        title: `Pre-call brief: ${calEvent.title ?? "Meeting"} with ${leadName}`,
         body: brief,
-        metadata: { calendarEventId: calEventId, meetingType },
+        metadata: { calendarEventId: calEventId, meetingType, contactName: leadName, companyName },
       });
       steps.notification = { status: "dispatched" };
     } catch (err: unknown) {
-      const e = err as { message?: string };
-      steps.notification = { status: "error", message: e.message };
-      return NextResponse.json({ steps, error: `Notification dispatch failed: ${e.message}` }, { status: 500 });
+      steps.notification = { status: "error", message: (err as { message?: string }).message };
     }
 
     return NextResponse.json({
       status: "ok",
-      brief: brief.slice(0, 500) + (brief.length > 500 ? "..." : ""),
+      lead: { name: leadName, email: leadEmail, company: companyName },
+      brief: brief.slice(0, 800) + (brief.length > 800 ? "..." : ""),
       briefLength: brief.length,
       steps,
     });
