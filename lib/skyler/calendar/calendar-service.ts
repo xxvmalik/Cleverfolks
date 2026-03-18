@@ -269,6 +269,9 @@ export async function createMeetingEvent(
 
     const meetingUrl = googleCal.extractMeetingUrl(event);
 
+    // Resolve lead from attendee emails if not explicitly provided
+    const leadId = eventData.leadId ?? await resolveLeadFromAttendees(workspaceId, eventData.attendeeEmails);
+
     // Store in calendar_events
     const { data: calEvent } = await db
       .from("calendar_events")
@@ -289,7 +292,7 @@ export async function createMeetingEvent(
           response_status: "needsAction",
         })),
         status: "confirmed",
-        lead_id: eventData.leadId,
+        lead_id: leadId,
       })
       .select("id")
       .single();
@@ -316,6 +319,9 @@ export async function createMeetingEvent(
 
     const meetingUrl = msGraph.extractTeamsUrl(event);
 
+    // Resolve lead from attendee emails if not explicitly provided
+    const leadId = eventData.leadId ?? await resolveLeadFromAttendees(workspaceId, eventData.attendeeEmails);
+
     const { data: calEvent } = await db
       .from("calendar_events")
       .insert({
@@ -335,7 +341,7 @@ export async function createMeetingEvent(
           response_status: "none",
         })),
         status: "confirmed",
-        lead_id: eventData.leadId,
+        lead_id: leadId,
       })
       .select("id")
       .single();
@@ -493,6 +499,59 @@ export async function scheduleRecallBot(
     console.error("[calendar-service] Failed to schedule Recall bot:", err);
     return null;
   }
+}
+
+// ── Lead Matching ─────────────────────────────────────────────────────────────
+
+/**
+ * Match attendee emails against pipeline records to find the lead_id.
+ * Checks all attendee emails against skyler_sales_pipeline.contact_email.
+ * Returns the first match's pipeline ID, or null.
+ */
+export async function resolveLeadFromAttendees(
+  workspaceId: string,
+  attendeeEmails: string[]
+): Promise<string | null> {
+  if (!attendeeEmails.length) return null;
+
+  const db = createAdminSupabaseClient();
+
+  // Get the workspace owner's email so we can exclude it from matching
+  const { data: members } = await db
+    .from("workspace_members")
+    .select("user_id")
+    .eq("workspace_id", workspaceId)
+    .eq("role", "owner")
+    .limit(1);
+
+  let ownerEmail: string | null = null;
+  if (members?.[0]) {
+    const { data: profile } = await db
+      .from("profiles")
+      .select("email")
+      .eq("id", members[0].user_id)
+      .single();
+    ownerEmail = profile?.email?.toLowerCase() ?? null;
+  }
+
+  // Filter out the owner's email — we only want external attendees
+  const externalEmails = attendeeEmails.filter(
+    (e) => e.toLowerCase() !== ownerEmail
+  );
+
+  for (const email of externalEmails) {
+    const { data: match } = await db
+      .from("skyler_sales_pipeline")
+      .select("id")
+      .ilike("contact_email", email)
+      .is("resolution", null)
+      .limit(1)
+      .maybeSingle();
+
+    if (match) return match.id;
+  }
+
+  return null;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

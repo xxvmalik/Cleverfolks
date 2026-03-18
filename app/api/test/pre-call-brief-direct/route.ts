@@ -11,6 +11,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { Nango } from "@nangohq/node";
 import { routedLLMCall } from "@/lib/skyler/routing/model-router";
 import { dispatchNotification } from "@/lib/skyler/notifications";
+import { resolveLeadFromAttendees } from "@/lib/skyler/calendar/calendar-service";
 
 const WORKSPACE_ID = "ab25098b-45fd-40ba-ba6f-d67032dcdbbc";
 const LEAD_EMAIL = "prominessltd@gmail.com";
@@ -95,31 +96,44 @@ export async function GET() {
       return NextResponse.json({ steps, error: "No calendar event available" }, { status: 404 });
     }
 
-    // ── Step 2: Find pipeline record ────────────────────────────────────
-    const leadId = calEvent.lead_id as string | null;
+    // ── Step 2: Find pipeline record (lead_id > attendee email match) ──
+    let resolvedLeadId = calEvent.lead_id as string | null;
     let pipeline: Record<string, unknown> | null = null;
 
-    if (leadId) {
+    if (resolvedLeadId) {
       const { data } = await db
         .from("skyler_sales_pipeline")
         .select("*")
-        .eq("id", leadId)
+        .eq("id", resolvedLeadId)
         .single();
       pipeline = data;
     }
 
     if (!pipeline) {
-      const { data } = await db
-        .from("skyler_sales_pipeline")
-        .select("*")
-        .ilike("contact_email", LEAD_EMAIL)
-        .is("resolution", null)
-        .maybeSingle();
-      pipeline = data;
+      // Match attendee emails against pipeline records
+      const attendees = (calEvent.attendees as Array<{ email: string }>) ?? [];
+      const emails = attendees.map((a) => a.email).filter(Boolean);
+      resolvedLeadId = await resolveLeadFromAttendees(WORKSPACE_ID, emails);
+
+      if (resolvedLeadId) {
+        const { data } = await db
+          .from("skyler_sales_pipeline")
+          .select("*")
+          .eq("id", resolvedLeadId)
+          .single();
+        pipeline = data;
+
+        // Backfill lead_id on the calendar event
+        await db
+          .from("calendar_events")
+          .update({ lead_id: resolvedLeadId, updated_at: new Date().toISOString() })
+          .eq("id", calEventId);
+        steps.leadIdBackfilled = resolvedLeadId;
+      }
     }
 
     steps.pipeline = pipeline
-      ? { id: pipeline.id, name: pipeline.contact_name, company: pipeline.company_name }
+      ? { id: pipeline.id, name: pipeline.contact_name, company: pipeline.company_name, resolvedVia: calEvent.lead_id ? "lead_id" : "attendee_email_match" }
       : "Not found";
 
     // ── Step 3: Load agent memories ─────────────────────────────────────

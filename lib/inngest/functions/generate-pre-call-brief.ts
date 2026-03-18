@@ -9,6 +9,7 @@ import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { routedLLMCall } from "@/lib/skyler/routing/model-router";
 import { dispatchNotification } from "@/lib/skyler/notifications";
+import { resolveLeadFromAttendees } from "@/lib/skyler/calendar/calendar-service";
 import {
   DEFAULT_WORKFLOW_SETTINGS,
   type SkylerWorkflowSettings,
@@ -18,23 +19,44 @@ export const generatePreCallBrief = inngest.createFunction(
   { id: "skyler-generate-pre-call-brief", retries: 2 },
   { event: "skyler/meeting.pre-call-brief" },
   async ({ event, step }) => {
-    const { workspaceId, calendarEventId, pipelineId } = event.data as {
+    const { workspaceId, calendarEventId, pipelineId: explicitPipelineId } = event.data as {
       workspaceId: string;
       calendarEventId: string;
       pipelineId?: string;
     };
 
-    // Step 1: Load all context in parallel
+    // Step 1: Load all context — resolve lead from attendees if pipelineId not provided
     const context = await step.run("load-context", async () => {
       const db = createAdminSupabaseClient();
 
-      const [calEventResult, pipelineResult, memoriesResult, settingsResult] =
-        await Promise.all([
-          db
+      // Always load the calendar event first
+      const calEventResult = await db
+        .from("calendar_events")
+        .select("*")
+        .eq("id", calendarEventId)
+        .single();
+
+      const calEvent = calEventResult.data;
+
+      // Resolve pipelineId: explicit > calendar_events.lead_id > attendee email match
+      let pipelineId = explicitPipelineId ?? (calEvent?.lead_id as string | null) ?? null;
+
+      if (!pipelineId && calEvent) {
+        const attendees = (calEvent.attendees as Array<{ email: string }>) ?? [];
+        const emails = attendees.map((a) => a.email).filter(Boolean);
+        pipelineId = await resolveLeadFromAttendees(workspaceId, emails);
+
+        // Backfill lead_id on the calendar event for future lookups
+        if (pipelineId) {
+          await db
             .from("calendar_events")
-            .select("*")
-            .eq("id", calendarEventId)
-            .single(),
+            .update({ lead_id: pipelineId, updated_at: new Date().toISOString() })
+            .eq("id", calendarEventId);
+        }
+      }
+
+      const [pipelineResult, memoriesResult, settingsResult] =
+        await Promise.all([
           pipelineId
             ? db
                 .from("skyler_sales_pipeline")
@@ -59,12 +81,11 @@ export const generatePreCallBrief = inngest.createFunction(
             .single(),
         ]);
 
-      const calEvent = calEventResult.data;
       const pipeline = pipelineResult.data;
       const memories = memoriesResult.data ?? [];
       const wsSettings = (settingsResult.data?.settings ?? {}) as Record<string, unknown>;
 
-      return { calEvent, pipeline, memories, wsSettings, companyName: settingsResult.data?.name };
+      return { calEvent, pipeline, pipelineId, memories, wsSettings, companyName: settingsResult.data?.name };
     });
 
     if (!context.calEvent) {
@@ -185,7 +206,7 @@ Keep it concise. Each section should be 2-4 bullet points max.`;
       await dispatchNotification(db, {
         workspaceId,
         eventType: "pre_call_brief",
-        pipelineId: pipelineId ?? undefined,
+        pipelineId: context.pipelineId ?? undefined,
         title: `Pre-call brief: ${context.calEvent.title ?? "Meeting"} with ${leadName}`,
         body: brief,
         metadata: { calendarEventId, meetingType },
@@ -196,7 +217,7 @@ Keep it concise. Each section should be 2-4 bullet points max.`;
         name: "skyler/crm.log-activity",
         data: {
           workspace_id: workspaceId,
-          lead_id: pipelineId,
+          lead_id: context.pipelineId,
           activity_type: "meeting_booked",
           action: "create_note",
           payload: {
@@ -207,6 +228,6 @@ Keep it concise. Each section should be 2-4 bullet points max.`;
       });
     });
 
-    return { status: "sent", meetingType, calendarEventId, pipelineId };
+    return { status: "sent", meetingType, calendarEventId, pipelineId: context.pipelineId };
   }
 );

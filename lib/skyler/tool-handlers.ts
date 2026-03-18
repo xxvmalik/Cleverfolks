@@ -18,6 +18,7 @@ import { getSalesVoice } from "@/lib/skyler/voice-learner";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { resolveLeadFromAttendees } from "@/lib/skyler/calendar/calendar-service";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
 
@@ -1591,6 +1592,9 @@ async function createOutlookEventViaIntegrations(
   const onlineMeeting = event.onlineMeeting as Record<string, unknown> | null;
   const meetingUrl = (onlineMeeting?.joinUrl as string) ?? null;
 
+  // Resolve lead from attendee emails if not explicitly provided
+  const leadId = eventData.pipelineId ?? await resolveLeadFromAttendees(workspaceId, eventData.attendeeEmails);
+
   // Store in calendar_events for tracking
   await adminSupabase.from("calendar_events").insert({
     workspace_id: workspaceId,
@@ -1605,7 +1609,7 @@ async function createOutlookEventViaIntegrations(
     meeting_provider: "teams",
     attendees: eventData.attendeeEmails.map((e) => ({ email: e, response_status: "none" })),
     status: "confirmed",
-    lead_id: eventData.pipelineId,
+    lead_id: leadId,
   });
 
   return { meetingUrl, eventId: event.id as string };
