@@ -23,7 +23,7 @@ export async function GET() {
 
     // ── Step 1: Find existing calendar event or create one ──────────────
     let calEvent: Record<string, unknown> | null = null;
-    let calEventId: string;
+    let calEventId = "";
 
     // Check for a recent calendar event for this lead
     const { data: existingEvent } = await db
@@ -91,8 +91,12 @@ export async function GET() {
       steps.calendarEvent = { source: "created_new", id: calEventId };
     }
 
+    if (!calEvent) {
+      return NextResponse.json({ steps, error: "No calendar event available" }, { status: 404 });
+    }
+
     // ── Step 2: Find pipeline record ────────────────────────────────────
-    const leadId = calEvent!.lead_id as string | null;
+    const leadId = calEvent.lead_id as string | null;
     let pipeline: Record<string, unknown> | null = null;
 
     if (leadId) {
