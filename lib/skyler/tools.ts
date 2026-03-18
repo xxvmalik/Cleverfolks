@@ -316,55 +316,91 @@ const SKYLER_ACTION_TOOLS: Anthropic.Tool[] = [
   },
 ];
 
-// ── Meeting booking tool ─────────────────────────────────────────────────────
+// ── Calendar / meeting tools ─────────────────────────────────────────────────
 
-const SKYLER_MEETING_TOOLS: Anthropic.Tool[] = [
+const SKYLER_CALENDAR_TOOLS: Anthropic.Tool[] = [
   {
-    name: "book_meeting",
+    name: "check_calendar_availability",
     description:
-      "Book a meeting with a lead. Checks real calendar availability (Outlook/Google), scores time slots, and either suggests the best times or sends a Calendly link — depending on workspace settings. Use when the user asks to 'book a meeting', 'schedule a call', 'set up a demo', or 'find a time' with a lead. IMPORTANT: This triggers the full booking flow — do NOT draft a manual email with times instead.",
+      "Check the user's real calendar (Outlook or Google) and return free time slots with quality scores. Higher scores = better meeting times (mid-week, mid-morning). Use this BEFORE suggesting or booking meeting times.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        duration_minutes: {
+          type: "number",
+          description: "Meeting duration in minutes. Default 30.",
+        },
+        days_to_check: {
+          type: "number",
+          description: "Number of business days to check ahead. Default 5.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "create_calendar_event",
+    description:
+      "Create a calendar event with a video meeting link (Teams or Google Meet, depending on which calendar is connected). The event is created on the user's calendar and the lead receives an invite.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Meeting title (e.g. 'Demo call — Skyler × Acme Corp')",
+        },
+        start_time: {
+          type: "string",
+          description: "Start time in ISO 8601 format (e.g. '2026-03-19T10:00:00')",
+        },
+        end_time: {
+          type: "string",
+          description: "End time in ISO 8601 format (e.g. '2026-03-19T10:30:00')",
+        },
+        lead_email: {
+          type: "string",
+          description: "Lead's email address (will receive the invite)",
+        },
+        lead_name: {
+          type: "string",
+          description: "Lead's name",
+        },
+        pipeline_id: {
+          type: "string",
+          description: "Pipeline record ID (for tracking)",
+        },
+        additional_attendees: {
+          type: "array",
+          items: { type: "string" },
+          description: "Additional email addresses to invite",
+        },
+        description: {
+          type: "string",
+          description: "Meeting description / agenda",
+        },
+      },
+      required: ["title", "start_time", "end_time", "lead_email"],
+    },
+  },
+  {
+    name: "get_booking_link",
+    description:
+      "Get a Calendly booking link for a lead. Returns a one-time scheduling URL if Calendly is connected, or null if not. Use this when the user prefers Calendly-style booking.",
     input_schema: {
       type: "object" as const,
       properties: {
         pipeline_id: {
           type: "string",
-          description: "Pipeline record ID of the lead to book with",
-        },
-        contact_email: {
-          type: "string",
-          description: "Lead's email address",
-        },
-        contact_name: {
-          type: "string",
-          description: "Lead's name",
-        },
-        company_name: {
-          type: "string",
-          description: "Lead's company name",
-        },
-        duration_minutes: {
-          type: "number",
-          description: "Meeting duration in minutes. Default 30.",
-        },
-        booking_method: {
-          type: "string",
-          enum: ["calendly_link", "suggest_times", "direct_invite", "ask_availability"],
-          description:
-            "Override booking method. If omitted, auto-detected from workspace settings (Calendly connected → calendly_link, calendar connected → suggest_times, neither → ask_availability).",
-        },
-        additional_attendees: {
-          type: "array",
-          items: { type: "string" },
-          description: "Extra email addresses to invite (optional)",
+          description: "Pipeline record ID (used to match Calendly event type to pipeline stage)",
         },
       },
-      required: ["pipeline_id", "contact_email", "contact_name"],
+      required: [],
     },
   },
 ];
 
-export const SKYLER_MEETING_TOOL_NAMES = new Set(
-  SKYLER_MEETING_TOOLS.map((t) => t.name)
+export const SKYLER_CALENDAR_TOOL_NAMES = new Set(
+  SKYLER_CALENDAR_TOOLS.map((t) => t.name)
 );
 
 // ── Export combined set ──────────────────────────────────────────────────────
@@ -391,5 +427,5 @@ export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_LEAD_TOOLS,
   ...SKYLER_SALES_CLOSER_TOOLS,
   ...SKYLER_ACTION_TOOLS,
-  ...SKYLER_MEETING_TOOLS,
+  ...SKYLER_CALENDAR_TOOLS,
 ];

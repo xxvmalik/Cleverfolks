@@ -98,10 +98,10 @@ const TASK_SCHEMAS: Record<string, TaskSchema> = {
   book_meeting: {
     required: [
       { field: "lead_email", source: "pipeline_record", path: "contact_email" },
-      { field: "available_times", source: "calendar_connection", path: "calendar_connection" },
-      { field: "meeting_duration", source: "workflow_settings", path: "defaultMeetingDuration" },
     ],
     optional: [
+      { field: "preferred_time", source: "agent_memories", path: "preferred_meeting_time" },
+      { field: "meeting_duration", source: "workflow_settings", path: "defaultMeetingDuration" },
       { field: "calendly_link", source: "calendar_connection", path: "calendly_event_types" },
       { field: "prospect_timezone", source: "pipeline_record", path: "timezone" },
     ],

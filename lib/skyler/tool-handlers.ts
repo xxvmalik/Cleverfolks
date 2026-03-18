@@ -8,7 +8,7 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES, SKYLER_MEETING_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES, SKYLER_CALENDAR_TOOL_NAMES } from "@/lib/skyler/tools";
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
@@ -1022,65 +1022,467 @@ ${dims}${referral}
 ${r.scoring_reasoning}`;
 }
 
-// ── Meeting booking handler ──────────────────────────────────────────────────
+// ── Calendar tool handlers ───────────────────────────────────────────────────
 
-async function handleBookMeetingTool(
+async function handleCalendarTool(
+  toolName: string,
   input: Record<string, unknown>,
   workspaceId: string,
   adminSupabase: AdminDb
 ): Promise<ToolHandlerResult> {
-  const pipelineId = input.pipeline_id as string;
-  const contactEmail = input.contact_email as string;
-  const contactName = input.contact_name as string;
-  const companyName = (input.company_name as string) ?? "";
-  const durationMinutes = (input.duration_minutes as number) ?? 30;
-  const bookingMethod = input.booking_method as string | undefined;
-  const additionalAttendees = (input.additional_attendees as string[]) ?? [];
+  switch (toolName) {
+    case "check_calendar_availability":
+      return handleCheckAvailability(input, workspaceId, adminSupabase);
+    case "create_calendar_event":
+      return handleCreateCalendarEvent(input, workspaceId, adminSupabase);
+    case "get_booking_link":
+      return handleGetBookingLink(input, workspaceId, adminSupabase);
+    default:
+      return { results: [], summary: `Unknown calendar tool: ${toolName}` };
+  }
+}
 
-  if (!pipelineId || !contactEmail || !contactName) {
+async function handleCheckAvailability(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const durationMinutes = (input.duration_minutes as number) ?? 30;
+  const daysToCheck = (input.days_to_check as number) ?? 5;
+
+  try {
+    // Try calendar_connections first, fall back to integrations table
+    const { getAvailableSlots, scoreTimeSlots } = await import("@/lib/skyler/calendar/calendar-service");
+
+    const now = new Date();
+    const endDate = new Date(now.getTime() + daysToCheck * 24 * 60 * 60 * 1000);
+
+    let slots = await getAvailableSlots(
+      workspaceId,
+      now.toISOString(),
+      endDate.toISOString(),
+      durationMinutes
+    );
+
+    // Fallback: if calendar_connections is empty, try Outlook via integrations table
+    if (!slots) {
+      slots = await getOutlookSlotsViaIntegrations(
+        workspaceId,
+        adminSupabase,
+        now,
+        endDate,
+        durationMinutes
+      );
+    }
+
+    if (!slots || slots.length === 0) {
+      return {
+        results: [],
+        summary: "No calendar is connected, or no free slots found in the requested range. You can ask the lead for their availability instead.",
+      };
+    }
+
+    const scored = scoreTimeSlots(slots);
+    const allScored = [...slots].sort((a, b) => b.score - a.score).slice(0, 10);
+
+    const formatSlot = (s: { start: string; end: string; score: number }) => {
+      const d = new Date(s.start);
+      const day = d.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+      const startTime = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      const endTime = new Date(s.end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      return `${day}, ${startTime}–${endTime} (score: ${s.score})`;
+    };
+
+    const topSection = scored.map((s, i) => `${i + 1}. ${formatSlot(s)}`).join("\n");
+    const otherSection = allScored
+      .filter((s) => !scored.some((t) => t.start === s.start))
+      .slice(0, 5)
+      .map((s) => `  - ${formatSlot(s)}`)
+      .join("\n");
+
     return {
       results: [],
-      summary: "Missing required fields: pipeline_id, contact_email, and contact_name are all required for booking.",
+      summary: `Calendar availability (${durationMinutes}-min slots, next ${daysToCheck} business days):\n\nTop recommended slots:\n${topSection}${otherSection ? `\n\nOther available:\n${otherSection}` : ""}\n\nTotal free slots found: ${slots.length}`,
+    };
+  } catch (err) {
+    console.error("[check_calendar_availability] Error:", err instanceof Error ? err.message : err);
+    return {
+      results: [],
+      summary: `Failed to check calendar: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+async function handleCreateCalendarEvent(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const title = input.title as string;
+  const startTime = input.start_time as string;
+  const endTime = input.end_time as string;
+  const leadEmail = input.lead_email as string;
+  const leadName = (input.lead_name as string) ?? leadEmail;
+  const pipelineId = input.pipeline_id as string | undefined;
+  const additionalAttendees = (input.additional_attendees as string[]) ?? [];
+  const description = (input.description as string) ?? "";
+
+  if (!title || !startTime || !endTime || !leadEmail) {
+    return {
+      results: [],
+      summary: "Missing required fields: title, start_time, end_time, and lead_email are all required.",
     };
   }
 
   try {
-    const { inngest } = await import("@/lib/inngest/client");
+    const { createMeetingEvent, scheduleRecallBot } = await import("@/lib/skyler/calendar/calendar-service");
 
-    await inngest.send({
-      name: "skyler/meeting.book-requested",
-      data: {
+    const allAttendees = [leadEmail, ...additionalAttendees];
+
+    const event = await createMeetingEvent(workspaceId, {
+      summary: title,
+      startDateTime: startTime,
+      endDateTime: endTime,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      attendeeEmails: allAttendees,
+      description,
+      leadId: pipelineId,
+    });
+
+    if (!event) {
+      // Fallback: try creating via integrations table (Outlook)
+      const fallbackEvent = await createOutlookEventViaIntegrations(
         workspaceId,
-        pipelineId,
-        leadEmail: contactEmail,
-        leadName: contactName,
-        companyName,
-        bookingMethodOverride: bookingMethod,
-        suggestedDuration: durationMinutes,
-        additionalAttendees: additionalAttendees.length > 0 ? additionalAttendees : undefined,
+        adminSupabase,
+        { title, startTime, endTime, attendeeEmails: allAttendees, description, pipelineId }
+      );
+      if (!fallbackEvent) {
+        return {
+          results: [],
+          summary: "No calendar is connected. Cannot create a calendar event. You can ask the lead for their availability instead.",
+        };
+      }
+      return {
+        results: [],
+        summary: `Meeting created!\n- Title: ${title}\n- Time: ${formatEventTime(startTime, endTime)}\n- Attendees: ${allAttendees.join(", ")}\n- Meeting link: ${fallbackEvent.meetingUrl ?? "No video link (Teams may not be enabled)"}\n- Provider: Outlook`,
+      };
+    }
+
+    // Schedule Recall bot if meeting intelligence is enabled
+    if (event.meetingUrl) {
+      scheduleRecallBot(workspaceId, event.id, event.meetingUrl).catch(() => {});
+    }
+
+    // Update pipeline stage if we have a pipeline ID
+    if (pipelineId) {
+      await adminSupabase
+        .from("skyler_sales_pipeline")
+        .update({
+          stage: "meeting_booked",
+          meeting_event_id: event.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", pipelineId);
+    }
+
+    return {
+      results: [],
+      summary: `Meeting created!\n- Title: ${title}\n- Time: ${formatEventTime(startTime, endTime)}\n- Attendees: ${allAttendees.join(", ")}\n- Meeting link: ${event.meetingUrl ?? "No video link"}\n- Provider: ${event.provider === "microsoft_outlook" ? "Outlook + Teams" : "Google Calendar + Meet"}`,
+    };
+  } catch (err) {
+    console.error("[create_calendar_event] Error:", err instanceof Error ? err.message : err);
+    return {
+      results: [],
+      summary: `Failed to create calendar event: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+async function handleGetBookingLink(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  _adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  try {
+    const { getCalendlyConnection } = await import("@/lib/skyler/calendar/calendar-service");
+    const calendlyConn = await getCalendlyConnection(workspaceId);
+
+    if (!calendlyConn) {
+      // Also check integrations table
+      const { data: integration } = await _adminSupabase
+        .from("integrations")
+        .select("nango_connection_id")
+        .eq("workspace_id", workspaceId)
+        .eq("provider", "calendly")
+        .eq("status", "connected")
+        .single();
+
+      if (!integration) {
+        return {
+          results: [],
+          summary: "No Calendly connection found. You can suggest specific times from the calendar instead, or ask the lead for their availability.",
+        };
+      }
+
+      // Has Calendly in integrations — try to get event types
+      try {
+        const { listEventTypes, getCurrentUser, createSchedulingLink } = await import("@/lib/skyler/calendar/calendly-client");
+        const user = await getCurrentUser({ workspaceId, connectionId: integration.nango_connection_id });
+        const eventTypes = await listEventTypes({ workspaceId, connectionId: integration.nango_connection_id }, user.uri);
+
+        if (eventTypes.length === 0) {
+          return { results: [], summary: "Calendly is connected but no active event types found. Create an event type in Calendly first." };
+        }
+
+        // Pick the first active event type (or a 30-min one if available)
+        const preferred = eventTypes.find((e) => e.duration === 30) ?? eventTypes[0];
+        const link = await createSchedulingLink({ workspaceId, connectionId: integration.nango_connection_id }, preferred.uri);
+
+        return {
+          results: [],
+          summary: `Calendly booking link generated:\n- Event type: ${preferred.name} (${preferred.duration} min)\n- Link: ${link.booking_url}\n\nThis is a one-time link.`,
+        };
+      } catch (err) {
+        return {
+          results: [],
+          summary: `Calendly is connected but failed to generate link: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    // Use calendar_connections-based Calendly
+    const eventTypes = (calendlyConn.calendly_event_types ?? []) as Array<{ uri: string; name: string; duration: number; scheduling_url: string }>;
+    if (eventTypes.length === 0) {
+      return { results: [], summary: "Calendly is connected but no event types are configured." };
+    }
+
+    const preferred = eventTypes.find((e) => e.duration === 30) ?? eventTypes[0];
+    return {
+      results: [],
+      summary: `Calendly booking link:\n- Event type: ${preferred.name} (${preferred.duration} min)\n- Link: ${preferred.scheduling_url}`,
+    };
+  } catch (err) {
+    console.error("[get_booking_link] Error:", err instanceof Error ? err.message : err);
+    return {
+      results: [],
+      summary: `Failed to get booking link: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+// ── Calendar helper: Outlook via integrations table fallback ─────────────────
+
+async function getOutlookSlotsViaIntegrations(
+  workspaceId: string,
+  adminSupabase: AdminDb,
+  start: Date,
+  end: Date,
+  durationMinutes: number
+): Promise<Array<{ start: string; end: string; score: number }> | null> {
+  const { Nango } = await import("@nangohq/node");
+
+  const { data: integration } = await adminSupabase
+    .from("integrations")
+    .select("nango_connection_id")
+    .eq("workspace_id", workspaceId)
+    .eq("provider", "outlook")
+    .eq("status", "connected")
+    .single();
+
+  if (!integration?.nango_connection_id) return null;
+
+  const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+  const connectionId = integration.nango_connection_id;
+
+  // Get user email
+  let userEmail = "";
+  try {
+    const meResp = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com/v1.0",
+      endpoint: "/me",
+      providerConfigKey: "outlook",
+      connectionId,
+    });
+    const me = meResp.data as Record<string, unknown>;
+    userEmail = (me.mail as string) ?? (me.userPrincipalName as string) ?? "";
+  } catch {
+    return null;
+  }
+
+  if (!userEmail) return null;
+
+  // Get schedule + working hours
+  try {
+    const resp = await nango.proxy({
+      method: "POST",
+      baseUrlOverride: "https://graph.microsoft.com/v1.0",
+      endpoint: "/me/calendar/getSchedule",
+      providerConfigKey: "outlook",
+      connectionId,
+      data: {
+        schedules: [userEmail],
+        startTime: { dateTime: start.toISOString(), timeZone: "UTC" },
+        endTime: { dateTime: end.toISOString(), timeZone: "UTC" },
+        availabilityViewInterval: durationMinutes,
       },
     });
 
-    // Also update pipeline stage to reflect meeting is being booked
-    await adminSupabase
-      .from("skyler_sales_pipeline")
-      .update({
-        stage: "demo_booked",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", pipelineId);
+    const availability = resp.data as { value?: Array<{ scheduleItems?: Array<{ start: { dateTime: string }; end: { dateTime: string } }>; workingHours?: { startTime?: string; endTime?: string; daysOfWeek?: string[] } }> };
+    const scheduleData = availability.value?.[0] ?? {};
+    const busyBlocks = (scheduleData.scheduleItems ?? []).map((b) => ({
+      start: b.start.dateTime,
+      end: b.end.dateTime,
+    }));
 
-    return {
-      results: [],
-      summary: `Meeting booking initiated for ${contactName} (${contactEmail}). Checking calendar availability, scoring optimal time slots, and will ${bookingMethod === "calendly_link" ? "send a Calendly link" : "suggest the best available times"}. Duration: ${durationMinutes} minutes.`,
-    };
-  } catch (err) {
-    console.error("[book_meeting] Failed to trigger booking flow:", err instanceof Error ? err.message : err);
-    return {
-      results: [],
-      summary: `Failed to trigger meeting booking: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    const wh = scheduleData.workingHours;
+    const workStart = wh?.startTime ?? "09:00";
+    const workEnd = wh?.endTime ?? "17:00";
+    const dayNames = wh?.daysOfWeek ?? ["monday", "tuesday", "wednesday", "thursday", "friday"];
+    const dayMap: Record<string, number> = { monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6, sunday: 7 };
+    const workDays = dayNames.map((d) => dayMap[d.toLowerCase()] ?? 0).filter(Boolean);
+
+    // Invert busy blocks to free slots
+    return invertBusyToFreeSlots(busyBlocks, start, end, durationMinutes, workStart, workEnd, workDays);
+  } catch {
+    return null;
   }
+}
+
+async function createOutlookEventViaIntegrations(
+  workspaceId: string,
+  adminSupabase: AdminDb,
+  eventData: { title: string; startTime: string; endTime: string; attendeeEmails: string[]; description?: string; pipelineId?: string }
+): Promise<{ meetingUrl: string | null; eventId: string } | null> {
+  const { Nango } = await import("@nangohq/node");
+
+  const { data: integration } = await adminSupabase
+    .from("integrations")
+    .select("nango_connection_id")
+    .eq("workspace_id", workspaceId)
+    .eq("provider", "outlook")
+    .eq("status", "connected")
+    .single();
+
+  if (!integration?.nango_connection_id) return null;
+
+  const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+
+  // Get user timezone
+  let timeZone = "UTC";
+  try {
+    const tzResp = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com/v1.0",
+      endpoint: "/me/mailboxSettings",
+      providerConfigKey: "outlook",
+      connectionId: integration.nango_connection_id,
+    });
+    timeZone = (tzResp.data as Record<string, unknown>).timeZone as string ?? "UTC";
+  } catch { /* fallback UTC */ }
+
+  const resp = await nango.proxy({
+    method: "POST",
+    baseUrlOverride: "https://graph.microsoft.com/v1.0",
+    endpoint: "/me/events",
+    providerConfigKey: "outlook",
+    connectionId: integration.nango_connection_id,
+    data: {
+      subject: eventData.title,
+      body: eventData.description ? { contentType: "HTML", content: eventData.description } : undefined,
+      start: { dateTime: eventData.startTime, timeZone },
+      end: { dateTime: eventData.endTime, timeZone },
+      attendees: eventData.attendeeEmails.map((email) => ({
+        emailAddress: { address: email, name: email },
+        type: "required",
+      })),
+      isOnlineMeeting: true,
+      onlineMeetingProvider: "teamsForBusiness",
+    },
+  });
+
+  const event = resp.data as Record<string, unknown>;
+  const onlineMeeting = event.onlineMeeting as Record<string, unknown> | null;
+  const meetingUrl = (onlineMeeting?.joinUrl as string) ?? null;
+
+  // Store in calendar_events for tracking
+  await adminSupabase.from("calendar_events").insert({
+    workspace_id: workspaceId,
+    provider: "microsoft_outlook",
+    provider_event_id: event.id as string,
+    title: eventData.title,
+    description: eventData.description,
+    start_time: eventData.startTime,
+    end_time: eventData.endTime,
+    timezone: timeZone,
+    meeting_url: meetingUrl,
+    meeting_provider: "teams",
+    attendees: eventData.attendeeEmails.map((e) => ({ email: e, response_status: "none" })),
+    status: "confirmed",
+    lead_id: eventData.pipelineId,
+  });
+
+  return { meetingUrl, eventId: event.id as string };
+}
+
+function invertBusyToFreeSlots(
+  busyBlocks: Array<{ start: string; end: string }>,
+  rangeStart: Date,
+  rangeEnd: Date,
+  durationMinutes: number,
+  workStart: string,
+  workEnd: string,
+  workDays: number[]
+): Array<{ start: string; end: string; score: number }> {
+  const slots: Array<{ start: string; end: string; score: number }> = [];
+  const durationMs = durationMinutes * 60 * 1000;
+  const sorted = [...busyBlocks].sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+  const current = new Date(rangeStart);
+  current.setUTCHours(0, 0, 0, 0);
+
+  while (current < rangeEnd) {
+    const dayOfWeek = current.getUTCDay();
+    const isoDay = dayOfWeek === 0 ? 7 : dayOfWeek;
+    if (workDays.includes(isoDay)) {
+      const [sH, sM] = workStart.split(":").map(Number);
+      const [eH, eM] = workEnd.split(":").map(Number);
+      const dayStart = new Date(current);
+      dayStart.setUTCHours(sH, sM, 0, 0);
+      const dayEnd = new Date(current);
+      dayEnd.setUTCHours(eH, eM, 0, 0);
+      if (dayEnd.getTime() > Date.now()) {
+        let cursor = Math.max(dayStart.getTime(), Date.now());
+        const dayBusy = sorted.filter((b) => {
+          const bs = new Date(b.start).getTime();
+          const be = new Date(b.end).getTime();
+          return be > dayStart.getTime() && bs < dayEnd.getTime();
+        });
+        for (const block of dayBusy) {
+          const blockStart = new Date(block.start).getTime();
+          while (cursor + durationMs <= blockStart && cursor + durationMs <= dayEnd.getTime()) {
+            slots.push({ start: new Date(cursor).toISOString(), end: new Date(cursor + durationMs).toISOString(), score: 0 });
+            cursor += durationMs;
+          }
+          cursor = Math.max(cursor, new Date(block.end).getTime());
+        }
+        while (cursor + durationMs <= dayEnd.getTime()) {
+          slots.push({ start: new Date(cursor).toISOString(), end: new Date(cursor + durationMs).toISOString(), score: 0 });
+          cursor += durationMs;
+        }
+      }
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+  return slots;
+}
+
+function formatEventTime(start: string, end: string): string {
+  const s = new Date(start);
+  const e = new Date(end);
+  const day = s.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+  const startTime = s.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const endTime = e.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return `${day}, ${startTime}–${endTime}`;
 }
 
 // ── Main dispatcher with autonomy enforcement ────────────────────────────────
@@ -1109,9 +1511,9 @@ export async function executeSkylerToolCall(
     return handleSalesCloserTool(toolName, input, workspaceId, adminSupabase);
   }
 
-  // ── Meeting booking tool: triggers Inngest book-meeting-flow ──────────
-  if (SKYLER_MEETING_TOOL_NAMES.has(toolName)) {
-    return handleBookMeetingTool(input, workspaceId, adminSupabase);
+  // ── Calendar tools: check availability, create events, get booking links ──
+  if (SKYLER_CALENDAR_TOOL_NAMES.has(toolName)) {
+    return handleCalendarTool(toolName, input, workspaceId, adminSupabase);
   }
 
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──
