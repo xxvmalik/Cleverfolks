@@ -403,6 +403,48 @@ export const SKYLER_CALENDAR_TOOL_NAMES = new Set(
   SKYLER_CALENDAR_TOOLS.map((t) => t.name)
 );
 
+// ── Data read tool ──────────────────────────────────────────────────────────
+
+const SKYLER_DATA_TOOLS: Anthropic.Tool[] = [
+  {
+    name: "get_skyler_data",
+    description:
+      "Query Skyler's internal data. Use this to look up calendar events, activity history, pending actions, open info requests, meeting health signals, lead memories, or past decisions. Replaces needing to remember previous tool results.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        data_type: {
+          type: "string",
+          enum: [
+            "calendar_events",
+            "activity_log",
+            "pending_actions",
+            "open_requests",
+            "meeting_signals",
+            "lead_memories",
+            "decisions",
+          ],
+          description:
+            "What to query: calendar_events (upcoming/recent meetings with links), activity_log (CRM actions logged), pending_actions (drafts awaiting approval), open_requests (info Skyler needs from user), meeting_signals (health warnings like reschedules/no-shows), lead_memories (stored facts about a lead), decisions (reasoning audit log).",
+        },
+        pipeline_id: {
+          type: "string",
+          description: "Filter by pipeline record ID. Optional — omit for workspace-wide results.",
+        },
+        limit: {
+          type: "number",
+          description: "Max results to return. Default 10.",
+        },
+      },
+      required: ["data_type"],
+    },
+  },
+];
+
+export const SKYLER_DATA_TOOL_NAMES = new Set(
+  SKYLER_DATA_TOOLS.map((t) => t.name)
+);
+
 // ── Export combined set ──────────────────────────────────────────────────────
 
 export const SKYLER_WRITE_TOOL_NAMES = new Set(
@@ -428,4 +470,5 @@ export const SKYLER_TOOLS: Anthropic.Tool[] = [
   ...SKYLER_SALES_CLOSER_TOOLS,
   ...SKYLER_ACTION_TOOLS,
   ...SKYLER_CALENDAR_TOOLS,
+  ...SKYLER_DATA_TOOLS,
 ];

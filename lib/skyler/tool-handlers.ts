@@ -8,7 +8,7 @@ import {
   executeToolCall as executeReadToolCall,
   type ToolHandlerResult,
 } from "@/lib/cleverbrain/tool-handlers";
-import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES, SKYLER_CALENDAR_TOOL_NAMES } from "@/lib/skyler/tools";
+import { SKYLER_WRITE_TOOL_NAMES, SKYLER_LEAD_TOOL_NAMES, SKYLER_SALES_CLOSER_TOOL_NAMES, SKYLER_ACTION_TOOL_NAMES, SKYLER_CALENDAR_TOOL_NAMES, SKYLER_DATA_TOOL_NAMES } from "@/lib/skyler/tools";
 import { scoreLead, type LeadScoreResult } from "@/lib/skyler/lead-scoring";
 import { pickupExistingConversation } from "@/lib/skyler/conversation-pickup";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
@@ -1022,6 +1022,192 @@ ${dims}${referral}
 ${r.scoring_reasoning}`;
 }
 
+// ── Data read handler ────────────────────────────────────────────────────────
+
+async function handleGetSkylerData(
+  input: Record<string, unknown>,
+  workspaceId: string,
+  adminSupabase: AdminDb
+): Promise<ToolHandlerResult> {
+  const dataType = input.data_type as string;
+  const pipelineId = input.pipeline_id as string | undefined;
+  const limit = Math.min((input.limit as number) ?? 10, 25);
+
+  try {
+    switch (dataType) {
+      case "calendar_events": {
+        let query = adminSupabase
+          .from("calendar_events")
+          .select("id, title, start_time, end_time, timezone, meeting_url, meeting_provider, attendees, status, lead_id, provider")
+          .eq("workspace_id", workspaceId)
+          .order("start_time", { ascending: true })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("lead_id", pipelineId);
+        else query = query.gte("start_time", new Date().toISOString()); // future events only when no filter
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying calendar events: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No calendar events found." };
+
+        const formatted = data.map((e) => {
+          const attendeeList = (e.attendees as Array<{ email: string }> ?? []).map((a) => a.email).join(", ");
+          return `Title: ${e.title}\nTime: ${formatEventTime(e.start_time, e.end_time)}\nAttendees: ${attendeeList}\nMeeting link: ${e.meeting_url ?? "(none)"}\nStatus: ${e.status}\nProvider: ${e.meeting_provider ?? e.provider}`;
+        });
+
+        return {
+          results: [],
+          summary: `SHARE WITH USER:\n${formatted.join("\n\n---\n\n")}\n\nTotal: ${data.length} event(s)`,
+        };
+      }
+
+      case "activity_log": {
+        let query = adminSupabase
+          .from("crm_activity_log")
+          .select("activity_type, payload, created_at, lead_id")
+          .eq("workspace_id", workspaceId)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("lead_id", pipelineId);
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying activity log: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No CRM activity logged yet." };
+
+        const formatted = data.map((a) => {
+          const payload = a.payload as Record<string, unknown> ?? {};
+          const details = payload.details ?? payload.action_type ?? "";
+          return `[${new Date(a.created_at).toLocaleString()}] ${a.activity_type}: ${details}`;
+        });
+
+        return { results: [], summary: `CRM activity log (${data.length} entries):\n${formatted.join("\n")}` };
+      }
+
+      case "pending_actions": {
+        let query = adminSupabase
+          .from("skyler_actions")
+          .select("id, tool_name, description, status, created_at, pipeline_id")
+          .eq("workspace_id", workspaceId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("pipeline_id", pipelineId);
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying pending actions: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No pending actions awaiting approval." };
+
+        const formatted = data.map((a) =>
+          `[${a.id.slice(0, 8)}] ${a.description} (created ${new Date(a.created_at).toLocaleDateString()})`
+        );
+
+        return { results: [], summary: `Pending actions (${data.length}):\n${formatted.join("\n")}` };
+      }
+
+      case "open_requests": {
+        let query = adminSupabase
+          .from("skyler_requests")
+          .select("id, request_description, status, created_at, pipeline_id")
+          .eq("workspace_id", workspaceId)
+          .eq("status", "pending")
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("pipeline_id", pipelineId);
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying open requests: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No open info requests." };
+
+        const formatted = data.map((r) =>
+          `- ${r.request_description} (since ${new Date(r.created_at).toLocaleDateString()})`
+        );
+
+        return { results: [], summary: `Open info requests (${data.length}):\n${formatted.join("\n")}` };
+      }
+
+      case "meeting_signals": {
+        let query = adminSupabase
+          .from("meeting_health_signals")
+          .select("signal_type, severity, description, created_at, calendar_event_id, pipeline_id, acknowledged")
+          .eq("workspace_id", workspaceId)
+          .in("severity", ["warning", "critical"])
+          .eq("acknowledged", false)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("pipeline_id", pipelineId);
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying meeting signals: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No active meeting health signals." };
+
+        const formatted = data.map((s) =>
+          `[${s.severity.toUpperCase()}] ${s.signal_type}: ${s.description} (${new Date(s.created_at).toLocaleDateString()})`
+        );
+
+        return { results: [], summary: `Meeting health signals (${data.length}):\n${formatted.join("\n")}` };
+      }
+
+      case "lead_memories": {
+        if (!pipelineId) {
+          return { results: [], summary: "pipeline_id is required for lead_memories. Which lead's memories do you want to check?" };
+        }
+
+        const { data, error } = await adminSupabase
+          .from("agent_memories")
+          .select("fact_key, fact_value, created_at, updated_at")
+          .eq("workspace_id", workspaceId)
+          .eq("scope_type", "lead")
+          .eq("scope_id", pipelineId)
+          .eq("is_current", true)
+          .order("updated_at", { ascending: false })
+          .limit(limit);
+
+        if (error) return { results: [], summary: `Error querying lead memories: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No stored facts for this lead." };
+
+        const formatted = data.map((m) =>
+          `- ${m.fact_key}: ${JSON.stringify(m.fact_value)} (updated ${new Date(m.updated_at).toLocaleDateString()})`
+        );
+
+        return { results: [], summary: `Stored facts for this lead (${data.length}):\n${formatted.join("\n")}` };
+      }
+
+      case "decisions": {
+        let query = adminSupabase
+          .from("skyler_decisions")
+          .select("event_type, decision, guardrail_outcome, guardrail_reason, execution_result, created_at, pipeline_id")
+          .eq("workspace_id", workspaceId)
+          .order("created_at", { ascending: false })
+          .limit(limit);
+
+        if (pipelineId) query = query.eq("pipeline_id", pipelineId);
+
+        const { data, error } = await query;
+        if (error) return { results: [], summary: `Error querying decisions: ${error.message}` };
+        if (!data || data.length === 0) return { results: [], summary: "No decisions logged yet." };
+
+        const formatted = data.map((d) => {
+          const dec = d.decision as Record<string, unknown>;
+          const result = d.execution_result as Record<string, unknown>;
+          return `[${new Date(d.created_at).toLocaleString()}] ${dec.action_type} (${d.guardrail_outcome}) — ${dec.reasoning}\n  Result: ${result.success ? "OK" : "FAILED"} ${result.details ?? result.error ?? ""}`;
+        });
+
+        return { results: [], summary: `Decision log (${data.length}):\n${formatted.join("\n\n")}` };
+      }
+
+      default:
+        return { results: [], summary: `Unknown data_type: "${dataType}". Valid types: calendar_events, activity_log, pending_actions, open_requests, meeting_signals, lead_memories, decisions` };
+    }
+  } catch (err) {
+    console.error("[get_skyler_data] Error:", err instanceof Error ? err.message : err);
+    return { results: [], summary: `Failed to query ${dataType}: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 // ── Calendar tool handlers ───────────────────────────────────────────────────
 
 async function handleCalendarTool(
@@ -1164,7 +1350,7 @@ async function handleCreateCalendarEvent(
       }
       return {
         results: [],
-        summary: `Meeting created!\n- Title: ${title}\n- Time: ${formatEventTime(startTime, endTime)}\n- Attendees: ${allAttendees.join(", ")}\n- Meeting link: ${fallbackEvent.meetingUrl ?? "No video link (Teams may not be enabled)"}\n- Provider: Outlook`,
+        summary: `Meeting created successfully.\n\nSHARE WITH USER:\nTitle: ${title}\nTime: ${formatEventTime(startTime, endTime)}\nAttendees: ${allAttendees.join(", ")}\nMeeting link: ${fallbackEvent.meetingUrl ?? "(no video link — Teams may not be enabled)"}\nProvider: Outlook`,
       };
     }
 
@@ -1187,7 +1373,7 @@ async function handleCreateCalendarEvent(
 
     return {
       results: [],
-      summary: `Meeting created!\n- Title: ${title}\n- Time: ${formatEventTime(startTime, endTime)}\n- Attendees: ${allAttendees.join(", ")}\n- Meeting link: ${event.meetingUrl ?? "No video link"}\n- Provider: ${event.provider === "microsoft_outlook" ? "Outlook + Teams" : "Google Calendar + Meet"}`,
+      summary: `Meeting created successfully.\n\nSHARE WITH USER:\nTitle: ${title}\nTime: ${formatEventTime(startTime, endTime)}\nAttendees: ${allAttendees.join(", ")}\nMeeting link: ${event.meetingUrl ?? "(no video link)"}\nProvider: ${event.provider === "microsoft_outlook" ? "Outlook + Teams" : "Google Calendar + Meet"}`,
     };
   } catch (err) {
     console.error("[create_calendar_event] Error:", err instanceof Error ? err.message : err);
@@ -1240,7 +1426,7 @@ async function handleGetBookingLink(
 
         return {
           results: [],
-          summary: `Calendly booking link generated:\n- Event type: ${preferred.name} (${preferred.duration} min)\n- Link: ${link.booking_url}\n\nThis is a one-time link.`,
+          summary: `Calendly link generated.\n\nSHARE WITH USER:\nEvent type: ${preferred.name} (${preferred.duration} min)\nBooking link: ${link.booking_url}\nNote: This is a one-time link.`,
         };
       } catch (err) {
         return {
@@ -1259,7 +1445,7 @@ async function handleGetBookingLink(
     const preferred = eventTypes.find((e) => e.duration === 30) ?? eventTypes[0];
     return {
       results: [],
-      summary: `Calendly booking link:\n- Event type: ${preferred.name} (${preferred.duration} min)\n- Link: ${preferred.scheduling_url}`,
+      summary: `Calendly link found.\n\nSHARE WITH USER:\nEvent type: ${preferred.name} (${preferred.duration} min)\nBooking link: ${preferred.scheduling_url}`,
     };
   } catch (err) {
     console.error("[get_booking_link] Error:", err instanceof Error ? err.message : err);
@@ -1514,6 +1700,11 @@ export async function executeSkylerToolCall(
   // ── Calendar tools: check availability, create events, get booking links ──
   if (SKYLER_CALENDAR_TOOL_NAMES.has(toolName)) {
     return handleCalendarTool(toolName, input, workspaceId, adminSupabase);
+  }
+
+  // ── Data read tool: query Skyler's internal tables ────────────────────
+  if (SKYLER_DATA_TOOL_NAMES.has(toolName)) {
+    return handleGetSkylerData(input, workspaceId, adminSupabase);
   }
 
   // ── Read tools: delegate to CleverBrain handlers (no autonomy check) ──
