@@ -67,7 +67,7 @@ export async function sendEmailNotification(
     `;
 
     await resend.emails.send({
-      from: "Skyler <notifications@cleverfolks.ai>",
+      from: "Skyler <skyler@cleverfolks.app>",
       to: toEmail,
       subject: `Skyler: ${label}${leadInfo}`,
       html: htmlBody,

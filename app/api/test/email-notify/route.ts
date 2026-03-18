@@ -94,7 +94,7 @@ export async function GET() {
       const domains = await resend.domains.list();
       domainStatus = domains;
       const cleverfolksDomain = (domains.data?.data ?? []).find(
-        (d: { name: string }) => d.name === "cleverfolks.ai"
+        (d: { name: string }) => d.name === "cleverfolks.app"
       );
       steps.resendDomain = {
         allDomains: (domains.data?.data ?? []).map((d: { name: string; status: string }) => ({
@@ -104,9 +104,9 @@ export async function GET() {
         cleverfolksDomain: cleverfolksDomain ?? "NOT FOUND",
         diagnosis: cleverfolksDomain
           ? (cleverfolksDomain as { status: string }).status === "verified"
-            ? "OK: cleverfolks.ai domain is verified"
-            : `PROBLEM: cleverfolks.ai domain status is "${(cleverfolksDomain as { status: string }).status}" — needs to be verified`
-          : "PROBLEM: cleverfolks.ai domain not found in Resend — add and verify it at https://resend.com/domains",
+            ? "OK: cleverfolks.app domain is verified"
+            : `PROBLEM: cleverfolks.app domain status is "${(cleverfolksDomain as { status: string }).status}" — needs to be verified`
+          : "PROBLEM: cleverfolks.app domain not found in Resend — add and verify it at https://resend.com/domains",
       };
     } catch (err: unknown) {
       const e = err as { message?: string; statusCode?: number };
@@ -176,7 +176,7 @@ async function sendTestEmail(
 ) {
   try {
     const result = await resend.emails.send({
-      from: "Skyler <notifications@cleverfolks.ai>",
+      from: "Skyler <skyler@cleverfolks.app>",
       to: toEmail,
       subject: "Skyler Test Notification",
       html: `

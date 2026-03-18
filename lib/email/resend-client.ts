@@ -98,7 +98,7 @@ export async function executeEmailSend(
 
   // Send via Resend
   const resend = new Resend(process.env.RESEND_API_KEY!);
-  const fromEmail = process.env.RESEND_FROM_EMAIL ?? "skyler@cleverfolks.ai";
+  const fromEmail = process.env.RESEND_FROM_EMAIL ?? "skyler@cleverfolks.app";
   const fromName = (input.fromName as string) ?? "Skyler";
 
   const { data: emailResult, error: sendErr } = await resend.emails.send({
