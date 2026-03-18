@@ -6,6 +6,7 @@
  */
 
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { inngest } from "@/lib/inngest/client";
 import * as googleCal from "./google-calendar-client";
 import * as msGraph from "./microsoft-graph-client";
 import * as calendly from "./calendly-client";
@@ -297,6 +298,17 @@ export async function createMeetingEvent(
       .select("id")
       .single();
 
+    // Schedule no-show check + pre-call brief
+    if (calEvent?.id) {
+      await scheduleNoShowCheck({
+        workspaceId,
+        calendarEventId: calEvent.id,
+        leadId: leadId,
+        endTime: eventData.endDateTime,
+        provider: "google_calendar",
+      });
+    }
+
     return {
       id: calEvent?.id ?? "",
       providerEventId: event.id,
@@ -345,6 +357,17 @@ export async function createMeetingEvent(
       })
       .select("id")
       .single();
+
+    // Schedule no-show check
+    if (calEvent?.id) {
+      await scheduleNoShowCheck({
+        workspaceId,
+        calendarEventId: calEvent.id,
+        leadId: leadId,
+        endTime: eventData.endDateTime,
+        provider: "microsoft_outlook",
+      });
+    }
 
     return {
       id: calEvent?.id ?? "",
@@ -498,6 +521,47 @@ export async function scheduleRecallBot(
   } catch (err) {
     console.error("[calendar-service] Failed to schedule Recall bot:", err);
     return null;
+  }
+}
+
+// ── No-Show Scheduling ────────────────────────────────────────────────────────
+
+/**
+ * Schedule a no-show check for a calendar event.
+ * Fires 15 minutes after the meeting end time.
+ * Only schedules for confirmed events with a linked lead (sales meetings).
+ */
+export async function scheduleNoShowCheck(params: {
+  workspaceId: string;
+  calendarEventId: string;
+  leadId: string | null;
+  endTime: string;
+  provider?: string;
+}): Promise<void> {
+  // Only schedule for sales meetings (has a lead linked)
+  if (!params.leadId) return;
+
+  const endDate = new Date(params.endTime);
+  const checkAt = new Date(endDate.getTime() + 15 * 60 * 1000);
+
+  // Don't schedule for events that already ended more than 2 hours ago
+  if (checkAt.getTime() < Date.now() - 2 * 60 * 60 * 1000) return;
+
+  try {
+    await inngest.send({
+      name: "skyler/meeting.no-show-check",
+      data: {
+        workspaceId: params.workspaceId,
+        calendarEventId: params.calendarEventId,
+        pipelineId: params.leadId,
+        provider: params.provider,
+      },
+      ts: checkAt.getTime(),
+    } as { name: string; data: Record<string, unknown>; ts?: number });
+
+    console.log(`[calendar-service] No-show check scheduled for ${checkAt.toISOString()} (event ${params.calendarEventId})`);
+  } catch (err) {
+    console.error("[calendar-service] Failed to schedule no-show check:", err);
   }
 }
 

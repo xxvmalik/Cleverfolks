@@ -18,7 +18,7 @@ import { getSalesVoice } from "@/lib/skyler/voice-learner";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import { resolveLeadFromAttendees } from "@/lib/skyler/calendar/calendar-service";
+import { resolveLeadFromAttendees, scheduleNoShowCheck } from "@/lib/skyler/calendar/calendar-service";
 
 type AdminDb = ReturnType<typeof createAdminSupabaseClient>;
 
@@ -1596,7 +1596,7 @@ async function createOutlookEventViaIntegrations(
   const leadId = eventData.pipelineId ?? await resolveLeadFromAttendees(workspaceId, eventData.attendeeEmails);
 
   // Store in calendar_events for tracking
-  await adminSupabase.from("calendar_events").insert({
+  const { data: calRow } = await adminSupabase.from("calendar_events").insert({
     workspace_id: workspaceId,
     provider: "microsoft_outlook",
     provider_event_id: event.id as string,
@@ -1610,7 +1610,18 @@ async function createOutlookEventViaIntegrations(
     attendees: eventData.attendeeEmails.map((e) => ({ email: e, response_status: "none" })),
     status: "confirmed",
     lead_id: leadId,
-  });
+  }).select("id").single();
+
+  // Schedule no-show check 15 min after meeting ends
+  if (calRow?.id) {
+    await scheduleNoShowCheck({
+      workspaceId,
+      calendarEventId: calRow.id,
+      leadId,
+      endTime: eventData.endTime,
+      provider: "microsoft_outlook",
+    });
+  }
 
   return { meetingUrl, eventId: event.id as string };
 }
