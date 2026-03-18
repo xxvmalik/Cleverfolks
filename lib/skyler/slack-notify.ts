@@ -62,7 +62,42 @@ export async function sendSlackNotification(
 
     const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
     const emoji = EVENT_EMOJI[payload.eventType] ?? ":bell:";
-    const text = `${emoji} *${payload.title}*${payload.body ? `\n${payload.body}` : ""}`;
+
+    // Build Slack Block Kit message for rich formatting
+    const blocks: Array<Record<string, unknown>> = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `${emoji} ${payload.title}`,
+          emoji: true,
+        },
+      },
+    ];
+
+    if (payload.body) {
+      // Convert markdown to Slack mrkdwn:
+      // - ## headings → *bold* with newline
+      // - **bold** → *bold* (Slack format)
+      // - • bullets stay as-is (Slack renders them)
+      // - Split into sections if body is long (Slack block text limit is 3000 chars)
+      const slackBody = markdownToSlackMrkdwn(payload.body);
+
+      // Split into chunks of max 3000 chars at section boundaries
+      const chunks = splitIntoChunks(slackBody, 2900);
+      for (const chunk of chunks) {
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: chunk,
+          },
+        });
+      }
+    }
+
+    // Fallback text for notifications / non-block-compatible clients
+    const fallbackText = `${emoji} ${payload.title}`;
 
     await nango.proxy({
       method: "POST",
@@ -72,7 +107,8 @@ export async function sendSlackNotification(
       providerConfigKey: "slack",
       data: {
         channel: channelOrUserId,
-        text,
+        text: fallbackText,
+        blocks,
         unfurl_links: false,
         unfurl_media: false,
       },
@@ -82,4 +118,47 @@ export async function sendSlackNotification(
   } catch (err) {
     console.error(`[slack-notify] Failed to send to ${channelOrUserId}:`, err instanceof Error ? err.message : err);
   }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Convert markdown to Slack mrkdwn format */
+function markdownToSlackMrkdwn(md: string): string {
+  return md
+    // ## Heading → *Heading* with blank line
+    .replace(/^#{1,3}\s+(.+)$/gm, "\n*$1*")
+    // **bold** → *bold*
+    .replace(/\*\*(.+?)\*\*/g, "*$1*")
+    // Remove duplicate * from **already bold** → already handled
+    // ⚠️ emoji shortcodes → Slack renders them natively
+    // Clean up excess blank lines
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Split text into chunks at paragraph/section boundaries */
+function splitIntoChunks(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text];
+
+  const chunks: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLen) {
+    // Find the last double-newline before the limit
+    let splitAt = remaining.lastIndexOf("\n\n", maxLen);
+    if (splitAt <= 0) {
+      // Fall back to last single newline
+      splitAt = remaining.lastIndexOf("\n", maxLen);
+    }
+    if (splitAt <= 0) {
+      // Hard cut
+      splitAt = maxLen;
+    }
+
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
 }
