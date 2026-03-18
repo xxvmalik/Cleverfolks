@@ -120,6 +120,7 @@ export const salesCadenceScheduler = inngest.createFunction(
         // Sync resolution to HubSpot (fire-and-forget)
         syncResolutionToHubSpot({
           workspaceId: record.workspace_id,
+          pipelineId: record.id,
           contactEmail: record.contact_email,
           contactName: record.contact_name ?? record.contact_email,
           companyName: record.company_name ?? undefined,

@@ -325,6 +325,7 @@ ${transcriptText.slice(0, 12000)}`,
 
         await syncResolutionToHubSpot({
           workspaceId,
+          pipelineId,
           contactEmail,
           contactName,
           companyName: companyName ?? undefined,
@@ -380,6 +381,7 @@ ${transcriptText.slice(0, 12000)}`,
 
         await syncResolutionToHubSpot({
           workspaceId,
+          pipelineId,
           contactEmail,
           contactName,
           companyName: companyName ?? undefined,

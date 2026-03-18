@@ -683,6 +683,7 @@ ${replyContent.slice(0, 2000)}`,
         // Sync resolution to HubSpot
         await syncResolutionToHubSpot({
           workspaceId,
+          pipelineId,
           contactEmail,
           contactName: pipeline.contact_name as string,
           companyName: (pipeline.company_name as string) ?? undefined,
@@ -737,6 +738,7 @@ ${replyContent.slice(0, 2000)}`,
           // Sync to HubSpot
           await syncResolutionToHubSpot({
             workspaceId,
+            pipelineId,
             contactEmail,
             contactName: pipeline.contact_name as string,
             companyName: (pipeline.company_name as string) ?? undefined,

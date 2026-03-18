@@ -174,6 +174,36 @@ async function associate(
   }
 }
 
+// ── Deal dedup: search HubSpot for existing deal by contact ─────────────────
+
+async function findDealByContact(
+  nango: InstanceType<typeof Nango>,
+  connectionId: string,
+  contactId: string
+): Promise<string | null> {
+  try {
+    // Get deals associated with this contact
+    const resp = await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://api.hubapi.com",
+      endpoint: `/crm/v4/objects/contacts/${contactId}/associations/deals`,
+      providerConfigKey: "hubspot",
+      connectionId,
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const results = (resp as any)?.data?.results ?? [];
+    if (results.length > 0) {
+      // Return the first (most recent) associated deal
+      const dealId = results[0].toObjectId as string;
+      return dealId ?? null;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ── Public API ──────────────────────────────────────────────────────────────
 
 export interface CRMSyncParams {
@@ -234,11 +264,18 @@ export async function logEmailToHubSpot(params: CRMSyncParams & {
 /**
  * Create or update a deal in HubSpot for this pipeline contact.
  * Returns the deal ID if successful, or null.
+ *
+ * DEDUP: Before creating a new deal, this function:
+ *   1. Re-reads hubspot_deal_id from the DB (fresh, not stale params)
+ *   2. Searches HubSpot for existing deals associated with the contact email
+ * This prevents the duplicate-deal bug where concurrent callers each create a deal.
+ *
  * Fire-and-forget — never throws.
  */
 export async function syncDealToHubSpot(params: CRMSyncParams & {
   pipelineStage: string;
   hubspotDealId?: string | null;
+  pipelineId?: string | null;
 }): Promise<string | null> {
   try {
     const conn = await getHubSpotConnection(params.workspaceId);
@@ -246,22 +283,62 @@ export async function syncDealToHubSpot(params: CRMSyncParams & {
 
     const stageId = await resolveStageId(conn.nango, conn.connectionId, params.pipelineStage);
 
+    // ── Layer 1: Check stale param ──────────────────────────────────────
+    let dealId = params.hubspotDealId ?? null;
+
+    // ── Layer 2: Fresh DB read (another caller may have written it) ─────
+    if (!dealId && params.pipelineId) {
+      const db = createAdminSupabaseClient();
+      const { data: fresh } = await db
+        .from("skyler_sales_pipeline")
+        .select("hubspot_deal_id")
+        .eq("id", params.pipelineId)
+        .maybeSingle();
+      if (fresh?.hubspot_deal_id) {
+        dealId = fresh.hubspot_deal_id as string;
+        console.log(`[CRM Sync] Found deal ${dealId} via fresh DB read (avoiding duplicate)`);
+      }
+    }
+
     // If we have an existing deal ID, update it
-    if (params.hubspotDealId) {
-      const payload: Record<string, unknown> = { id: params.hubspotDealId };
+    if (dealId) {
+      const payload: Record<string, unknown> = { id: dealId };
       if (stageId) payload.deal_stage = stageId;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await conn.nango.triggerAction("hubspot", conn.connectionId, "update-deal", payload);
-      console.log(`[CRM Sync] Updated deal ${params.hubspotDealId} → stage "${params.pipelineStage}"`);
-      return params.hubspotDealId;
+      console.log(`[CRM Sync] Updated deal ${dealId} → stage "${params.pipelineStage}"`);
+      return dealId;
     }
 
-    // No existing deal — create one
+    // ── Layer 3: Search HubSpot for existing deal by contact ────────────
     const contactId = await findOrCreateContact(
       conn.nango, conn.connectionId, params.contactEmail, params.contactName, params.companyName
     );
 
+    if (contactId) {
+      const existingDealId = await findDealByContact(conn.nango, conn.connectionId, contactId);
+      if (existingDealId) {
+        console.log(`[CRM Sync] Found existing deal ${existingDealId} in HubSpot for contact ${contactId} (avoiding duplicate)`);
+        // Update the stage on the existing deal
+        const payload: Record<string, unknown> = { id: existingDealId };
+        if (stageId) payload.deal_stage = stageId;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await conn.nango.triggerAction("hubspot", conn.connectionId, "update-deal", payload).catch(() => {});
+
+        // Store the deal ID on the pipeline record so future calls skip the search
+        if (params.pipelineId) {
+          const db = createAdminSupabaseClient();
+          await db
+            .from("skyler_sales_pipeline")
+            .update({ hubspot_deal_id: existingDealId, crm_synced: true, updated_at: new Date().toISOString() })
+            .eq("id", params.pipelineId);
+        }
+        return existingDealId;
+      }
+    }
+
+    // No existing deal anywhere — create one
     const dealPayload: Record<string, unknown> = {
       name: `${params.contactName} - Skyler Outreach`,
     };
@@ -269,14 +346,25 @@ export async function syncDealToHubSpot(params: CRMSyncParams & {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const created: any = await conn.nango.triggerAction("hubspot", conn.connectionId, "create-deal", dealPayload);
-    const dealId = created?.id as string | undefined;
+    const newDealId = created?.id as string | undefined;
 
-    if (dealId && contactId) {
-      await associate(conn.nango, conn.connectionId, "deals", dealId, "contacts", contactId, ASSOCIATION_TYPES.deal_to_contact);
+    if (newDealId && contactId) {
+      await associate(conn.nango, conn.connectionId, "deals", newDealId, "contacts", contactId, ASSOCIATION_TYPES.deal_to_contact);
     }
 
-    console.log(`[CRM Sync] Created deal ${dealId} for ${params.contactEmail} → "${params.pipelineStage}"`);
-    return dealId ?? null;
+    // Immediately persist deal ID to prevent race with other callers
+    if (newDealId && params.pipelineId) {
+      const db = createAdminSupabaseClient();
+      await db
+        .from("skyler_sales_pipeline")
+        .update({ hubspot_deal_id: newDealId, crm_synced: true, updated_at: new Date().toISOString() })
+        .eq("id", params.pipelineId);
+      console.log(`[CRM Sync] Created deal ${newDealId} and stored on pipeline ${params.pipelineId}`);
+    } else {
+      console.log(`[CRM Sync] Created deal ${newDealId} for ${params.contactEmail} → "${params.pipelineStage}"`);
+    }
+
+    return newDealId ?? null;
   } catch (err) {
     console.error("[CRM Sync] syncDealToHubSpot failed:", err instanceof Error ? err.message : String(err));
     return null;
@@ -340,8 +428,20 @@ export async function syncEmailSentToHubSpot(params: {
     const conn = await getHubSpotConnection(params.workspaceId);
     if (!conn) return;
 
-    // Run all three in parallel (fire-and-forget each)
-    const [, dealId] = await Promise.all([
+    // Sync deal first (with dedup), then log email + note in parallel
+    // Sequential deal sync prevents race conditions
+    await syncDealToHubSpot({
+      workspaceId: params.workspaceId,
+      contactEmail: params.contactEmail,
+      contactName: params.contactName,
+      companyName: params.companyName,
+      pipelineStage: mapToHubSpotStage(params.pipelineStage),
+      hubspotDealId: params.hubspotDealId,
+      pipelineId: params.pipelineId,
+    });
+
+    // Log email + note in parallel (deal ID persistence is handled by syncDealToHubSpot)
+    await Promise.all([
       logEmailToHubSpot({
         workspaceId: params.workspaceId,
         contactEmail: params.contactEmail,
@@ -352,14 +452,6 @@ export async function syncEmailSentToHubSpot(params: {
         direction: "SENT",
         timestamp: new Date().toISOString(),
       }),
-      syncDealToHubSpot({
-        workspaceId: params.workspaceId,
-        contactEmail: params.contactEmail,
-        contactName: params.contactName,
-        companyName: params.companyName,
-        pipelineStage: mapToHubSpotStage(params.pipelineStage),
-        hubspotDealId: params.hubspotDealId,
-      }),
       addNoteToHubSpot({
         workspaceId: params.workspaceId,
         contactEmail: params.contactEmail,
@@ -368,16 +460,6 @@ export async function syncEmailSentToHubSpot(params: {
         hubspotDealId: params.hubspotDealId,
       }),
     ]);
-
-    // Store deal ID on pipeline if newly created
-    if (dealId && !params.hubspotDealId) {
-      const db = createAdminSupabaseClient();
-      await db
-        .from("skyler_sales_pipeline")
-        .update({ hubspot_deal_id: dealId, crm_synced: true, updated_at: new Date().toISOString() })
-        .eq("id", params.pipelineId);
-      console.log(`[CRM Sync] Stored deal ${dealId} on pipeline ${params.pipelineId}`);
-    }
   } catch (err) {
     console.error("[CRM Sync] syncEmailSentToHubSpot failed:", err instanceof Error ? err.message : String(err));
   }
@@ -401,6 +483,17 @@ export async function syncReplyToHubSpot(params: {
     const conn = await getHubSpotConnection(params.workspaceId);
     if (!conn) return;
 
+    // Sync deal first (with dedup), then log email + note in parallel
+    await syncDealToHubSpot({
+      workspaceId: params.workspaceId,
+      contactEmail: params.contactEmail,
+      contactName: params.contactName,
+      companyName: params.companyName,
+      pipelineStage: "Negotiation",
+      hubspotDealId: params.hubspotDealId,
+      pipelineId: params.pipelineId,
+    });
+
     await Promise.all([
       logEmailToHubSpot({
         workspaceId: params.workspaceId,
@@ -411,14 +504,6 @@ export async function syncReplyToHubSpot(params: {
         body: params.replyContent,
         direction: "RECEIVED",
         timestamp: new Date().toISOString(),
-      }),
-      syncDealToHubSpot({
-        workspaceId: params.workspaceId,
-        contactEmail: params.contactEmail,
-        contactName: params.contactName,
-        companyName: params.companyName,
-        pipelineStage: "Negotiation",
-        hubspotDealId: params.hubspotDealId,
       }),
       addNoteToHubSpot({
         workspaceId: params.workspaceId,
@@ -439,6 +524,7 @@ export async function syncReplyToHubSpot(params: {
  */
 export async function syncResolutionToHubSpot(params: {
   workspaceId: string;
+  pipelineId?: string;
   contactEmail: string;
   contactName: string;
   companyName?: string;
@@ -449,23 +535,24 @@ export async function syncResolutionToHubSpot(params: {
     const conn = await getHubSpotConnection(params.workspaceId);
     if (!conn) return;
 
-    await Promise.all([
-      syncDealToHubSpot({
-        workspaceId: params.workspaceId,
-        contactEmail: params.contactEmail,
-        contactName: params.contactName,
-        companyName: params.companyName,
-        pipelineStage: mapToHubSpotStage(params.resolution),
-        hubspotDealId: params.hubspotDealId,
-      }),
-      addNoteToHubSpot({
-        workspaceId: params.workspaceId,
-        contactEmail: params.contactEmail,
-        contactName: params.contactName,
-        note: `Lead closed: ${params.resolution}`,
-        hubspotDealId: params.hubspotDealId,
-      }),
-    ]);
+    // Sync deal first (with dedup), then note
+    await syncDealToHubSpot({
+      workspaceId: params.workspaceId,
+      contactEmail: params.contactEmail,
+      contactName: params.contactName,
+      companyName: params.companyName,
+      pipelineStage: mapToHubSpotStage(params.resolution),
+      hubspotDealId: params.hubspotDealId,
+      pipelineId: params.pipelineId,
+    });
+
+    await addNoteToHubSpot({
+      workspaceId: params.workspaceId,
+      contactEmail: params.contactEmail,
+      contactName: params.contactName,
+      note: `Lead closed: ${params.resolution}`,
+      hubspotDealId: params.hubspotDealId,
+    });
   } catch (err) {
     console.error("[CRM Sync] syncResolutionToHubSpot failed:", err instanceof Error ? err.message : String(err));
   }
