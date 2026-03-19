@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
-import { Search, ChevronDown, Mail, Mic, Loader2 } from "lucide-react";
+import { Search, ChevronDown, Mail, Mic, Loader2, Check, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -43,9 +43,8 @@ type ChatMessage = {
 const QUICK_ACTIONS = [
   "Draft a follow up message",
   "Recommendation",
-  "Recommendation",
   "Skyler's AI Analysis",
-  "Draft a follow up message",
+  "Score this lead",
 ];
 
 // ── Sub-components ───────────────────────────────────────────────────────────
@@ -127,19 +126,66 @@ function LeadCard({
   );
 }
 
-// ── Markdown renderer (simple) ──────────────────────────────────────────────
+// ── Activity steps (shared pattern with Sales Closer) ───────────────────────
 
-function SimpleMarkdown({ content }: { content: string }) {
+function LQActivitySteps({ activities, isComplete }: { activities: string[]; isComplete: boolean }) {
+  const [expanded, setExpanded] = useState(true);
+  const steps = activities.filter((a) => a !== "Generating response...");
+  if (steps.length === 0) return null;
+
   return (
-    <div
-      className="whitespace-pre-wrap text-sm leading-relaxed"
-      dangerouslySetInnerHTML={{
-        __html: content
-          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-          .replace(/\*(.*?)\*/g, "<em>$1</em>")
-          .replace(/\n/g, "<br/>"),
-      }}
-    />
+    <div className="flex gap-3 items-start">
+      <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+        <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+      </div>
+      <div className="flex-1 max-w-[85%]">
+        <button
+          onClick={() => setExpanded((p) => !p)}
+          className="flex items-center gap-1.5 text-left px-3 py-1.5 rounded-lg"
+          style={{
+            background: "rgba(242,144,61,0.06)",
+            border: "1px solid rgba(242,144,61,0.12)",
+            fontSize: 11,
+            fontWeight: 500,
+            color: "#F2903D",
+          }}
+        >
+          {isComplete ? (
+            <Check size={12} style={{ opacity: 0.7, flexShrink: 0 }} />
+          ) : (
+            <Loader2 size={12} className="animate-spin" style={{ flexShrink: 0 }} />
+          )}
+          <span>
+            {isComplete
+              ? `Done — ${steps.length} step${steps.length !== 1 ? "s" : ""}`
+              : steps[steps.length - 1]}
+          </span>
+          {expanded ? (
+            <ChevronDown size={11} style={{ marginLeft: "auto", opacity: 0.5 }} />
+          ) : (
+            <ChevronRight size={11} style={{ marginLeft: "auto", opacity: 0.5 }} />
+          )}
+        </button>
+
+        {expanded && (
+          <div style={{ marginTop: 4, paddingLeft: 12, borderLeft: "2px solid rgba(242,144,61,0.15)", marginLeft: 8 }}>
+            {steps.map((step, i) => {
+              const isDone = isComplete || i < steps.length - 1;
+              return (
+                <div key={`${step}-${i}`} className="flex items-center gap-1.5" style={{ padding: "3px 0", fontSize: 11, color: isDone ? "#555A63" : "#8B8F97" }}>
+                  {isDone ? (
+                    <Check size={10} style={{ color: "#4ADE80", flexShrink: 0 }} />
+                  ) : (
+                    <Loader2 size={10} className="animate-spin" style={{ color: "#F2903D", flexShrink: 0 }} />
+                  )}
+                  <span>{step}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -160,6 +206,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   const [chatInput, setChatInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingActivities, setStreamingActivities] = useState<string[]>([]);
   const [promptedLead, setPromptedLead] = useState<Lead | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -211,7 +258,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatMessages, streamingContent]);
+  }, [chatMessages, streamingContent, streamingActivities]);
 
   const handleSalesCloserToggle = async () => {
     const newValue = !salesCloserEnabled;
@@ -252,6 +299,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
     setChatInput("");
     setIsStreaming(true);
     setStreamingContent("");
+    setStreamingActivities([]);
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -296,7 +344,12 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
           if (!line.startsWith("data: ")) continue;
           try {
             const event = JSON.parse(line.slice(6));
-            if (event.type === "text") {
+            if (event.type === "activity") {
+              setStreamingActivities((prev) => {
+                if (prev[prev.length - 1] === event.action) return prev;
+                return [...prev, event.action];
+              });
+            } else if (event.type === "text") {
               accumulatedText += event.text;
               setStreamingContent(accumulatedText);
             } else if (event.type === "done") {
@@ -515,15 +568,20 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
                           ? "bg-[#F2903D]/20 text-white"
                           : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
                       )}
+                      style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
                     >
-                      {msg.role === "assistant" ? (
-                        <SimpleMarkdown content={msg.content} />
-                      ) : (
-                        <div className="whitespace-pre-wrap">{msg.content}</div>
-                      )}
+                      {msg.content}
                     </div>
                   </div>
                 ))}
+
+                {/* Activity steps — show while Skyler is thinking/working */}
+                {streamingActivities.length > 0 && (
+                  <LQActivitySteps
+                    activities={streamingActivities}
+                    isComplete={streamingContent.length > 0}
+                  />
+                )}
 
                 {/* Streaming */}
                 {streamingContent && (
@@ -531,13 +589,18 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
                     <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
                       <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
                     </div>
-                    <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
-                      <SimpleMarkdown content={streamingContent} />
+                    <div
+                      className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
+                      style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
+                    >
+                      {streamingContent}
+                      <span className="inline-block w-1.5 h-3.5 ml-0.5 animate-pulse bg-[#F2903D]" style={{ borderRadius: 1 }} />
                     </div>
                   </div>
                 )}
 
-                {isStreaming && !streamingContent && (
+                {/* Fallback thinking spinner — only shows before any activities arrive */}
+                {isStreaming && !streamingContent && streamingActivities.length === 0 && (
                   <div className="flex gap-3 items-start">
                     <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
                       <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />

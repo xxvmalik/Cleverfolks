@@ -19,7 +19,7 @@ function ActivitySteps({ activities, isComplete }: { activities: string[]; isCom
       className="flex justify-start"
       style={{ animation: "sk-messageIn 0.3s var(--sk-ease-out)" }}
     >
-      <div style={{ maxWidth: "88%" }}>
+      <div style={{ maxWidth: "88%", overflowWrap: "break-word", wordBreak: "break-word" }}>
         <button
           onClick={() => setExpanded((p) => !p)}
           className="flex items-center gap-1.5 w-full text-left"
@@ -139,6 +139,8 @@ export function ChatMessages({
                     fontSize: 11,
                     lineHeight: 1.6,
                     whiteSpace: "pre-wrap",
+                    overflowWrap: "break-word",
+                    wordBreak: "break-word",
                   }}
                 >
                   {msg.content}
@@ -170,6 +172,8 @@ export function ChatMessages({
                 fontSize: 11,
                 lineHeight: 1.6,
                 whiteSpace: "pre-wrap",
+                overflowWrap: "break-word",
+                wordBreak: "break-word",
               }}
             >
               {streamingContent}

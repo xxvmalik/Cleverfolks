@@ -536,6 +536,8 @@ export async function runAgentLoop(
 
       // Stream the final response with tag buffering for [ROLE_UPDATE:]
       onEvent({ type: "activity", action: "Generating response..." });
+      // Small gap so the frontend can render the activity before text starts
+      await new Promise((resolve) => setTimeout(resolve, 50));
       await streamTextWithTagBuffering(fullText, onEvent);
 
       return { fullResponse: fullText, allResults, webResults };
@@ -628,6 +630,7 @@ export async function runAgentLoop(
   const fullText = textBlocks.map((b) => b.text).join("");
 
   onEvent({ type: "activity", action: "Generating response..." });
+  await new Promise((resolve) => setTimeout(resolve, 50));
   await streamTextWithTagBuffering(fullText, onEvent);
 
   return { fullResponse: fullText, allResults, webResults };

@@ -414,7 +414,7 @@ export function SkylerWorkspace({
                 },
               ]);
               setStreamingContent("");
-              setStreamingActivities([]);
+              // Activities stay visible until the user's next message (cleared in handleSendMessage)
               fetchConversations();
               // Refresh pipeline in case chat triggered any actions
               fetchPipelineData();
