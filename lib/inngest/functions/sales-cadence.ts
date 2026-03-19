@@ -133,9 +133,45 @@ export const salesCadenceScheduler = inngest.createFunction(
       return stale.length;
     });
 
+    // Step 4: Mark leads as no_response if no reply 48h after last email
+    // These can be re-engaged if the lead replies later (reply-detector clears resolution)
+    const noResponseCount = await step.run("mark-48h-no-response", async () => {
+      const db = createAdminSupabaseClient();
+      const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+
+      const { data: unresponsive } = await db
+        .from("skyler_sales_pipeline")
+        .select("id, workspace_id, contact_email, contact_name, company_name")
+        .is("resolution", null)
+        .eq("awaiting_reply", true)
+        .lte("last_email_sent_at", fortyEightHoursAgo)
+        .is("last_reply_at", null) // Never replied at all
+        .limit(50);
+
+      if (!unresponsive || unresponsive.length === 0) return 0;
+
+      const now = new Date().toISOString();
+      for (const record of unresponsive) {
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            resolution: "no_response",
+            resolution_notes: "No reply within 48 hours of last outreach",
+            resolved_at: now,
+            awaiting_reply: false,
+            updated_at: now,
+          })
+          .eq("id", record.id);
+      }
+
+      console.log(`[cadence-scheduler] Marked ${unresponsive.length} leads as no_response (48h timeout)`);
+      return unresponsive.length;
+    });
+
     return {
       dispatched: dueRecords.length,
       closed_stale: closedCount,
+      no_response_48h: noResponseCount,
     };
   }
 );

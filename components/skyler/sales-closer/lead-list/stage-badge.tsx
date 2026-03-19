@@ -25,11 +25,11 @@ function getPhaseColor(stage: string): string {
     return "#0086FF";
   }
   // Phase 2: Engaged
-  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal"].includes(stage)) {
+  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal", "meeting_booked", "follow_up_meeting"].includes(stage)) {
     return "#F2903D";
   }
   // Phase 3: Resolved — positive
-  if (["payment_secured", "closed_won", "meeting_booked"].includes(stage)) {
+  if (["payment_secured", "closed_won"].includes(stage)) {
     return "#3ECF8E";
   }
   // Phase 3: Resolved — negative
@@ -43,7 +43,7 @@ function getPhaseColor(stage: string): string {
 
 export function getPhaseForStage(stage: string): "prospecting" | "engaged" | "resolved" {
   if (["initial_outreach", "follow_up_1", "follow_up_2", "follow_up_3"].includes(stage)) return "prospecting";
-  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal"].includes(stage)) return "engaged";
+  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal", "meeting_booked", "follow_up_meeting"].includes(stage)) return "engaged";
   return "resolved";
 }
 

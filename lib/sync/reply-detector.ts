@@ -43,14 +43,35 @@ export async function detectPipelineReply(
 
     if (!senderEmail) return { is_reply: false };
 
-    // Check if this sender has an active pipeline record (unresolved)
-    const { data: pipeline } = await db
+    // Check if this sender has an active pipeline record (unresolved OR no_response)
+    // no_response leads can be re-engaged when they reply
+    const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at";
+
+    const { data: active } = await db
       .from("skyler_sales_pipeline")
-      .select("id, contact_email, stage, awaiting_reply, emails_replied, conversation_thread, last_reply_at")
+      .select(pipelineFields)
       .eq("workspace_id", workspaceId)
       .eq("contact_email", senderEmail)
       .is("resolution", null)
       .maybeSingle();
+
+    let pipeline = active;
+
+    if (!pipeline) {
+      // Check for no_response leads that can be re-engaged
+      const { data: dormant } = await db
+        .from("skyler_sales_pipeline")
+        .select(pipelineFields)
+        .eq("workspace_id", workspaceId)
+        .eq("contact_email", senderEmail)
+        .eq("resolution", "no_response")
+        .maybeSingle();
+
+      if (dormant) {
+        pipeline = dormant;
+        console.log(`[reply-detector] Re-engaging no_response lead ${dormant.id} from ${senderEmail}`);
+      }
+    }
 
     if (!pipeline) return { is_reply: false };
 
@@ -92,24 +113,36 @@ export async function detectPipelineReply(
       status: "received",
     });
 
+    const isReEngaging = pipeline.resolution === "no_response";
     const newStage =
-      pipeline.stage === "initial_outreach" || (pipeline.stage as string).startsWith("follow_up")
+      pipeline.stage === "initial_outreach" || (pipeline.stage as string).startsWith("follow_up") || isReEngaging
         ? "replied"
         : pipeline.stage;
+
+    // Build update payload
+    const updatePayload: Record<string, unknown> = {
+      awaiting_reply: false,
+      last_reply_at: now,
+      next_followup_at: null,
+      emails_replied: ((pipeline.emails_replied as number) ?? 0) + 1,
+      stage: newStage,
+      conversation_thread: thread,
+      updated_at: now,
+    };
+
+    // Clear resolution if re-engaging a no_response lead
+    if (isReEngaging) {
+      updatePayload.resolution = null;
+      updatePayload.resolution_notes = null;
+      updatePayload.resolved_at = null;
+      console.log(`[reply-detector] Clearing no_response resolution for pipeline ${pipeline.id}`);
+    }
 
     // Atomic conditional update: only succeeds if last_reply_at is NULL or older than 5 min
     // This is the dedup mechanism — if two chunks race, only one update succeeds
     let updateQuery = db
       .from("skyler_sales_pipeline")
-      .update({
-        awaiting_reply: false,
-        last_reply_at: now,
-        next_followup_at: null,
-        emails_replied: ((pipeline.emails_replied as number) ?? 0) + 1,
-        stage: newStage,
-        conversation_thread: thread,
-        updated_at: now,
-      })
+      .update(updatePayload)
       .eq("id", pipeline.id);
 
     // Add the atomic condition: last_reply_at must be null OR older than 5 min
