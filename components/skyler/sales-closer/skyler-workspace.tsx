@@ -1,10 +1,13 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { PanelLeftOpen } from "lucide-react";
+import { SkylerSidebar } from "./skyler-sidebar";
 import { MetricsBar } from "./metrics-bar";
 import { LeadListPanel } from "./lead-list/lead-list-panel";
 import { LeadDetailPanel } from "./lead-detail/lead-detail-panel";
 import { ChatPanel } from "./chat/chat-panel";
+import { RightIconBar } from "./right-icon-bar";
 import type {
   PipelineRecord,
   PerformanceMetrics,
@@ -46,6 +49,9 @@ export function SkylerWorkspace({
   const [upcomingMeetings, setUpcomingMeetings] = useState<CalendarEvent[]>([]);
   const [pastMeetings, setPastMeetings] = useState<MeetingRecord[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
+
+  // ── Sidebar state ───────────────────────────────────────────────
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   // ── Chat state ──────────────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(true);
@@ -257,6 +263,42 @@ export function SkylerWorkspace({
     handleTagLead(selectedRecord.id);
   };
 
+  // ── Conversation management ──────────────────────────────────────
+
+  const handleNewChat = () => {
+    setActiveConversationId(null);
+    setChatMessages([]);
+    setStreamingContent("");
+    setChatOpen(true);
+  };
+
+  const handleStarConversation = async (id: string, starred: boolean) => {
+    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, is_starred: starred } : c));
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_starred: starred }),
+    });
+  };
+
+  const handleRenameConversation = async (id: string, title: string) => {
+    setConversations((prev) => prev.map((c) => c.id === id ? { ...c, custom_title: title || undefined } : c));
+    await fetch(`/api/conversations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ custom_title: title }),
+    });
+  };
+
+  const handleDeleteConversation = async (id: string) => {
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+    if (activeConversationId === id) {
+      setActiveConversationId(null);
+      setChatMessages([]);
+    }
+    await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+  };
+
   // ── Chat ────────────────────────────────────────────────────────
 
   const handleSendMessage = async () => {
@@ -401,61 +443,95 @@ export function SkylerWorkspace({
   // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col h-full" style={{ background: "var(--sk-bg)" }}>
-      <MetricsBar
-        metrics={performanceMetrics}
-        salesCloserEnabled={salesCloserEnabled}
-        onToggle={handleToggleSalesCloser}
+    <div className="flex h-full" style={{ background: "var(--sk-bg)" }}>
+      {/* Left Sidebar */}
+      <SkylerSidebar
+        collapsed={sidebarCollapsed}
+        onCollapse={() => setSidebarCollapsed(true)}
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onNewChat={handleNewChat}
+        onSelectConversation={handleSelectConversation}
+        onStarConversation={handleStarConversation}
+        onRenameConversation={handleRenameConversation}
+        onDeleteConversation={handleDeleteConversation}
       />
 
-      <div className="flex flex-1 overflow-hidden">
-        <LeadListPanel
-          records={pipelineRecords}
-          loading={pipelineLoading}
-          selectedId={selectedLeadId}
-          phaseFilter={phaseFilter}
-          searchQuery={searchQuery}
-          onSelectLead={handleSelectLead}
-          onTagLead={handleTagLead}
-          onPhaseFilterChange={setPhaseFilter}
-          onSearchChange={setSearchQuery}
-        />
+      {/* Main workspace area */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {/* Top area: expand sidebar button (when collapsed) + metrics */}
+        <div className="flex items-center" style={{ background: "var(--sk-surface)", borderBottom: "1px solid var(--sk-border)" }}>
+          {sidebarCollapsed && (
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              className="flex-shrink-0 transition-colors"
+              style={{ padding: "14px 12px 14px 18px", color: "var(--sk-t3)" }}
+            >
+              <PanelLeftOpen className="w-5 h-5" />
+            </button>
+          )}
+          <div className="flex-1">
+            <MetricsBar
+              metrics={performanceMetrics}
+              salesCloserEnabled={salesCloserEnabled}
+              onToggle={handleToggleSalesCloser}
+            />
+          </div>
+        </div>
 
-        <LeadDetailPanel
-          record={selectedRecord}
-          loading={pipelineLoading}
-          alerts={alerts}
-          directives={directives}
-          directivesLoading={directivesLoading}
-          upcomingMeetings={upcomingMeetings}
-          pastMeetings={pastMeetings}
-          meetingsLoading={meetingsLoading}
-          onApprove={handleApproveDraft}
-          onReject={handleRejectDraft}
-          onDismissAlert={handleDismissAlert}
-          onReplyToRequest={handleReplyToRequest}
-          onDismissRequest={handleDismissRequest}
-          onAddDirective={handleAddDirective}
-          onRemoveDirective={handleRemoveDirective}
-          onFetchTranscript={handleFetchTranscript}
-          onTagForChat={handleTagForChat}
-        />
+        {/* Three-panel content */}
+        <div className="flex flex-1 overflow-hidden">
+          <LeadListPanel
+            records={pipelineRecords}
+            loading={pipelineLoading}
+            selectedId={selectedLeadId}
+            phaseFilter={phaseFilter}
+            searchQuery={searchQuery}
+            onSelectLead={handleSelectLead}
+            onTagLead={handleTagLead}
+            onPhaseFilterChange={setPhaseFilter}
+            onSearchChange={setSearchQuery}
+          />
 
-        <ChatPanel
-          open={chatOpen}
-          onToggle={() => setChatOpen((prev) => !prev)}
-          messages={chatMessages}
-          conversations={conversations}
-          streamingContent={streamingContent}
-          inputValue={chatInput}
-          onInputChange={setChatInput}
-          onSend={handleSendMessage}
-          taggedLead={taggedLead}
-          onClearTag={() => setTaggedLead(null)}
-          isStreaming={isStreaming}
-          onSelectConversation={handleSelectConversation}
-        />
+          <LeadDetailPanel
+            record={selectedRecord}
+            loading={pipelineLoading}
+            alerts={alerts}
+            directives={directives}
+            directivesLoading={directivesLoading}
+            upcomingMeetings={upcomingMeetings}
+            pastMeetings={pastMeetings}
+            meetingsLoading={meetingsLoading}
+            onApprove={handleApproveDraft}
+            onReject={handleRejectDraft}
+            onDismissAlert={handleDismissAlert}
+            onReplyToRequest={handleReplyToRequest}
+            onDismissRequest={handleDismissRequest}
+            onAddDirective={handleAddDirective}
+            onRemoveDirective={handleRemoveDirective}
+            onFetchTranscript={handleFetchTranscript}
+            onTagForChat={handleTagForChat}
+          />
+
+          <ChatPanel
+            open={chatOpen}
+            onToggle={() => setChatOpen((prev) => !prev)}
+            messages={chatMessages}
+            conversations={conversations}
+            streamingContent={streamingContent}
+            inputValue={chatInput}
+            onInputChange={setChatInput}
+            onSend={handleSendMessage}
+            taggedLead={taggedLead}
+            onClearTag={() => setTaggedLead(null)}
+            isStreaming={isStreaming}
+            onSelectConversation={handleSelectConversation}
+          />
+        </div>
       </div>
+
+      {/* Right Icon Bar */}
+      <RightIconBar />
     </div>
   );
 }

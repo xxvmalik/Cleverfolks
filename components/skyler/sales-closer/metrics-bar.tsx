@@ -20,7 +20,7 @@ export function MetricsBar({
   onToggle: () => void;
 }) {
   return (
-    <div style={{ background: "var(--sk-surface)", borderBottom: "1px solid var(--sk-border)" }}>
+    <div style={{ background: "var(--sk-surface)" }}>
       {/* Header row */}
       <div className="flex items-center justify-between" style={{ padding: "14px 22px 10px" }}>
         <div className="flex items-center gap-3">
