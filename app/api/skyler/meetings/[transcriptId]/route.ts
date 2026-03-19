@@ -20,6 +20,37 @@ export async function GET(
 
   const db = createAdminSupabaseClient();
 
+  // Handle pipeline-prefixed IDs (fallback meetings stored on pipeline record)
+  if (transcriptId.startsWith("pipeline-")) {
+    const pipelineId = transcriptId.replace("pipeline-", "");
+
+    const { data: pipeline } = await db
+      .from("skyler_sales_pipeline")
+      .select("meeting_transcript")
+      .eq("id", pipelineId)
+      .maybeSingle();
+
+    if (!pipeline?.meeting_transcript) {
+      return NextResponse.json({ transcript: [] });
+    }
+
+    // Parse the real-time transcript text (format: "Speaker: text\nSpeaker: text\n...")
+    const rawText = pipeline.meeting_transcript as string;
+    const lines = rawText.split("\n").filter(Boolean).map((line) => {
+      const colonIdx = line.indexOf(": ");
+      if (colonIdx > 0) {
+        return {
+          speaker: line.slice(0, colonIdx),
+          text: line.slice(colonIdx + 2),
+          timestamp: null,
+        };
+      }
+      return { speaker: "Unknown", text: line, timestamp: null };
+    });
+
+    return NextResponse.json({ transcript: lines });
+  }
+
   const { data, error } = await db
     .from("meeting_transcripts")
     .select("raw_transcript")

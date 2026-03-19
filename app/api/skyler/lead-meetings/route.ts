@@ -112,14 +112,14 @@ export async function GET(req: NextRequest) {
     }];
   }
 
-  // Fallback: if no calendar_events rows but pipeline has meeting_details for upcoming
+  // Fallback: if no calendar_events rows but pipeline has meeting_details
   if (upcoming.length === 0 && pipeline.meeting_details) {
     const details = pipeline.meeting_details as { title?: string; start?: string; end?: string; link?: string } | null;
     if (details?.start) {
       const meetingStart = new Date(details.start);
-      // Only show as "upcoming" if meeting hasn't happened yet (or happened recently)
-      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      if (meetingStart > oneDayAgo) {
+      const nowDate = new Date();
+      if (meetingStart > nowDate) {
+        // Future meeting → show as upcoming
         upcoming.push({
           id: `pipeline-event-${pipelineId}`,
           title: details.title ?? "Meeting",
