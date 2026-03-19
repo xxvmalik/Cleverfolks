@@ -23,6 +23,7 @@ export function LeadDetailPanel({
   meetingsLoading,
   onApprove,
   onReject,
+  onRetry,
   onDismissAlert,
   onReplyToRequest,
   onDismissRequest,
@@ -41,6 +42,7 @@ export function LeadDetailPanel({
   meetingsLoading: boolean;
   onApprove: (actionId: string, editedBody?: string) => void;
   onReject: (actionId: string, feedback: string) => void;
+  onRetry?: (actionId: string) => void;
   onDismissAlert: (id: string) => void;
   onReplyToRequest: (text: string) => void;
   onDismissRequest: () => void;
@@ -97,6 +99,7 @@ export function LeadDetailPanel({
           actions={record.pending_actions ?? []}
           onApprove={onApprove}
           onReject={onReject}
+          onRetry={onRetry}
         />
 
         {/* Tabs */}

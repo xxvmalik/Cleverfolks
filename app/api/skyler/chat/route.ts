@@ -526,7 +526,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
             classification.directive_text
           );
           if (result) {
-            console.log(`[skyler-chat] Saved directive for ${taggedPipelineId}: "${classification.directive_text}"`);
+            console.log(`[skyler-chat] Saved directive for pipeline ${taggedPipelineId}`);
 
             // Also fire event so reasoning engine re-evaluates with the directive
             const { inngest } = await import("@/lib/inngest/client");
@@ -563,7 +563,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
                   workspaceId,
                 },
               });
-              console.log(`[skyler-chat] Behaviour correction detected: "${correctionResult.correction_text}" (vague: ${correctionResult.is_vague})`);
+              console.log(`[skyler-chat] Behaviour correction detected (vague: ${correctionResult.is_vague})`);
             }
           } catch (corrErr) {
             console.error("[skyler-chat] Correction classification failed:", corrErr);
@@ -850,7 +850,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
             user.id,
             conversationId ?? undefined
           );
-          console.log(`[skyler-memory] ${result.action}: ${memory.content.slice(0, 80)}`);
+          console.log(`[skyler-memory] ${result.action}: ${memory.type} memory (${memory.scope})`);
         }
 
         console.log(`[skyler-memory] Extraction complete: ${extracted.length} memories found`);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Mail, ChevronRight, ChevronDown, Check, Pencil, X } from "lucide-react";
+import { Mail, ChevronRight, ChevronDown, Check, Pencil, X, AlertTriangle, RotateCw } from "lucide-react";
 import Image from "next/image";
 import type { PendingAction } from "../types";
 
@@ -29,10 +29,12 @@ export function ApprovalCard({
   action,
   onApprove,
   onReject,
+  onRetry,
 }: {
   action: PendingAction;
   onApprove: (actionId: string, editedBody?: string) => void;
   onReject: (actionId: string, feedback: string) => void;
+  onRetry?: (actionId: string) => void;
 }) {
   // Read the ACTUAL fields the email sender stores
   const originalText =
@@ -48,6 +50,8 @@ export function ApprovalCard({
   const [rejectReason, setRejectReason] = useState("");
   const [sending, setSending] = useState(false);
 
+  const isFailed = action.status === "failed";
+  const errorMessage = action.result?.last_error;
   const subject = action.tool_input?.subject ?? action.description;
   const displayBody = editing ? editBody : originalText;
   const wasEdited = editBody !== originalText;
@@ -56,7 +60,7 @@ export function ApprovalCard({
     <div
       style={{
         background: "var(--sk-card-lead)",
-        border: "1px solid rgba(242,144,61,0.06)",
+        border: `1px solid ${isFailed ? "rgba(229,69,69,0.2)" : "rgba(242,144,61,0.06)"}`,
         borderRadius: 10,
       }}
     >
@@ -66,7 +70,10 @@ export function ApprovalCard({
         className="w-full flex items-center gap-2 text-left"
         style={{ padding: "10px 14px" }}
       >
-        <Mail size={13} style={{ color: "var(--sk-orange)", flexShrink: 0 }} />
+        {isFailed
+          ? <AlertTriangle size={13} style={{ color: "var(--sk-red)", flexShrink: 0 }} />
+          : <Mail size={13} style={{ color: "var(--sk-orange)", flexShrink: 0 }} />
+        }
         <span className="flex-1 truncate" style={{ fontSize: 12, fontWeight: 600, color: "var(--sk-t1)" }}>
           {subject}
         </span>
@@ -112,6 +119,49 @@ export function ApprovalCard({
               }}
             >
               {displayBody || <span style={{ color: "var(--sk-t4)", fontStyle: "italic" }}>No email body</span>}
+            </div>
+          )}
+
+          {/* Error banner for failed sends */}
+          {isFailed && (
+            <div
+              className="flex items-center gap-2"
+              style={{
+                marginTop: 8,
+                padding: "8px 12px",
+                background: "rgba(229,69,69,0.08)",
+                border: "1px solid rgba(229,69,69,0.15)",
+                borderRadius: 8,
+              }}
+            >
+              <AlertTriangle size={13} style={{ color: "var(--sk-red)", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: "var(--sk-red)", flex: 1 }}>
+                Send failed{errorMessage ? `: ${errorMessage}` : ""}
+              </span>
+              <button
+                onClick={async () => {
+                  if (onRetry) {
+                    setSending(true);
+                    await onRetry(action.id);
+                    setSending(false);
+                  }
+                }}
+                disabled={sending}
+                style={{
+                  background: "rgba(229,69,69,0.12)",
+                  color: "var(--sk-red)",
+                  borderRadius: 6,
+                  padding: "4px 12px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  opacity: sending ? 0.5 : 1,
+                }}
+              >
+                <RotateCw size={11} /> {sending ? "Retrying..." : "Retry"}
+              </button>
             </div>
           )}
 

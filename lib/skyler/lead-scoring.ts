@@ -199,6 +199,11 @@ function scoreTimeline(
 
 // ── Generic dimension scoring (for custom dimensions) ───────────────────────
 
+/** Escape special Postgres LIKE/ILIKE characters */
+function escapeIlike(value: string): string {
+  return value.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
 function scoreGeneric(weight: number): DimensionScore {
   const score = Math.round(weight * 0.4);
   return { score, reasoning: "Custom dimension -- scored at baseline (no specific signals)" };
@@ -284,7 +289,7 @@ export async function scoreLead(
       .select("chunk_text, metadata")
       .eq("workspace_id", workspaceId)
       .eq("metadata->>source_type", "hubspot_company")
-      .ilike("chunk_text", `%${companyName}%`)
+      .ilike("chunk_text", `%${escapeIlike(companyName)}%`)
       .limit(1);
 
     if (companyChunks?.[0]) {
@@ -305,7 +310,7 @@ export async function scoreLead(
       .select("chunk_text, metadata")
       .eq("workspace_id", workspaceId)
       .eq("metadata->>source_type", "hubspot_deal")
-      .ilike("chunk_text", `%${firstDeal}%`)
+      .ilike("chunk_text", `%${escapeIlike(firstDeal)}%`)
       .limit(1);
 
     if (dealChunks?.[0]) {
@@ -327,7 +332,7 @@ export async function scoreLead(
       .eq("workspace_id", workspaceId)
       .in("metadata->>source_type", ["gmail_message", "outlook_email"])
       .eq("metadata->>referral_detected", "true")
-      .ilike("chunk_text", `%${contactEmail}%`)
+      .ilike("chunk_text", `%${escapeIlike(contactEmail)}%`)
       .limit(1);
 
     if (emailChunks?.[0]) {
@@ -347,7 +352,7 @@ export async function scoreLead(
       .select("*", { count: "exact", head: true })
       .eq("workspace_id", workspaceId)
       .in("metadata->>source_type", ["gmail_message", "outlook_email"])
-      .ilike("chunk_text", `%${contactName}%`);
+      .ilike("chunk_text", `%${escapeIlike(contactName)}%`);
 
     emailCount = count ?? 0;
 
@@ -357,7 +362,7 @@ export async function scoreLead(
       .select("created_at")
       .eq("workspace_id", workspaceId)
       .in("metadata->>source_type", ["gmail_message", "outlook_email"])
-      .ilike("chunk_text", `%${contactName}%`)
+      .ilike("chunk_text", `%${escapeIlike(contactName)}%`)
       .order("created_at", { ascending: false })
       .limit(1);
 
@@ -375,7 +380,7 @@ export async function scoreLead(
       .select("*", { count: "exact", head: true })
       .eq("workspace_id", workspaceId)
       .in("metadata->>source_type", ["gmail_message", "outlook_email"])
-      .ilike("chunk_text", `%${contactName}%`)
+      .ilike("chunk_text", `%${escapeIlike(contactName)}%`)
       .or("chunk_text.ilike.%asap%,chunk_text.ilike.%urgent%,chunk_text.ilike.%this week%,chunk_text.ilike.%deadline%,chunk_text.ilike.%immediately%");
 
     hasUrgencyLanguage = (urgentCount ?? 0) > 0;

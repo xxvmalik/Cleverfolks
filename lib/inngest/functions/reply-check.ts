@@ -161,13 +161,11 @@ async function checkOutlookReplies(
       // Skip calendar acceptance/decline notifications — not real replies
       const subject = (msg.subject ?? "") as string;
       if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
-        console.log(`[reply-check] Skipping calendar notification from ${senderEmail}: "${subject}"`);
         continue;
       }
 
       // Found a recent email from a pipeline contact — run reply detection
       const content = buildEmailContent(msg);
-      console.log(`[reply-check] Found Outlook email from ${senderEmail}: "${subject}"`);
 
       const result = await detectPipelineReply(db, workspaceId, {
         content,
@@ -181,7 +179,7 @@ async function checkOutlookReplies(
 
       if (result.is_reply) {
         repliesFound++;
-        console.log(`[reply-check] New reply detected from ${senderEmail} → pipeline ${result.pipeline_id}`);
+        console.log(`[reply-check] New Outlook reply detected → pipeline ${result.pipeline_id}`);
       }
     }
   } catch (err) {
@@ -205,22 +203,45 @@ async function checkGmailReplies(
 
   // Search Gmail for recent emails from pipeline contacts
   // Gmail search supports OR and from: operators
-  const fromQuery = contactEmails.slice(0, 10).map((e) => `from:${e}`).join(" OR ");
-  const query = `${fromQuery} newer_than:10m`;
+  // Batch into groups of 10 to stay within Gmail query length limits
+  const BATCH_SIZE = 10;
+  const batches: string[][] = [];
+  for (let i = 0; i < contactEmails.length; i += BATCH_SIZE) {
+    batches.push(contactEmails.slice(i, i + BATCH_SIZE));
+  }
+
+  // Collect all message IDs from all batches, dedup by ID
+  const seenMessageIds = new Set<string>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allMessages: Array<{ id: string }> = [];
 
   try {
-    // Step 1: Search for message IDs
-    const searchResponse = await nango.proxy({
-      method: "GET",
-      baseUrlOverride: "https://gmail.googleapis.com",
-      endpoint: `/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=20`,
-      connectionId,
-      providerConfigKey: "google-mail",
-    });
+    for (const batch of batches) {
+      const fromQuery = batch.map((e) => `from:${e}`).join(" OR ");
+      const query = `${fromQuery} newer_than:10m`;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messageList = (searchResponse as any)?.data?.messages;
-    if (!messageList || messageList.length === 0) return 0;
+      const searchResponse = await nango.proxy({
+        method: "GET",
+        baseUrlOverride: "https://gmail.googleapis.com",
+        endpoint: `/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=20`,
+        connectionId,
+        providerConfigKey: "google-mail",
+      });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const messageList = (searchResponse as any)?.data?.messages;
+      if (messageList) {
+        for (const m of messageList) {
+          if (!seenMessageIds.has(m.id)) {
+            seenMessageIds.add(m.id);
+            allMessages.push(m);
+          }
+        }
+      }
+    }
+
+    if (allMessages.length === 0) return 0;
+    const messageList = allMessages;
 
     // Step 2: Fetch each message's details
     for (const item of messageList) {
@@ -249,13 +270,11 @@ async function checkGmailReplies(
 
         // Skip calendar acceptance/decline notifications
         if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
-          console.log(`[reply-check] Skipping calendar notification from ${senderEmail}: "${subject}"`);
           continue;
         }
 
         // Fetch the snippet as content
         const content = `From: ${fromHeader}\nSubject: ${subject}\n\n${msg.snippet ?? ""}`;
-        console.log(`[reply-check] Found Gmail email from ${senderEmail}: "${subject}"`);
 
         const result = await detectPipelineReply(db, workspaceId, {
           content,
@@ -268,7 +287,7 @@ async function checkGmailReplies(
 
         if (result.is_reply) {
           repliesFound++;
-          console.log(`[reply-check] New reply detected from ${senderEmail} → pipeline ${result.pipeline_id}`);
+          console.log(`[reply-check] New Gmail reply detected → pipeline ${result.pipeline_id}`);
         }
       } catch (msgErr) {
         console.error(`[reply-check] Gmail message fetch failed:`, msgErr instanceof Error ? msgErr.message : msgErr);

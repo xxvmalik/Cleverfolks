@@ -98,8 +98,8 @@ export async function detectPipelineReply(
     const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const now = new Date().toISOString();
 
-    // Build the new conversation thread with the prospect's reply
-    const thread = existingThread;
+    // Build the new conversation thread with the prospect's reply (clone to avoid mutating the original)
+    const thread = [...existingThread];
     // Find the last subject from Skyler's emails for context
     let lastSubject = "";
     for (let i = thread.length - 1; i >= 0; i--) {

@@ -390,7 +390,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
 
         console.log(`[knowledge-profile] GPT-4o-mini response length: ${text.length} chars`);
         if (text.length > 0) {
-          console.log(`[knowledge-profile] GPT-4o-mini response preview: ${text.substring(0, 200)}`);
+          console.log(`[knowledge-profile] GPT-4o-mini response received`);
         } else {
           console.error("[knowledge-profile] GPT-4o-mini returned EMPTY response");
         }
@@ -398,7 +398,7 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         const parsed = extractJSON(text);
 
         if (!parsed) {
-          console.error("[knowledge-profile] Failed to parse JSON from response. Full text:", text.substring(0, 500));
+          console.error("[knowledge-profile] Failed to parse JSON from response (length:", text.length, "chars)");
           return {} as Record<string, unknown>;
         }
 

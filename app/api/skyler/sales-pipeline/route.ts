@@ -56,10 +56,10 @@ export async function GET(req: NextRequest) {
   if (pipelineIds.length > 0) {
     const { data: actions } = await db
       .from("skyler_actions")
-      .select("id, description, tool_input, status, created_at")
+      .select("id, description, tool_input, status, result, created_at")
       .eq("workspace_id", workspaceId)
       .eq("tool_name", "send_email")
-      .eq("status", "pending")
+      .in("status", ["pending", "failed"])
       .order("created_at", { ascending: false });
     pendingActions = actions ?? [];
   }

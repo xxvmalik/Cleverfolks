@@ -63,6 +63,7 @@ export async function POST(
   const body = await req.json().catch(() => ({}));
   const actionId = body.actionId as string | undefined;
   const editedBody = body.editedBody as string | undefined;
+  const isRetry = body.retry === true;
 
   const db = createAdminSupabaseClient();
 
@@ -90,14 +91,15 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Find the pending action for this pipeline
+  // Find the pending (or failed, if retrying) action for this pipeline
+  const validStatuses = isRetry ? ["pending", "failed"] : ["pending"];
   let targetActionId = actionId;
   if (!targetActionId) {
     const { data: actions } = await db
       .from("skyler_actions")
-      .select("id, tool_input")
+      .select("id, tool_input, status")
       .eq("tool_name", "send_email")
-      .eq("status", "pending")
+      .in("status", validStatuses)
       .order("created_at", { ascending: false });
 
     const match = (actions ?? []).find((a) => {
@@ -113,6 +115,15 @@ export async function POST(
 
   if (!targetActionId) {
     return NextResponse.json({ error: "No action ID resolved" }, { status: 404 });
+  }
+
+  // If retrying a failed action, reset it to pending first
+  if (isRetry) {
+    await db
+      .from("skyler_actions")
+      .update({ status: "pending", result: null, updated_at: new Date().toISOString() })
+      .eq("id", targetActionId)
+      .eq("status", "failed");
   }
 
   // ── If user edited the draft, persist edits before sending ──

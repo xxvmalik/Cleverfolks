@@ -204,6 +204,21 @@ export function SkylerWorkspace({
     }
   };
 
+  const handleRetryDraft = async (actionId: string) => {
+    if (!selectedLeadId) return;
+    try {
+      // Reset to pending, then re-approve
+      const res = await fetch(`/api/skyler/sales-pipeline/${selectedLeadId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actionId, retry: true }),
+      });
+      if (res.ok) fetchPipelineData();
+    } catch {
+      // Error handled at card level
+    }
+  };
+
   const handleRejectDraft = async (actionId: string, feedback: string) => {
     if (!selectedLeadId) return;
     try {
@@ -568,6 +583,7 @@ export function SkylerWorkspace({
               meetingsLoading={meetingsLoading}
               onApprove={handleApproveDraft}
               onReject={handleRejectDraft}
+              onRetry={handleRetryDraft}
               onDismissAlert={handleDismissAlert}
               onReplyToRequest={handleReplyToRequest}
               onDismissRequest={handleDismissRequest}

@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     // Look up the tracking record
     const { data: tracker } = await db
       .from("skyler_email_opens")
-      .select("id, pipeline_id, workspace_id, open_count")
+      .select("id, pipeline_id, workspace_id, open_count, last_opened_at")
       .eq("tracking_id", tid)
       .maybeSingle();
 
@@ -45,18 +45,23 @@ export async function GET(req: NextRequest) {
     }
 
     const now = new Date().toISOString();
-    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? req.headers.get("x-real-ip") ?? null;
-    const userAgent = req.headers.get("user-agent") ?? null;
 
-    // Update the tracking record with open data
+    // Dedup: skip if last opened within 60 seconds (prevents inflated counts from
+    // email clients that prefetch images or load the pixel multiple times)
+    if (tracker.last_opened_at) {
+      const lastOpened = new Date(tracker.last_opened_at as string).getTime();
+      if (Date.now() - lastOpened < 60_000) {
+        return pixelResponse();
+      }
+    }
+
+    // Update the tracking record — no IP/UA stored (GDPR-safe)
     await db
       .from("skyler_email_opens")
       .update({
         open_count: (tracker.open_count ?? 0) + 1,
         first_opened_at: tracker.open_count === 0 ? now : undefined,
         last_opened_at: now,
-        ip_address: ip,
-        user_agent: userAgent,
       })
       .eq("id", tracker.id);
 

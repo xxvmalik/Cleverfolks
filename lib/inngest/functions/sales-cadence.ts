@@ -141,6 +141,7 @@ export const salesCadenceScheduler = inngest.createFunction(
       const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
       // Find leads that have exhausted their cadence and still no reply after 48h
+      // Exclude cadence_step=4 — those are handled by the breakup closer (Step 3 above)
       const { data: candidates } = await db
         .from("skyler_sales_pipeline")
         .select("id, workspace_id, contact_email, contact_name, company_name, cadence_step")
@@ -148,6 +149,7 @@ export const salesCadenceScheduler = inngest.createFunction(
         .eq("awaiting_reply", true)
         .lte("last_email_sent_at", fortyEightHoursAgo)
         .is("last_reply_at", null)
+        .neq("cadence_step", 4)
         .limit(50);
 
       if (!candidates || candidates.length === 0) return 0;

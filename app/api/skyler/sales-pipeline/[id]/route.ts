@@ -45,12 +45,12 @@ export async function GET(
     .eq("pipeline_id", id)
     .order("created_at", { ascending: true });
 
-  // Fetch pending actions
+  // Fetch pending + failed actions (failed shown with retry option)
   const { data: actions } = await db
     .from("skyler_actions")
-    .select("id, description, tool_input, status, created_at")
+    .select("id, description, tool_input, status, result, created_at")
     .eq("tool_name", "send_email")
-    .eq("status", "pending");
+    .in("status", ["pending", "failed"]);
 
   const pendingActions = (actions ?? []).filter((a) => {
     const input = a.tool_input as Record<string, unknown>;

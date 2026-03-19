@@ -333,30 +333,33 @@ async function findSentMessageId(
   subject: string,
   to: string
 ): Promise<string | null> {
-  try {
-    // Wait a moment for the message to appear in Sent Items
-    await new Promise((r) => setTimeout(r, 2000));
+  const safeSubject = subject.replace(/'/g, "''").replace(/[\\"%&+#]/g, "");
+  const filter = `subject eq '${safeSubject}'`;
+  const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
 
-    const safeSubject = subject.replace(/'/g, "''").replace(/[\\"%&+#]/g, "");
-    const filter = `subject eq '${safeSubject}'`;
-    const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
+  // Try immediately first, then retry once after 500ms if not found yet
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (attempt === 1) await new Promise((r) => setTimeout(r, 500));
 
-    const response = await nango.proxy({
-      method: "GET",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
-      connectionId,
-      providerConfigKey: "outlook",
-    });
+      const response = await nango.proxy({
+        method: "GET",
+        baseUrlOverride: "https://graph.microsoft.com",
+        endpoint: `/v1.0/me/mailFolders/SentItems/messages?${qs}`,
+        connectionId,
+        providerConfigKey: "outlook",
+      });
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const messages = (response as any)?.data?.value;
-    if (messages && messages.length > 0) {
-      console.log(`[email-sender] Recovered sent message ID: ${messages[0].id}`);
-      return messages[0].id;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const messages = (response as any)?.data?.value;
+      if (messages && messages.length > 0) {
+        return messages[0].id;
+      }
+    } catch (err) {
+      if (attempt === 1) {
+        console.warn(`[email-sender] Could not recover sent message ID:`, err instanceof Error ? err.message : err);
+      }
     }
-  } catch (err) {
-    console.warn(`[email-sender] Could not recover sent message ID:`, err instanceof Error ? err.message : err);
   }
   return null;
 }
@@ -387,7 +390,7 @@ async function findOutlookThreadMessage(
     .replace(/[\\"%&+#]/g, ""); // Strip chars that break OData filters
   const safeEmail = recipientEmail.toLowerCase().replace(/'/g, "''");
 
-  console.log(`[email-sender] Thread search: subject="${baseSubject}" recipient=${safeEmail}`);
+  console.log(`[email-sender] Thread search for Outlook threading`);
 
   // Step 1: Search ALL folders for the most recent message FROM the prospect (received)
   try {
@@ -409,7 +412,7 @@ async function findOutlookThreadMessage(
       return inboxMessages[0].id;
     }
 
-    console.log(`[email-sender] No received message from ${safeEmail} — falling back to Sent Items`);
+    console.log(`[email-sender] No received message found — falling back to Sent Items`);
   } catch (err) {
     console.warn(`[email-sender] Inbox search failed, falling back to Sent Items:`, err);
   }
@@ -434,7 +437,7 @@ async function findOutlookThreadMessage(
       return sentMessages[0].id;
     }
 
-    console.log(`[email-sender] No Sent Item found for subject="${baseSubject}" to=${safeEmail}`);
+    console.log(`[email-sender] No Sent Item found for threading`);
   } catch (err) {
     console.warn(`[email-sender] Sent Items search failed:`, err);
   }
@@ -580,6 +583,7 @@ export async function executeEmailSend(
     await db
       .from("skyler_actions")
       .update({
+        status: "failed",
         result: { last_error: "No email provider connected", failed_at: new Date().toISOString() },
         updated_at: new Date().toISOString(),
       })
@@ -696,11 +700,12 @@ export async function executeEmailSend(
       outlookMessageId = result.outlookMessageId;
     }
   } catch (sendErr) {
-    // Leave action as 'pending' so it stays visible for retry
+    // Mark as failed so the UI can show error state + retry button
     const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
     await db
       .from("skyler_actions")
       .update({
+        status: "failed",
         result: { last_error: errMsg, failed_at: new Date().toISOString() },
         updated_at: new Date().toISOString(),
       })

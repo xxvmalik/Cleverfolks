@@ -15,7 +15,7 @@ export const recallBotChecker = inngest.createFunction(
     id: "recall-bot-checker",
     retries: 1,
   },
-  { cron: "*/2 * * * *" }, // Every 2 minutes
+  { cron: "*/5 * * * *" }, // Every 5 minutes (bots run 30-60 min, no need for 2-min checks)
   async ({ step }) => {
     // Step 1: Find pipeline records with a recall_bot_id but no meeting_outcome yet
     const activeBots = await step.run("find-active-bots", async () => {

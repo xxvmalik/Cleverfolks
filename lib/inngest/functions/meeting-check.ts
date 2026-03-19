@@ -397,13 +397,12 @@ async function fetchCalendlyEvents(
     const scheduledEvents = (eventsResponse as any)?.data?.collection;
     if (!scheduledEvents || scheduledEvents.length === 0) return [];
 
-    // Step 3: For each event, fetch invitees to get their emails
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    for (const event of scheduledEvents) {
-      try {
-        // Extract event UUID from URI (format: https://api.calendly.com/scheduled_events/UUID)
+    // Step 3: Fetch invitees for all events in parallel
+    const inviteeResults = await Promise.allSettled(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      scheduledEvents.map(async (event: any) => {
         const eventUuid = event.uri?.split("/").pop();
-        if (!eventUuid) continue;
+        if (!eventUuid) return null;
 
         const inviteesResponse = await nango.proxy({
           method: "GET",
@@ -415,27 +414,32 @@ async function fetchCalendlyEvents(
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const invitees = (inviteesResponse as any)?.data?.collection;
-        if (!invitees || invitees.length === 0) continue;
+        if (!invitees || invitees.length === 0) return null;
 
         const attendees: string[] = [];
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         for (const inv of invitees) {
           if (inv.email) attendees.push(inv.email.toLowerCase());
         }
+        if (attendees.length === 0) return null;
 
-        if (attendees.length === 0) continue;
-
-        events.push({
+        return {
           eventId: `calendly-${eventUuid}`,
           attendeeEmails: attendees,
           title: event.name ?? "(Calendly Meeting)",
           startTime: event.start_time ?? "",
           endTime: event.end_time ?? "",
           meetingLink: event.location?.join_url ?? undefined,
-          provider: "calendly",
-        });
-      } catch (invErr) {
-        console.error("[meeting-check] Calendly invitee fetch failed:", invErr instanceof Error ? invErr.message : invErr);
+          provider: "calendly" as const,
+        };
+      })
+    );
+
+    for (const result of inviteeResults) {
+      if (result.status === "fulfilled" && result.value) {
+        events.push(result.value);
+      } else if (result.status === "rejected") {
+        console.error("[meeting-check] Calendly invitee fetch failed:", result.reason instanceof Error ? result.reason.message : result.reason);
       }
     }
 

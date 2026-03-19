@@ -20,6 +20,11 @@ export type PendingAction = {
     textBody?: string;
     [key: string]: unknown;
   };
+  result?: {
+    last_error?: string;
+    failed_at?: string;
+    [key: string]: unknown;
+  } | null;
   status: string;
   created_at: string;
 };

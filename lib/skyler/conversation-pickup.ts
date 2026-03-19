@@ -126,7 +126,7 @@ export async function pickupExistingConversation(params: {
       }
     }
 
-    console.log(`[conversation-pickup] Analysed ${emailChunks.length} emails for ${contactEmail} (GPT-4o-mini): ${context.summary.slice(0, 100)}`);
+    console.log(`[conversation-pickup] Analysed ${emailChunks.length} emails (GPT-4o-mini) — summary length: ${context.summary.length} chars`);
     return context;
   } catch (err) {
     console.error("[conversation-pickup] Analysis failed (GPT-4o-mini):", err instanceof Error ? err.message : String(err));
