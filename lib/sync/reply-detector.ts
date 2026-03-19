@@ -13,6 +13,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { inngest } from "@/lib/inngest/client";
 import { extractSenderFromText, extractSenderFromMetadata } from "./email-prefilter";
+import { stageOnReply } from "@/lib/skyler/pipeline-stages";
 
 export type ReplyDetectionResult = {
   is_reply: boolean;
@@ -114,10 +115,9 @@ export async function detectPipelineReply(
     });
 
     const isReEngaging = pipeline.resolution === "no_response";
-    const newStage =
-      pipeline.stage === "initial_outreach" || (pipeline.stage as string).startsWith("follow_up") || isReEngaging
-        ? "replied"
-        : pipeline.stage;
+    const newStage = isReEngaging
+      ? stageOnReply("no_response")
+      : stageOnReply(pipeline.stage as string);
 
     // Build update payload
     const updatePayload: Record<string, unknown> = {

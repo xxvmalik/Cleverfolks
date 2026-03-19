@@ -11,6 +11,7 @@
 
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 import { researchCompany } from "@/lib/skyler/company-research";
 import { getSalesVoice, learnSalesVoice } from "@/lib/skyler/voice-learner";
 import { syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
@@ -97,7 +98,7 @@ export const salesCadenceScheduler = inngest.createFunction(
             resolution_notes: "No reply after full 4-step cadence + 7-day grace period",
             resolved_at: now,
             awaiting_reply: false,
-            stage: "stalled",
+            stage: STAGES.STALLED,
             updated_at: now,
           })
           .eq("id", record.id);

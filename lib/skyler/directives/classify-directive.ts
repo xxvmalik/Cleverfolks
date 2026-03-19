@@ -41,9 +41,48 @@ Respond with JSON: { "is_directive": true/false, "directive_text": "cleaned up d
 
 If it IS a directive, clean up the text to be a clear instruction (remove filler words, make it actionable).`;
 
+// ── Keyword fast path ──────────────────────────────────────────────────────
+// Handles ~80% of cases without an AI call. Falls through to LLM for ambiguous messages.
+
+const DIRECTIVE_PATTERNS = [
+  /\b(always|never|don'?t|do not|make sure|ensure|stop|avoid|focus on|push for|hold off|wait until|prioritize)\b/i,
+  /\b(from now on|going forward|in future|keep|maintain|switch to|change to)\b/i,
+];
+
+const QUESTION_PATTERNS = [
+  /^(what|how|when|where|who|why|which|can you|could you|is there|are there|has |have |did |does |do )\b/i,
+  /\?$/,
+  /^(show me|tell me|give me|list|summarize|check|look at|what'?s)\b/i,
+];
+
+function tryKeywordClassify(message: string): ClassificationResult | null {
+  const trimmed = message.trim();
+
+  // Clear questions — not directives
+  if (QUESTION_PATTERNS.some((p) => p.test(trimmed))) {
+    return { is_directive: false, directive_text: null };
+  }
+
+  // Clear directive language
+  if (DIRECTIVE_PATTERNS.some((p) => p.test(trimmed)) && trimmed.length > 15) {
+    // Clean up: remove filler, capitalize
+    const cleaned = trimmed
+      .replace(/^(hey|ok|okay|please|can you|could you|i want you to|i need you to)\s*/i, "")
+      .trim();
+    return { is_directive: true, directive_text: cleaned || trimmed };
+  }
+
+  // Ambiguous — fall through to LLM
+  return null;
+}
+
 export async function classifyDirective(
   userMessage: string
 ): Promise<ClassificationResult> {
+  // Try keyword fast path first (no AI cost)
+  const keywordResult = tryKeywordClassify(userMessage);
+  if (keywordResult !== null) return keywordResult;
+
   try {
     return await classifyFast<ClassificationResult>(
       "classify_directive",

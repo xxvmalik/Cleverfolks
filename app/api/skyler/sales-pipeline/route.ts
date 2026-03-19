@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { inngest } from "@/lib/inngest/client";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 async function resolveWorkspaceId(
   supabase: Awaited<ReturnType<typeof createServerSupabaseClient>>,
@@ -166,7 +167,7 @@ export async function POST(req: NextRequest) {
       contact_email: contactEmail,
       company_name: companyName ?? null,
       company_id: companyId ?? null,
-      stage: "initial_outreach",
+      stage: STAGES.INITIAL_OUTREACH,
     })
     .select("id")
     .single();

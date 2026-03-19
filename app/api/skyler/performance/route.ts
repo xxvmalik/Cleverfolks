@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 export async function GET(req: NextRequest) {
   const supabase = await createServerSupabaseClient();
@@ -39,12 +40,12 @@ export async function GET(req: NextRequest) {
 
   // meeting_booked is now a STAGE — count unique leads that reached meeting stage
   const meetingsBooked = all.filter((r) =>
-    r.stage === "meeting_booked" || r.stage === "demo_booked" || r.stage === "follow_up_meeting"
+    r.stage === STAGES.MEETING_BOOKED || r.stage === STAGES.DEMO_BOOKED || r.stage === STAGES.FOLLOW_UP_MEETING
     || r.resolution === "meeting_booked" || r.resolution === "demo_booked" // legacy
   ).length;
   const paymentsSecured = all.filter((r) => r.resolution === "payment_secured").length;
-  const dealsWon = all.filter((r) => r.stage === "closed_won" || r.resolution === "closed_won").length;
-  const dealsLost = all.filter((r) => r.stage === "disqualified" || r.stage === "closed_lost" || r.resolution === "closed_lost").length;
+  const dealsWon = all.filter((r) => r.stage === STAGES.CLOSED_WON || r.resolution === "closed_won").length;
+  const dealsLost = all.filter((r) => r.stage === STAGES.DISQUALIFIED || r.stage === STAGES.CLOSED_LOST || r.resolution === "closed_lost").length;
 
   const replyRate = totalEmailsSent > 0 ? Math.round((totalReplied / totalEmailsSent) * 100) : 0;
   const conversionRate = totalLeads > 0 ? Math.round((dealsWon / totalLeads) * 100) : 0;

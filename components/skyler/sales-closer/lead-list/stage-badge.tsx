@@ -1,55 +1,31 @@
 "use client";
 
-const STAGE_LABELS: Record<string, string> = {
-  initial_outreach: "Initial Outreach",
-  follow_up_1: "Follow Up 1",
-  follow_up_2: "Follow Up 2",
-  follow_up_3: "Follow Up 3",
-  replied: "Replied",
-  pending_clarification: "Pending Clarification",
-  negotiation: "Negotiation",
-  demo_booked: "Demo Booked",
-  proposal: "Proposal",
-  payment_secured: "Payment Secured",
-  closed_won: "Closed Won",
-  meeting_booked: "Meeting Booked",
-  disqualified: "Disqualified",
-  closed_lost: "Closed Lost",
-  no_response: "No Response",
-  stalled: "Stalled",
-};
+import {
+  getPhase,
+  getStageLabel,
+  isResolvedPositive,
+  isResolvedNegative,
+  STAGES,
+  type Phase,
+} from "@/lib/skyler/pipeline-stages";
 
 function getPhaseColor(stage: string): string {
-  // Phase 1: Prospecting
-  if (["initial_outreach", "follow_up_1", "follow_up_2", "follow_up_3"].includes(stage)) {
-    return "#0086FF";
-  }
-  // Phase 2: Engaged
-  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal", "meeting_booked", "follow_up_meeting"].includes(stage)) {
-    return "#F2903D";
-  }
-  // Phase 3: Resolved — positive
-  if (["payment_secured", "closed_won"].includes(stage)) {
-    return "#3ECF8E";
-  }
-  // Phase 3: Resolved — negative
-  if (["disqualified", "closed_lost", "no_response"].includes(stage)) {
-    return "#E54545";
-  }
-  // Phase 3: Resolved — neutral
-  if (stage === "stalled") return "#C6E84B";
+  const phase = getPhase(stage);
+  if (phase === "prospecting") return "#0086FF";
+  if (phase === "engaged") return "#F2903D";
+  if (isResolvedPositive(stage)) return "#3ECF8E";
+  if (isResolvedNegative(stage)) return "#E54545";
+  if (stage === STAGES.STALLED) return "#C6E84B";
   return "#F2903D";
 }
 
-export function getPhaseForStage(stage: string): "prospecting" | "engaged" | "resolved" {
-  if (["initial_outreach", "follow_up_1", "follow_up_2", "follow_up_3"].includes(stage)) return "prospecting";
-  if (["replied", "pending_clarification", "negotiation", "demo_booked", "proposal", "meeting_booked", "follow_up_meeting"].includes(stage)) return "engaged";
-  return "resolved";
+export function getPhaseForStage(stage: string): Phase {
+  return getPhase(stage);
 }
 
 export function StageBadge({ stage }: { stage: string }) {
   const color = getPhaseColor(stage);
-  const label = STAGE_LABELS[stage] ?? stage.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const label = getStageLabel(stage);
 
   return (
     <span

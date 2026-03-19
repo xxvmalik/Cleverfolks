@@ -18,6 +18,7 @@ import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { syncReplyToHubSpot, syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 import { checkAndEscalate } from "@/lib/skyler/escalation";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 // Reply intent classification type
 type ReplyIntent = "positive_interest" | "objection" | "meeting_accept" | "opt_out";
@@ -105,7 +106,7 @@ export const salesCloserWorkflow = inngest.createFunction(
           contact_email: contactEmail,
           company_name: companyName,
           company_id: companyId ?? null,
-          stage: "initial_outreach",
+          stage: STAGES.INITIAL_OUTREACH,
           lead_score: leadScore ?? null,
           lead_score_id: leadScoreId ?? null,
         })
@@ -319,7 +320,7 @@ export const salesCloserWorkflow = inngest.createFunction(
           contact_name: pipeline.contact_name || contactName,
           contact_email: pipeline.contact_email || contactEmail,
           company_name: pipeline.company_name || companyName,
-          stage: "initial_outreach",
+          stage: STAGES.INITIAL_OUTREACH,
           cadence_step: 0,
           conversation_thread: [],
         },
@@ -645,7 +646,7 @@ ${replyContent.slice(0, 2000)}`,
             resolution: "disqualified",
             resolution_notes: `Opt-out: ${classification.reasoning}`,
             resolved_at: now,
-            stage: "disqualified",
+            stage: STAGES.DISQUALIFIED,
             awaiting_reply: false,
             next_followup_at: null,
             conversation_thread: thread,
@@ -706,7 +707,7 @@ ${replyContent.slice(0, 2000)}`,
         const { data: updated } = await db
           .from("skyler_sales_pipeline")
           .update({
-            stage: "meeting_booked",
+            stage: STAGES.MEETING_BOOKED,
             awaiting_reply: false,
             next_followup_at: null,
             cadence_paused: true, // Pause follow-ups during meeting stage
@@ -714,7 +715,7 @@ ${replyContent.slice(0, 2000)}`,
           })
           .eq("id", pipelineId)
           .is("resolution", null)
-          .neq("stage", "meeting_booked")
+          .neq("stage", STAGES.MEETING_BOOKED)
           .select("id")
           .maybeSingle();
 
@@ -855,7 +856,7 @@ ${replyContent.slice(0, 2000)}`,
           contact_name: pipeline.contact_name as string,
           contact_email: pipeline.contact_email as string,
           company_name: pipeline.company_name as string,
-          stage: "replied",
+          stage: STAGES.REPLIED,
           cadence_step: pipeline.cadence_step as number,
           conversation_thread: thread,
         },
@@ -1062,7 +1063,7 @@ export const handleClarificationReceived = inngest.createFunction(
         .update({
           user_context: userContext,
           skyler_note: { ...existingNote, resolved: true, resolved_at: new Date().toISOString() },
-          stage: "initial_outreach",
+          stage: STAGES.INITIAL_OUTREACH,
           company_research: null, // Force fresh research with new context
           research_updated_at: null,
           updated_at: new Date().toISOString(),

@@ -7,6 +7,7 @@
 import { classifyWithGPT4oMini } from "@/lib/openai-client";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 export type ConversationContext = {
   summary: string;
@@ -46,6 +47,22 @@ export async function pickupExistingConversation(params: {
   createPipelineRecord?: boolean;
 }): Promise<ConversationContext> {
   const { workspaceId, contactEmail, contactName, db, createPipelineRecord } = params;
+
+  // Check if we already have a cached analysis for this contact
+  const { data: existingPipeline } = await db
+    .from("skyler_sales_pipeline")
+    .select("id, conversation_context")
+    .eq("workspace_id", workspaceId)
+    .eq("contact_email", contactEmail)
+    .maybeSingle();
+
+  if (existingPipeline?.conversation_context) {
+    const cached = existingPipeline.conversation_context as ConversationContext;
+    if (cached.summary) {
+      console.log(`[conversation-pickup] Using cached analysis for ${contactEmail}`);
+      return cached;
+    }
+  }
 
   // Search document_chunks for all emails to/from this contact
   const { data: emailChunks } = await db
@@ -87,13 +104,13 @@ export async function pickupExistingConversation(params: {
     context.email_count = emailChunks.length;
 
     // Determine initial stage based on conversation state
-    let stage = "initial_outreach";
+    let stage: string = STAGES.INITIAL_OUTREACH;
     if (context.awaiting_response) {
-      stage = "negotiation"; // We need to respond
+      stage = STAGES.NEGOTIATION;
     } else if (emailChunks.length >= 3) {
-      stage = "follow_up_2";
+      stage = STAGES.FOLLOW_UP_2;
     } else if (emailChunks.length >= 1) {
-      stage = "follow_up_1";
+      stage = STAGES.FOLLOW_UP_1;
     }
 
     // Optionally create a pipeline record with context
@@ -124,6 +141,14 @@ export async function pickupExistingConversation(params: {
         });
         console.log(`[conversation-pickup] Created pipeline record for ${contactEmail} at stage ${stage}`);
       }
+    }
+
+    // Cache the analysis on the pipeline record (if it exists) to avoid re-analyzing
+    if (existingPipeline?.id) {
+      await db
+        .from("skyler_sales_pipeline")
+        .update({ conversation_context: context, updated_at: new Date().toISOString() })
+        .eq("id", existingPipeline.id);
     }
 
     console.log(`[conversation-pickup] Analysed ${emailChunks.length} emails (GPT-4o-mini) — summary length: ${context.summary.length} chars`);

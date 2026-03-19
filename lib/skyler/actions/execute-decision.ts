@@ -15,6 +15,7 @@ import type { PipelineRecord } from "@/lib/skyler/reasoning/context-assembler";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 import { inngest } from "@/lib/inngest/client";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -234,7 +235,7 @@ async function executeCloseWon(ctx: ExecutionContext): Promise<ExecutionResult> 
     .from("skyler_sales_pipeline")
     .update({
       resolution: "won",
-      stage: "closed_won",
+      stage: STAGES.CLOSED_WON,
       updated_at: new Date().toISOString(),
     })
     .eq("id", pipeline.id);
@@ -266,7 +267,7 @@ async function executeCloseLost(ctx: ExecutionContext): Promise<ExecutionResult>
     .from("skyler_sales_pipeline")
     .update({
       resolution: "lost",
-      stage: "closed_lost",
+      stage: STAGES.CLOSED_LOST,
       updated_at: new Date().toISOString(),
     })
     .eq("id", pipeline.id);

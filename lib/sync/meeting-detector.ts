@@ -10,6 +10,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 
 export type MeetingRecord = {
@@ -67,7 +68,7 @@ export async function detectPipelineMeeting(
     const { data: updated, error: updateErr } = await db
       .from("skyler_sales_pipeline")
       .update({
-        stage: "meeting_booked",
+        stage: STAGES.MEETING_BOOKED,
         meeting_event_id: meeting.eventId,
         meeting_details: {
           title: meeting.title,
@@ -84,7 +85,7 @@ export async function detectPipelineMeeting(
       })
       .eq("id", pipeline.id)
       .is("resolution", null)
-      .neq("stage", "meeting_booked") // Don't re-detect same meeting
+      .neq("stage", STAGES.MEETING_BOOKED) // Don't re-detect same meeting
       .select("id")
       .maybeSingle();
 

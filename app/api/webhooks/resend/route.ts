@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 type ResendWebhookPayload = {
   type: string;
@@ -80,7 +81,7 @@ export async function POST(req: NextRequest) {
     updates.emails_clicked = (pipeline.emails_clicked ?? 0) + 1;
   } else if (eventType === "bounced") {
     // Flag as problem -- email didn't reach the contact
-    updates.stage = "stalled";
+    updates.stage = STAGES.STALLED;
     updates.resolution_notes = "Email bounced -- invalid or inactive address";
     console.warn(`[resend-webhook] Email bounced for pipeline ${pipeline.id}`);
   }

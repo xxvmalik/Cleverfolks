@@ -24,6 +24,7 @@ import { reasonAboutEvent } from "@/lib/skyler/reasoning/skyler-reasoning";
 import { checkGuardrails } from "@/lib/skyler/reasoning/guardrail-engine";
 import { executeDecision, type ExecutionContext } from "@/lib/skyler/actions/execute-decision";
 import { assembleReasoningContext } from "@/lib/skyler/reasoning/context-assembler";
+import { STAGES } from "@/lib/skyler/pipeline-stages";
 import { chunkAndEmbedTranscript } from "@/lib/skyler/meetings/transcript-chunker";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -321,7 +322,7 @@ ${transcriptText.slice(0, 12000)}`,
             resolution: "closed_won",
             resolution_notes: `Won in meeting: ${summary.reasoning}`,
             resolved_at: now,
-            stage: "closed_won",
+            stage: STAGES.CLOSED_WON,
             meeting_outcome: meetingOutcome,
             action_notes: actionNotes,
             awaiting_reply: false,
@@ -352,7 +353,7 @@ ${transcriptText.slice(0, 12000)}`,
         await db
           .from("skyler_sales_pipeline")
           .update({
-            stage: "proposal",
+            stage: STAGES.PROPOSAL,
             meeting_outcome: meetingOutcome,
             action_notes: actionNotes,
             awaiting_reply: false,
@@ -377,7 +378,7 @@ ${transcriptText.slice(0, 12000)}`,
             resolution: "closed_lost",
             resolution_notes: `Lost in meeting: ${summary.reasoning}`,
             resolved_at: now,
-            stage: "closed_lost",
+            stage: STAGES.CLOSED_LOST,
             meeting_outcome: meetingOutcome,
             action_notes: actionNotes,
             awaiting_reply: false,
@@ -407,7 +408,7 @@ ${transcriptText.slice(0, 12000)}`,
         await db
           .from("skyler_sales_pipeline")
           .update({
-            stage: "follow_up_meeting",
+            stage: STAGES.FOLLOW_UP_MEETING,
             meeting_outcome: meetingOutcome,
             action_notes: actionNotes,
             awaiting_reply: false,

@@ -750,12 +750,8 @@ export async function executeEmailSend(
     ? new Date(Date.now() + nextCadence.delay_days * 86400000).toISOString()
     : null;
 
-  const stageMap: Record<number, string> = {
-    1: "initial_outreach",
-    2: "follow_up_1",
-    3: "follow_up_2",
-    4: "follow_up_3",
-  };
+  const { CADENCE_STEP_STAGE } = await import("@/lib/skyler/pipeline-stages");
+  const stageMap = CADENCE_STEP_STAGE;
 
   // Append to conversation thread — store outlook_message_id for deterministic threading
   const thread = (pipeline?.conversation_thread ?? []) as Array<Record<string, unknown>>;

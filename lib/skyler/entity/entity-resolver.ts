@@ -174,11 +174,40 @@ async function resolveNamedEntity(
   message: string
 ): Promise<ResolvedEntity | null> {
   // Quick check: does the message look like it mentions a person or company?
-  // Skip named entity extraction for generic messages
   if (message.length < 10 || !/[A-Z]/.test(message)) return null;
 
+  // ── Keyword fast path: extract capitalized words and match against pipeline ──
+  // Avoids an AI call when the user types a name that exactly matches a lead
+  const capitalizedWords = message.match(/\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*/g);
+  if (capitalizedWords && capitalizedWords.length > 0) {
+    for (const candidate of capitalizedWords) {
+      if (candidate.length < 3) continue;
+      // Skip common English words that happen to start a sentence
+      if (/^(The|This|That|What|When|Where|How|Who|Why|Can|Could|Would|Should|Please|Also|Just|But|And|From|With|For|Not|Yes|No|Hey|Hi|Hello|Thanks|Sure)$/i.test(candidate)) continue;
+
+      const { data: matches } = await db
+        .from("skyler_sales_pipeline")
+        .select("id, contact_name, company_name, contact_email")
+        .eq("workspace_id", workspaceId)
+        .is("resolution", null)
+        .or(`contact_name.ilike.%${candidate}%,company_name.ilike.%${candidate}%`)
+        .limit(5);
+
+      if (matches && matches.length === 1) {
+        return {
+          entityId: matches[0].id,
+          entityName: matches[0].contact_name ?? candidate,
+          companyName: matches[0].company_name ?? "",
+          contactEmail: matches[0].contact_email ?? "",
+          confidence: 0.85,
+          source: "named_entity",
+        };
+      }
+    }
+  }
+
+  // ── LLM fallback: extract names using GPT-4o-mini ──
   try {
-    // Extract names using GPT-4o-mini
     const result = await routedLLMCall({
       task: "extract-entity-names",
       tier: "fast",
