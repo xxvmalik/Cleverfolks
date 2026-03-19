@@ -5,7 +5,7 @@ import Image from "next/image";
 import { Search, ChevronDown, Mail, Mic, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
-import { ActivitySteps } from "@/components/skyler/sales-closer/shared/activity-steps";
+import { ActivitySteps } from "@/components/skyler/shared/activity-steps";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

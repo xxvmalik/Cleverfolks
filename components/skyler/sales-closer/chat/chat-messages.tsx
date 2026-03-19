@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { HealthDot } from "../shared/health-dot";
-import { ActivitySteps } from "../shared/activity-steps";
+import { ActivitySteps } from "@/components/skyler/shared/activity-steps";
 import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
 
 export function ChatMessages({
