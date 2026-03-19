@@ -70,6 +70,7 @@ export function SkylerWorkspace({
   const [chatInput, setChatInput] = useState("");
   const [taggedLead, setTaggedLead] = useState<TaggedLead | null>(null);
   const [streamingActivities, setStreamingActivities] = useState<string[]>([]);
+  const [activitiesDone, setActivitiesDone] = useState(false);
 
   // Ref to track activeConversationId inside SSE handler
   const activeConvIdRef = useRef(activeConversationId);
@@ -339,6 +340,7 @@ export function SkylerWorkspace({
     setIsStreaming(true);
     setStreamingContent("");
     setStreamingActivities([]);
+    setActivitiesDone(false);
 
     let currentConversationId = activeConvIdRef.current;
 
@@ -414,7 +416,7 @@ export function SkylerWorkspace({
                 },
               ]);
               setStreamingContent("");
-              // Activities stay visible until the user's next message (cleared in handleSendMessage)
+              setActivitiesDone(true);
               fetchConversations();
               // Refresh pipeline in case chat triggered any actions
               fetchPipelineData();
@@ -608,6 +610,7 @@ export function SkylerWorkspace({
               conversations={conversations}
               streamingContent={streamingContent}
               streamingActivities={streamingActivities}
+              activitiesDone={activitiesDone}
               inputValue={chatInput}
               onInputChange={setChatInput}
               onSend={handleSendMessage}

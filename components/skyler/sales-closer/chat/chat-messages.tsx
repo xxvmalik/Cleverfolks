@@ -94,11 +94,13 @@ export function ChatMessages({
   messages,
   streamingContent,
   streamingActivities,
+  activitiesDone,
   taggedLeadName,
 }: {
   messages: ChatMessage[];
   streamingContent: string;
   streamingActivities: string[];
+  activitiesDone: boolean;
   taggedLeadName?: string;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
@@ -107,8 +109,8 @@ export function ChatMessages({
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent, streamingActivities]);
 
-  // Activities are "complete" once text starts streaming (i.e. Skyler is writing the response)
-  const activitiesComplete = streamingContent.length > 0;
+  // Activities are "complete" once text starts streaming OR the response is done
+  const activitiesComplete = streamingContent.length > 0 || activitiesDone;
 
   return (
     <div className="flex-1 overflow-y-auto px-3 py-3">

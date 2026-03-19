@@ -592,6 +592,9 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
       }
 
       try {
+        // Emit initial activity immediately so the frontend shows thinking state
+        send({ type: "activity", action: "Thinking..." });
+
         // ── Step 1: Conversation management ─────────────────────────────
         if (!conversationId) {
           isNewConversation = true;

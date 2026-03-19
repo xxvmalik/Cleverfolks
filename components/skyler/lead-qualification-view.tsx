@@ -207,6 +207,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [streamingActivities, setStreamingActivities] = useState<string[]>([]);
+  const [activitiesDone, setActivitiesDone] = useState(false);
   const [promptedLead, setPromptedLead] = useState<Lead | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -300,6 +301,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
     setIsStreaming(true);
     setStreamingContent("");
     setStreamingActivities([]);
+    setActivitiesDone(false);
 
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -358,6 +360,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
                 { id: `assistant-${Date.now()}`, role: "assistant", content: accumulatedText },
               ]);
               setStreamingContent("");
+              setActivitiesDone(true);
             } else if (event.type === "error") {
               setChatMessages((prev) => [
                 ...prev,
@@ -579,7 +582,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
                 {streamingActivities.length > 0 && (
                   <LQActivitySteps
                     activities={streamingActivities}
-                    isComplete={streamingContent.length > 0}
+                    isComplete={streamingContent.length > 0 || activitiesDone}
                   />
                 )}
 
