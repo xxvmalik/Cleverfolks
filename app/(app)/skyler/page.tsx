@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { getUserWorkspaces } from "@/lib/workspace";
-import { SkylerClient } from "@/components/skyler/skyler-client";
+import { SkylerWorkspace } from "@/components/skyler/sales-closer/skyler-workspace";
 
 export const metadata = { title: "Skyler — Sales Assistant" };
 
@@ -30,7 +30,7 @@ export default async function SkylerPage() {
     "User";
 
   return (
-    <SkylerClient
+    <SkylerWorkspace
       workspaceId={ws.id}
       userName={displayName}
       companyName={ws.name}

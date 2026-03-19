@@ -52,6 +52,75 @@
   }
 }
 
+/* ── Skyler Theme ─────────────────────────────────────────────────────── */
+
+.skyler-theme {
+  --sk-bg: #0E0E0E;
+  --sk-surface: #191919;
+  --sk-nav: #111111;
+  --sk-card: #212121;
+  --sk-card-lead: #211F1E;
+  --sk-border: rgba(255,255,255,0.06);
+  --sk-blue: #0086FF;
+  --sk-orange: #F2903D;
+  --sk-green: #3ECF8E;
+  --sk-red: #E54545;
+  --sk-lime: #C6E84B;
+  --sk-t1: #FFFFFF;
+  --sk-t2: rgba(255,255,255,0.55);
+  --sk-t3: rgba(255,255,255,0.3);
+  --sk-t4: rgba(255,255,255,0.18);
+  --sk-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sk-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  background: var(--sk-bg);
+  color: var(--sk-t1);
+}
+
+.skyler-theme * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.06) transparent;
+}
+.skyler-theme *::-webkit-scrollbar { width: 4px; }
+.skyler-theme *::-webkit-scrollbar-track { background: transparent; }
+.skyler-theme *::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+.skyler-theme *::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); }
+.skyler-theme *:hover::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); }
+
+/* Skyler animations */
+@keyframes sk-fadeSlideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sk-contentIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sk-messageIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sk-alertDismiss {
+  to { opacity: 0; transform: translateX(20px); height: 0; padding: 0; margin: 0; border-width: 0; }
+}
+@keyframes sk-shimmer {
+  from { background-position: -200px 0; }
+  to { background-position: 200px 0; }
+}
+
+.sk-skeleton {
+  background: linear-gradient(90deg, #211F1E 25%, #2a2a2a 50%, #211F1E 75%);
+  background-size: 400px 100%;
+  animation: sk-shimmer 1.2s infinite;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skyler-theme * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 @keyframes slideInRight {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
