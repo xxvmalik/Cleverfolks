@@ -109,6 +109,7 @@ export type DirectiveItem = {
 export type MeetingRecord = {
   id: string;
   bot_id?: string;
+  title?: string;
   meeting_date: string;
   meeting_url?: string;
   summary?: string;

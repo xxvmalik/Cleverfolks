@@ -181,7 +181,7 @@ export function MeetingsTab({
                 style={{ padding: "10px 14px" }}
               >
                 <span className="flex-1" style={{ fontSize: 12, fontWeight: 700, color: "var(--sk-t1)" }}>
-                  {m.summary?.split(".")[0] ?? "Meeting"}
+                  {m.title ?? "Meeting"}
                 </span>
                 <span style={{ fontSize: 10, color: "var(--sk-t4)" }}>{formatMeetingDate(m.meeting_date)}</span>
                 {expanded ? <ChevronDown size={13} style={{ color: "var(--sk-t4)" }} /> : <ChevronRight size={13} style={{ color: "var(--sk-t4)" }} />}

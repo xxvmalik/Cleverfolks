@@ -81,7 +81,38 @@ export async function GET(req: NextRequest) {
     .eq("lead_id", pipelineId)
     .order("meeting_date", { ascending: false });
 
-  let past = pastMeetings ?? [];
+  // Look up calendar event titles for past meetings (by lead_id, ordered by start_time desc to match)
+  const { data: pastCalEvents } = await db
+    .from("calendar_events")
+    .select("id, title, start_time, recall_bot_id")
+    .eq("lead_id", pipelineId)
+    .order("start_time", { ascending: false });
+
+  // Build a title lookup: match by recall_bot_id first, then by closest date
+  const calEvents = pastCalEvents ?? [];
+  function findMeetingTitle(meeting: { bot_id?: string | null; meeting_date?: string | null }): string | null {
+    if (meeting.bot_id) {
+      const byBot = calEvents.find((ce) => ce.recall_bot_id === meeting.bot_id);
+      if (byBot) return byBot.title;
+    }
+    if (meeting.meeting_date && calEvents.length > 0) {
+      const mDate = new Date(meeting.meeting_date).getTime();
+      let closest = calEvents[0];
+      let closestDiff = Math.abs(new Date(closest.start_time).getTime() - mDate);
+      for (const ce of calEvents) {
+        const diff = Math.abs(new Date(ce.start_time).getTime() - mDate);
+        if (diff < closestDiff) { closest = ce; closestDiff = diff; }
+      }
+      // Only match if within 24 hours
+      if (closestDiff < 86400000) return closest.title;
+    }
+    return null;
+  }
+
+  let past = (pastMeetings ?? []).map((m) => ({
+    ...m,
+    title: findMeetingTitle(m),
+  }));
 
   // Fallback: if no meeting_transcripts rows exist but pipeline has meeting data
   // (old system stored transcripts directly on skyler_sales_pipeline fields)
@@ -101,6 +132,7 @@ export async function GET(req: NextRequest) {
     past = [{
       id: `pipeline-${pipelineId}`,
       bot_id: pipeline.recall_bot_id ?? null,
+      title: details?.title ?? null,
       meeting_date: details?.start ?? pipeline.meeting_event_id,
       meeting_url: details?.link ?? null,
       summary,
