@@ -53,12 +53,41 @@ export async function GET(
 
   const { data, error } = await db
     .from("meeting_transcripts")
-    .select("raw_transcript")
+    .select("raw_transcript, lead_id")
     .eq("id", transcriptId)
     .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // If raw_transcript is null, fall back to pipeline record's real-time transcript
+  if (!data.raw_transcript) {
+    const leadId = (data as { lead_id?: string }).lead_id;
+    if (leadId) {
+      const { data: pipeline } = await db
+        .from("skyler_sales_pipeline")
+        .select("meeting_transcript")
+        .eq("id", leadId)
+        .maybeSingle();
+
+      if (pipeline?.meeting_transcript) {
+        const rawText = pipeline.meeting_transcript as string;
+        const fallbackLines = rawText.split("\n").filter(Boolean).map((line) => {
+          const colonIdx = line.indexOf(": ");
+          if (colonIdx > 0) {
+            return {
+              speaker: line.slice(0, colonIdx),
+              text: line.slice(colonIdx + 2),
+              timestamp: null,
+            };
+          }
+          return { speaker: "Unknown", text: line, timestamp: null };
+        });
+        return NextResponse.json({ transcript: fallbackLines });
+      }
+    }
+    return NextResponse.json({ transcript: [] });
+  }
 
   // Format raw transcript into readable lines
   const raw = data.raw_transcript as Array<{
