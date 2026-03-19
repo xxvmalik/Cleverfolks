@@ -16,6 +16,8 @@ export type PendingAction = {
     to?: string;
     subject?: string;
     body?: string;
+    htmlBody?: string;
+    textBody?: string;
     [key: string]: unknown;
   };
   status: string;

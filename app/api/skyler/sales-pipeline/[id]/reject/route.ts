@@ -31,6 +31,28 @@ export async function POST(
 
   const db = createAdminSupabaseClient();
 
+  // ── Security: verify user belongs to the workspace that owns this pipeline record ──
+  const { data: pipelineRecord } = await db
+    .from("skyler_sales_pipeline")
+    .select("workspace_id")
+    .eq("id", pipelineId)
+    .single();
+
+  if (!pipelineRecord) {
+    return NextResponse.json({ error: "Pipeline record not found" }, { status: 404 });
+  }
+
+  const { data: membership } = await supabase
+    .from("workspace_memberships")
+    .select("id")
+    .eq("workspace_id", pipelineRecord.workspace_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!membership) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   // Find the pending action
   let targetActionId = actionId;
   if (!targetActionId) {

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Mail, ChevronRight, ChevronDown, Check, Pencil, X } from "lucide-react";
+import Image from "next/image";
 import type { PendingAction } from "../types";
 
 function timeAgo(ts: string): string {
@@ -11,24 +12,45 @@ function timeAgo(ts: string): string {
   return `${hours}h ago`;
 }
 
+/** Strip basic HTML tags for plain-text display in the preview */
+function stripHtml(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .trim();
+}
+
 export function ApprovalCard({
   action,
   onApprove,
   onReject,
 }: {
   action: PendingAction;
-  onApprove: (actionId: string) => void;
+  onApprove: (actionId: string, editedBody?: string) => void;
   onReject: (actionId: string, feedback: string) => void;
 }) {
+  // Read the ACTUAL fields the email sender stores
+  const originalText =
+    action.tool_input?.textBody ??
+    (action.tool_input?.htmlBody ? stripHtml(action.tool_input.htmlBody) : "") ??
+    action.tool_input?.body ??
+    "";
+
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [editBody, setEditBody] = useState(action.tool_input?.body ?? "");
+  const [editBody, setEditBody] = useState(originalText);
   const [rejecting, setRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [sending, setSending] = useState(false);
 
   const subject = action.tool_input?.subject ?? action.description;
-  const body = editing ? editBody : (action.tool_input?.body ?? "");
+  const displayBody = editing ? editBody : originalText;
+  const wasEdited = editBody !== originalText;
 
   return (
     <div
@@ -65,7 +87,7 @@ export function ApprovalCard({
                 width: "100%",
                 minHeight: 160,
                 background: "rgba(0,0,0,0.3)",
-                border: "1px solid var(--sk-border)",
+                border: "1px solid var(--sk-blue)",
                 borderRadius: 8,
                 padding: "14px 16px",
                 fontSize: 11,
@@ -89,34 +111,41 @@ export function ApprovalCard({
                 overflowY: "auto",
               }}
             >
-              {body}
+              {displayBody || <span style={{ color: "var(--sk-t4)", fontStyle: "italic" }}>No email body</span>}
             </div>
           )}
 
-          {/* Reject reason input */}
+          {/* Reject reason flow — Skyler asks why */}
           {rejecting && (
-            <input
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Tell Skyler why..."
-              autoFocus
-              style={{
-                width: "100%",
-                marginTop: 8,
-                background: "rgba(0,0,0,0.2)",
-                border: "1px solid rgba(229,69,69,0.2)",
-                borderRadius: 6,
-                padding: "7px 10px",
-                fontSize: 11,
-                color: "var(--sk-t2)",
-                outline: "none",
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && rejectReason.trim()) {
-                  onReject(action.id, rejectReason.trim());
-                }
-              }}
-            />
+            <div style={{ marginTop: 8 }}>
+              <div className="flex items-start gap-2 mb-2" style={{ padding: "8px 10px", background: "rgba(242,144,61,0.04)", borderRadius: 8 }}>
+                <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={20} height={20} className="rounded-full flex-shrink-0 mt-0.5 object-cover" />
+                <p style={{ fontSize: 11, color: "var(--sk-t2)", lineHeight: 1.5 }}>
+                  Why? Tell me what you don&apos;t like about this so I can redraft it better.
+                </p>
+              </div>
+              <input
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Too formal, mention the demo we discussed..."
+                autoFocus
+                style={{
+                  width: "100%",
+                  background: "rgba(0,0,0,0.2)",
+                  border: "1px solid rgba(229,69,69,0.2)",
+                  borderRadius: 6,
+                  padding: "7px 10px",
+                  fontSize: 11,
+                  color: "var(--sk-t2)",
+                  outline: "none",
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && rejectReason.trim()) {
+                    onReject(action.id, rejectReason.trim());
+                  }
+                }}
+              />
+            </div>
           )}
 
           {/* Action buttons */}
@@ -124,7 +153,8 @@ export function ApprovalCard({
             <button
               onClick={async () => {
                 setSending(true);
-                await onApprove(action.id);
+                // Pass editedBody only if user actually edited
+                await onApprove(action.id, wasEdited ? editBody : undefined);
                 setSending(false);
               }}
               disabled={sending}
@@ -141,7 +171,7 @@ export function ApprovalCard({
                 opacity: sending ? 0.5 : 1,
               }}
             >
-              <Check size={13} /> {sending ? "Sending..." : "Approve & Send"}
+              <Check size={13} /> {sending ? "Sending..." : wasEdited ? "Approve Edited & Send" : "Approve & Send"}
             </button>
 
             {editing ? (
@@ -159,11 +189,11 @@ export function ApprovalCard({
                   gap: 4,
                 }}
               >
-                Done
+                Done Editing
               </button>
             ) : (
               <button
-                onClick={() => { setEditing(true); setEditBody(action.tool_input?.body ?? ""); }}
+                onClick={() => { setEditing(true); setEditBody(editBody || originalText); }}
                 style={{
                   background: "var(--sk-card)",
                   border: "1px solid var(--sk-border)",

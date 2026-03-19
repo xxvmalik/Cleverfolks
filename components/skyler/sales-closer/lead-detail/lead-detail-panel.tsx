@@ -39,7 +39,7 @@ export function LeadDetailPanel({
   upcomingMeetings: CalendarEvent[];
   pastMeetings: MeetingRecord[];
   meetingsLoading: boolean;
-  onApprove: (actionId: string) => void;
+  onApprove: (actionId: string, editedBody?: string) => void;
   onReject: (actionId: string, feedback: string) => void;
   onDismissAlert: (id: string) => void;
   onReplyToRequest: (text: string) => void;

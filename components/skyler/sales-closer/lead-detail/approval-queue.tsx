@@ -10,7 +10,7 @@ export function ApprovalQueue({
   onReject,
 }: {
   actions: PendingAction[];
-  onApprove: (actionId: string) => void;
+  onApprove: (actionId: string, editedBody?: string) => void;
   onReject: (actionId: string, feedback: string) => void;
 }) {
   if (actions.length === 0) return null;

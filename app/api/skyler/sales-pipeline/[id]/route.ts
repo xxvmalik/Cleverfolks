@@ -26,6 +26,18 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Security: verify user belongs to this pipeline's workspace
+  const { data: membership } = await supabase
+    .from("workspace_memberships")
+    .select("id")
+    .eq("workspace_id", data.workspace_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!membership) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   // Also fetch email events
   const { data: events } = await db
     .from("skyler_email_events")
@@ -65,6 +77,29 @@ export async function PATCH(
   const { stage, resolution, resolution_notes, dismiss_note } = body;
 
   const db = createAdminSupabaseClient();
+
+  // Security: verify user belongs to this pipeline's workspace
+  const { data: pipelineCheck } = await db
+    .from("skyler_sales_pipeline")
+    .select("workspace_id")
+    .eq("id", id)
+    .single();
+
+  if (!pipelineCheck) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  const { data: memberCheck } = await supabase
+    .from("workspace_memberships")
+    .select("id")
+    .eq("workspace_id", pipelineCheck.workspace_id)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!memberCheck) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
   if (stage) updates.stage = stage;

@@ -190,13 +190,13 @@ export function SkylerWorkspace({
     setChatOpen(true);
   };
 
-  const handleApproveDraft = async (actionId: string) => {
+  const handleApproveDraft = async (actionId: string, editedBody?: string) => {
     if (!selectedLeadId) return;
     try {
       const res = await fetch(`/api/skyler/sales-pipeline/${selectedLeadId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actionId }),
+        body: JSON.stringify({ actionId, editedBody }),
       });
       if (res.ok) fetchPipelineData();
     } catch {

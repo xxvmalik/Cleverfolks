@@ -14,6 +14,9 @@ import { classifyCorrectionFull } from "@/lib/skyler/learning/correction-classif
 import { storeCorrection } from "@/lib/skyler/learning/correction-store";
 import { shiftDimension, type DimensionName, DIMENSIONS } from "@/lib/skyler/learning/behavioural-dimensions";
 import { recordOutcome, inferTrackedTaskType } from "@/lib/skyler/learning/confidence-tracking";
+import { draftEmail } from "@/lib/skyler/email-drafter";
+import { draftOutreachEmail } from "@/lib/email/email-sender";
+import { dispatchNotification } from "@/lib/skyler/notifications";
 
 export const processCorrection = inngest.createFunction(
   {
@@ -132,9 +135,94 @@ export const processCorrection = inngest.createFunction(
       });
     }
 
+    // ── Step 6: Re-draft email if this was a rejection (not user takeover) ──
+    let redraftActionId: string | null = null;
+
+    if (event.name === "skyler/decision.rejected" && pipelineId) {
+      redraftActionId = await step.run("redraft-email", async () => {
+        const db = createAdminSupabaseClient();
+
+        // Load pipeline record for context
+        const { data: pipeline } = await db
+          .from("skyler_sales_pipeline")
+          .select("*")
+          .eq("id", pipelineId)
+          .single();
+
+        if (!pipeline) {
+          console.log(`[process-correction] Pipeline ${pipelineId} not found, skipping re-draft`);
+          return null;
+        }
+
+        const rejectionReason = (data.rejectionReason ?? "") as string;
+        const originalAction = (data.originalAction ?? {}) as Record<string, unknown>;
+        const thread = (pipeline.conversation_thread ?? []) as Array<{
+          role: string;
+          content: string;
+          subject?: string;
+          timestamp: string;
+        }>;
+
+        try {
+          // Re-draft with rejection feedback as correction context
+          const newDraft = await draftEmail({
+            workspaceId,
+            pipelineRecord: {
+              id: pipelineId,
+              contact_name: pipeline.contact_name,
+              contact_email: pipeline.contact_email,
+              company_name: pipeline.company_name,
+              stage: pipeline.stage,
+              cadence_step: pipeline.cadence_step,
+              conversation_thread: thread,
+            },
+            cadenceStep: pipeline.cadence_step ?? 1,
+            companyResearch: null as unknown as Parameters<typeof draftEmail>[0]["companyResearch"],
+            salesVoice: null,
+            conversationThread: thread,
+            workspaceMemories: [],
+            userFeedback: `IMPORTANT — The user rejected the previous draft. Their feedback: "${rejectionReason}". Previous subject: "${(originalAction.subject as string) ?? ""}". Redraft incorporating this feedback.`,
+          });
+
+          // Store as a new pending action
+          const result = await draftOutreachEmail(db, {
+            workspaceId,
+            pipelineId,
+            to: pipeline.contact_email,
+            subject: newDraft.subject,
+            htmlBody: newDraft.htmlBody,
+            textBody: newDraft.textBody,
+          });
+
+          // Notify user that a new draft is ready
+          await dispatchNotification(db, {
+            workspaceId,
+            eventType: "draft_awaiting_approval",
+            pipelineId,
+            title: `Revised draft ready: ${pipeline.contact_name ?? pipeline.contact_email}`,
+            body: `I've redrafted the email based on your feedback. Please review.`,
+            metadata: {
+              contactName: pipeline.contact_name,
+              contactEmail: pipeline.contact_email,
+              companyName: pipeline.company_name,
+              isRevision: true,
+              rejectionReason,
+            },
+          });
+
+          console.log(`[process-correction] Re-drafted email for pipeline ${pipelineId}: ${result.actionId}`);
+          return result.actionId;
+        } catch (draftErr) {
+          console.error(`[process-correction] Re-draft failed for ${pipelineId}:`, draftErr);
+          return null;
+        }
+      });
+    }
+
     return {
       status: "processed",
       correctionId,
+      redraftActionId,
       type: classification.correction_type,
       scope: classification.scope,
       rule: classification.derived_rule,
