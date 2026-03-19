@@ -18,10 +18,10 @@ export async function GET(req: NextRequest) {
 
   const db = createAdminSupabaseClient();
 
-  // Get the pipeline record to find contact_email for fallback matching
+  // Get the pipeline record — includes meeting fields from old system as fallback
   const { data: pipeline } = await db
     .from("skyler_sales_pipeline")
-    .select("id, contact_email, workspace_id")
+    .select("id, contact_email, workspace_id, meeting_event_id, meeting_details, meeting_transcript, meeting_outcome, recall_bot_id")
     .eq("id", pipelineId)
     .single();
 
@@ -81,8 +81,62 @@ export async function GET(req: NextRequest) {
     .eq("lead_id", pipelineId)
     .order("meeting_date", { ascending: false });
 
+  let past = pastMeetings ?? [];
+
+  // Fallback: if no meeting_transcripts rows exist but pipeline has meeting data
+  // (old system stored transcripts directly on skyler_sales_pipeline fields)
+  if (past.length === 0 && pipeline.meeting_event_id && pipeline.meeting_transcript) {
+    const details = pipeline.meeting_details as { title?: string; start?: string; end?: string; link?: string } | null;
+    const outcome = pipeline.meeting_outcome as { executive_summary?: string; outcome?: string; key_takeaways?: string[] } | null;
+
+    // Build a summary from meeting_outcome if available
+    let summary: string | null = null;
+    if (outcome) {
+      const parts: string[] = [];
+      if (outcome.executive_summary) parts.push(outcome.executive_summary);
+      if (outcome.key_takeaways?.length) parts.push("Key takeaways: " + outcome.key_takeaways.join("; "));
+      summary = parts.join("\n\n") || null;
+    }
+
+    past = [{
+      id: `pipeline-${pipelineId}`,
+      bot_id: pipeline.recall_bot_id ?? null,
+      meeting_date: details?.start ?? pipeline.meeting_event_id,
+      meeting_url: details?.link ?? null,
+      summary,
+      intelligence: outcome ?? null,
+      participants: null,
+      processing_status: outcome ? "complete" : "pending",
+      duration_seconds: null,
+      created_at: details?.start ?? new Date().toISOString(),
+    }];
+  }
+
+  // Fallback: if no calendar_events rows but pipeline has meeting_details for upcoming
+  if (upcoming.length === 0 && pipeline.meeting_details) {
+    const details = pipeline.meeting_details as { title?: string; start?: string; end?: string; link?: string } | null;
+    if (details?.start) {
+      const meetingStart = new Date(details.start);
+      // Only show as "upcoming" if meeting hasn't happened yet (or happened recently)
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+      if (meetingStart > oneDayAgo) {
+        upcoming.push({
+          id: `pipeline-event-${pipelineId}`,
+          title: details.title ?? "Meeting",
+          start_time: details.start,
+          end_time: details.end ?? details.start,
+          meeting_url: details.link ?? null,
+          event_type: null,
+          attendees: [{ email: pipeline.contact_email }],
+          pre_call_brief_sent: false,
+          status: "confirmed",
+        });
+      }
+    }
+  }
+
   return NextResponse.json({
-    upcoming: upcoming ?? [],
-    past: pastMeetings ?? [],
+    upcoming,
+    past,
   });
 }
