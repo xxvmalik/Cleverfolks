@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
-import { Search, ChevronDown } from "lucide-react";
+import { Search, ChevronDown, Mail, Mic, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -34,6 +34,20 @@ type IntegrationLogo = {
   logoUrl: string;
 };
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+const QUICK_ACTIONS = [
+  "Draft a follow up message",
+  "Recommendation",
+  "Recommendation",
+  "Skyler's AI Analysis",
+  "Draft a follow up message",
+];
+
 // ── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value }: { label: string; value: string }) {
@@ -49,10 +63,7 @@ function ToggleSwitch({ enabled, onToggle }: { enabled: boolean; onToggle: () =>
   return (
     <button
       onClick={onToggle}
-      className={cn(
-        "w-[52px] h-[28px] rounded-full relative transition-colors flex-shrink-0",
-        "bg-[#545454]"
-      )}
+      className="w-[52px] h-[28px] rounded-full relative transition-colors flex-shrink-0 bg-[#545454]"
     >
       <div
         className={cn(
@@ -68,10 +79,12 @@ function LeadCard({
   lead,
   isActive,
   onClick,
+  onPrompt,
 }: {
   lead: Lead;
   isActive: boolean;
   onClick: () => void;
+  onPrompt: () => void;
 }) {
   const priorityColor = {
     High: "#F87171",
@@ -102,8 +115,31 @@ function LeadCard({
             Potential: {lead.potential} &bull; {lead.detail}
           </p>
         </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onPrompt(); }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] hover:bg-[#353535] border border-[#3A3A3A] rounded-full text-white text-xs font-medium transition-colors flex-shrink-0"
+        >
+          <Image src="/skyler-icons/prompt-icon.png" alt="" width={14} height={14} className="invert" />
+          Prompt
+        </button>
       </div>
     </button>
+  );
+}
+
+// ── Markdown renderer (simple) ──────────────────────────────────────────────
+
+function SimpleMarkdown({ content }: { content: string }) {
+  return (
+    <div
+      className="whitespace-pre-wrap text-sm leading-relaxed"
+      dangerouslySetInnerHTML={{
+        __html: content
+          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+          .replace(/\*(.*?)\*/g, "<em>$1</em>")
+          .replace(/\n/g, "<br/>"),
+      }}
+    />
   );
 }
 
@@ -118,6 +154,15 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [stats, setStats] = useState({ qualificationRate: 0, hotLeads: 0, nurtureQueue: 0, disqualified: 0 });
   const [integrationLogos, setIntegrationLogos] = useState<IntegrationLogo[]>([]);
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [promptedLead, setPromptedLead] = useState<Lead | null>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -163,6 +208,11 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
     fetchData();
   }, [fetchData]);
 
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, streamingContent]);
+
   const handleSalesCloserToggle = async () => {
     const newValue = !salesCloserEnabled;
     setSalesCloserEnabled(newValue);
@@ -175,14 +225,122 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
 
   const filteredLeads = leads.filter((lead) => {
     if (leadFilter === "all") return true;
-    if (lead.classification) {
-      return lead.classification === leadFilter;
-    }
+    if (lead.classification) return lead.classification === leadFilter;
     if (leadFilter === "hot") return lead.priority === "High";
     if (leadFilter === "nurture") return lead.priority === "Medium" || lead.priority === "Low";
     if (leadFilter === "disqualified") return false;
     return true;
   });
+
+  // Prompt a lead into chat
+  const handlePromptLead = (lead: Lead) => {
+    setActiveLeadId(lead.id);
+    setPromptedLead(lead);
+  };
+
+  // Send chat message via SSE
+  const handleSendMessage = async (text?: string) => {
+    const message = text ?? chatInput.trim();
+    if (!message || isStreaming) return;
+
+    const userMsg: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: message,
+    };
+    setChatMessages((prev) => [...prev, userMsg]);
+    setChatInput("");
+    setIsStreaming(true);
+    setStreamingContent("");
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const body: Record<string, any> = {
+        message,
+        workspaceId,
+      };
+
+      // Attach lead context if a lead is prompted
+      if (promptedLead) {
+        body.pipelineContext = {
+          source: "lead",
+          contact_name: promptedLead.contact_name ?? promptedLead.company,
+          company_name: promptedLead.company,
+          contact_email: promptedLead.contact_email,
+          stage: promptedLead.stage,
+        };
+      }
+
+      const res = await fetch("/api/skyler/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok || !res.body) throw new Error("Failed");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accumulatedText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const event = JSON.parse(line.slice(6));
+            if (event.type === "text") {
+              accumulatedText += event.text;
+              setStreamingContent(accumulatedText);
+            } else if (event.type === "done") {
+              setChatMessages((prev) => [
+                ...prev,
+                { id: `assistant-${Date.now()}`, role: "assistant", content: accumulatedText },
+              ]);
+              setStreamingContent("");
+            } else if (event.type === "error") {
+              setChatMessages((prev) => [
+                ...prev,
+                { id: `error-${Date.now()}`, role: "assistant", content: "Something went wrong. Please try again." },
+              ]);
+              setStreamingContent("");
+            }
+          } catch {
+            // skip malformed
+          }
+        }
+      }
+    } catch {
+      setChatMessages((prev) => [
+        ...prev,
+        { id: `error-${Date.now()}`, role: "assistant", content: "Failed to connect to Skyler. Please try again." },
+      ]);
+      setStreamingContent("");
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      void handleSendMessage();
+    }
+  };
+
+  const resizeTextarea = (el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  };
+
+  const hasChatContent = chatMessages.length > 0 || streamingContent;
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--sk-bg, #0E0E0E)" }}>
@@ -231,65 +389,248 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
         <ToggleSwitch enabled={salesCloserEnabled} onToggle={handleSalesCloserToggle} />
       </div>
 
-      {/* Hot Leads list */}
-      <div className="flex-1 flex flex-col px-6 pb-6 min-h-0">
-        <div className="flex items-center gap-3 mb-3">
-          <h3 className="text-white font-bold text-base">Hot Leads</h3>
-          <div className="relative flex-1 max-w-[160px]">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#555A63]" />
-            <input
-              type="text"
-              placeholder="Search"
-              className="w-full bg-[#2A2A2A] border border-[#3A3A3A] rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 transition-colors"
-            />
-          </div>
-          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] border border-[#3A3A3A] rounded-lg text-[#8B8F97] text-xs hover:text-white transition-colors">
-            <span>Today</span>
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        </div>
-
-        <div className="flex gap-5 mb-3 border-b border-[#2A2D35]/40">
-          {([
-            ["all", "All Leads"],
-            ["hot", "Hot leads"],
-            ["nurture", "Nurture"],
-            ["disqualified", "Disqualified"],
-          ] as const).map(([key, label]) => (
-            <button
-              key={key}
-              onClick={() => setLeadFilter(key)}
-              className={cn(
-                "pb-2.5 text-sm transition-colors",
-                leadFilter === key
-                  ? "text-white border-b-2 border-white font-medium"
-                  : "text-[#8B8F97] hover:text-white"
-              )}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
-          {loading ? (
-            <p className="text-[#555A63] text-sm text-center py-8">Loading deals...</p>
-          ) : filteredLeads.length === 0 ? (
-            <p className="text-[#555A63] text-sm text-center py-8">
-              {leads.length === 0
-                ? "No deals found. Connect your CRM to import your pipeline."
-                : "No leads match this filter."}
-            </p>
-          ) : (
-            filteredLeads.map((lead) => (
-              <LeadCard
-                key={lead.id}
-                lead={lead}
-                isActive={lead.id === activeLeadId}
-                onClick={() => setActiveLeadId(lead.id)}
+      {/* Two-column: Hot Leads + Chat */}
+      <div className="flex-1 flex px-6 pb-6 gap-5 min-h-0">
+        {/* Left: Hot Leads */}
+        <div className="w-[45%] flex flex-col min-h-0">
+          <div className="flex items-center gap-3 mb-3">
+            <h3 className="text-white font-bold text-base">Hot Leads</h3>
+            <div className="relative flex-1 max-w-[160px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#555A63]" />
+              <input
+                type="text"
+                placeholder="Search"
+                className="w-full bg-[#2A2A2A] border border-[#3A3A3A] rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-[#555A63] outline-none focus:border-[#F2903D]/50 transition-colors"
               />
-            ))
+            </div>
+            <button className="flex items-center gap-1.5 px-3 py-1.5 bg-[#2A2A2A] border border-[#3A3A3A] rounded-lg text-[#8B8F97] text-xs hover:text-white transition-colors">
+              <span>Today</span>
+              <ChevronDown className="w-3 h-3" />
+            </button>
+          </div>
+
+          <div className="flex gap-5 mb-3 border-b border-[#2A2D35]/40">
+            {([
+              ["all", "All Leads"],
+              ["hot", "Hot leads"],
+              ["nurture", "Nurture"],
+              ["disqualified", "Disqualified"],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setLeadFilter(key)}
+                className={cn(
+                  "pb-2.5 text-sm transition-colors",
+                  leadFilter === key
+                    ? "text-white border-b-2 border-white font-medium"
+                    : "text-[#8B8F97] hover:text-white"
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto space-y-2.5 pr-1">
+            {loading ? (
+              <p className="text-[#555A63] text-sm text-center py-8">Loading deals...</p>
+            ) : filteredLeads.length === 0 ? (
+              <p className="text-[#555A63] text-sm text-center py-8">
+                {leads.length === 0
+                  ? "No deals found. Connect your CRM to import your pipeline."
+                  : "No leads match this filter."}
+              </p>
+            ) : (
+              filteredLeads.map((lead) => (
+                <LeadCard
+                  key={lead.id}
+                  lead={lead}
+                  isActive={lead.id === activeLeadId}
+                  onClick={() => setActiveLeadId(lead.id)}
+                  onPrompt={() => handlePromptLead(lead)}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Right: Chat with Skyler */}
+        <div className="flex-1 flex flex-col min-h-0 bg-black rounded-xl overflow-hidden">
+          {/* Chat header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-[#2A2520]">
+            <h3 className="text-white font-bold text-base">Chat with Skyler</h3>
+            <button className="flex items-center gap-1.5 text-[#8B8F97] hover:text-white text-sm transition-colors">
+              <Mail className="w-4 h-4" />
+              Email Thread
+            </button>
+          </div>
+
+          {/* Chat content */}
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {!hasChatContent ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center">
+                  {promptedLead ? (
+                    <>
+                      <Image
+                        src="/skyler-icons/skyler-avatar.png"
+                        alt="Skyler"
+                        width={64}
+                        height={64}
+                        className="rounded-full mx-auto mb-4 opacity-60 object-cover aspect-square"
+                      />
+                      <p className="text-[#8B8F97] text-sm">
+                        Ask Skyler about <span className="text-white font-medium">{promptedLead.contact_name ?? promptedLead.company}</span>
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <Image
+                        src="/skyler-icons/skyler-avatar.png"
+                        alt="Skyler"
+                        width={64}
+                        height={64}
+                        className="rounded-full mx-auto mb-4 opacity-40 object-cover aspect-square"
+                      />
+                      <p className="text-[#555A63] text-sm">
+                        Select a lead to Prompt
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {chatMessages.map((msg) => (
+                  <div key={msg.id} className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
+                    {msg.role === "assistant" && (
+                      <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                        <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                    <div
+                      className={cn(
+                        "rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]",
+                        msg.role === "user"
+                          ? "bg-[#F2903D]/20 text-white"
+                          : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
+                      )}
+                    >
+                      {msg.role === "assistant" ? (
+                        <SimpleMarkdown content={msg.content} />
+                      ) : (
+                        <div className="whitespace-pre-wrap">{msg.content}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Streaming */}
+                {streamingContent && (
+                  <div className="flex gap-3 items-start">
+                    <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                      <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]">
+                      <SimpleMarkdown content={streamingContent} />
+                    </div>
+                  </div>
+                )}
+
+                {isStreaming && !streamingContent && (
+                  <div className="flex gap-3 items-start">
+                    <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
+                      <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
+                    </div>
+                    <div className="rounded-xl px-4 py-2.5 text-sm bg-[#1A1714] border border-[#2A2520] text-[#8B8F97] flex items-center gap-2">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span className="text-xs">Thinking...</span>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={chatEndRef} />
+              </div>
+            )}
+          </div>
+
+          {/* Quick actions */}
+          {!hasChatContent && promptedLead && (
+            <div className="px-4 pb-2">
+              <div className="flex flex-wrap gap-2 mb-3">
+                {QUICK_ACTIONS.map((action, i) => (
+                  <button
+                    key={i}
+                    onClick={() => void handleSendMessage(action)}
+                    className="px-3 py-1.5 bg-[#1A1A1A] border border-[#2A2D35] rounded-full text-[#8B8F97] text-xs hover:text-white hover:border-[#3A3D45] transition-colors"
+                  >
+                    {action}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
+
+          {/* Input bar */}
+          <div className="px-4 pb-4">
+            {/* Pinned lead context */}
+            {promptedLead && (
+              <div className="mb-2 rounded-lg bg-[#1a1d21] border-l-[3px] border-l-[#F2903D] px-3 py-2 flex items-center gap-2">
+                <span className="text-[#F2903D] text-xs font-semibold truncate">
+                  {promptedLead.contact_name ?? promptedLead.company}
+                  {promptedLead.company && promptedLead.contact_name ? ` · ${promptedLead.company}` : ""}
+                </span>
+                <button
+                  onClick={() => setPromptedLead(null)}
+                  className="text-[#555A63] hover:text-white transition-colors flex-shrink-0 ml-auto text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <div className="flex items-end gap-2 bg-[#2B2B2B] rounded-2xl px-4 py-3 focus-within:ring-1 focus-within:ring-[#F2903D]/50 transition-all">
+              <button type="button" className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                <Image
+                  src="/cleverbrain-chat-icons/add-media-icon.png"
+                  alt="Attach"
+                  width={20}
+                  height={20}
+                  className="opacity-60 hover:opacity-100"
+                />
+              </button>
+              <button type="button" className="flex-shrink-0 text-[#8B8F97] hover:text-white transition-colors pb-0.5">
+                <Mic className="w-5 h-5" />
+              </button>
+              <textarea
+                ref={textareaRef}
+                value={chatInput}
+                onChange={(e) => {
+                  setChatInput(e.target.value);
+                  resizeTextarea(e.target);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder={promptedLead ? `Message Skyler about ${promptedLead.contact_name ?? promptedLead.company}...` : "Type a message here"}
+                rows={1}
+                disabled={isStreaming}
+                className="flex-1 bg-transparent text-white placeholder-[#555A63] text-sm resize-none outline-none leading-relaxed disabled:opacity-50"
+                style={{ maxHeight: "160px", overflowY: "auto" }}
+              />
+              <button
+                type="button"
+                onClick={() => void handleSendMessage()}
+                className="flex-shrink-0 pb-0.5 cursor-pointer"
+                aria-label="Send message"
+              >
+                <Image
+                  src="/cleverbrain-chat-icons/send-prompt-icon.png"
+                  alt="Send"
+                  width={24}
+                  height={24}
+                  className={cn("transition-opacity pointer-events-none", chatInput.trim() && !isStreaming ? "opacity-100" : "opacity-40")}
+                />
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
