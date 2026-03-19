@@ -26,10 +26,10 @@ export function RightIconBar() {
         <Link href="/skyler" title="Skyler" className="opacity-100 ring-2 ring-[#F2903D]/40 rounded-lg transition-opacity">
           <Image src="/cleverbrain-chat-icons/skyler-icon.png" alt="Skyler" width={36} height={36} className="rounded-full" />
         </Link>
-        <Link href="/cleverbrain" title="Connectors" className="opacity-70 hover:opacity-100 transition-opacity">
+        <Link href="/connectors" title="Connectors" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/conectors-icon.png" alt="Connectors" width={34} height={34} />
         </Link>
-        <Link href="/cleverbrain" title="AI Employees" className="opacity-70 hover:opacity-100 transition-opacity">
+        <Link href="/cleverbrain/hireaiemployee" title="AI Employees" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
         </Link>
         <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">

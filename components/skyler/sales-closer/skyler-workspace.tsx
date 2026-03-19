@@ -2,12 +2,14 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { PanelLeftOpen } from "lucide-react";
-import { SkylerSidebar } from "./skyler-sidebar";
+import { SkylerSidebar, type WorkflowTab } from "./skyler-sidebar";
 import { MetricsBar } from "./metrics-bar";
 import { LeadListPanel } from "./lead-list/lead-list-panel";
 import { LeadDetailPanel } from "./lead-detail/lead-detail-panel";
 import { ChatPanel } from "./chat/chat-panel";
 import { RightIconBar } from "./right-icon-bar";
+import { WorkflowSettings } from "@/components/skyler/workflow-settings";
+import { LeadQualificationView } from "@/components/skyler/lead-qualification-view";
 import type {
   PipelineRecord,
   PerformanceMetrics,
@@ -52,6 +54,7 @@ export function SkylerWorkspace({
 
   // ── Sidebar state ───────────────────────────────────────────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [activeTab, setActiveTab] = useState<WorkflowTab>("sales-closer");
 
   // ── Chat state ──────────────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(true);
@@ -449,6 +452,8 @@ export function SkylerWorkspace({
         onCollapse={() => setSidebarCollapsed(true)}
         conversations={conversations}
         activeConversationId={activeConversationId}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
         onNewChat={handleNewChat}
         onSelectConversation={handleSelectConversation}
         onStarConversation={handleStarConversation}
@@ -478,55 +483,69 @@ export function SkylerWorkspace({
           </div>
         </div>
 
-        {/* Three-panel content */}
-        <div className="flex flex-1 overflow-hidden">
-          <LeadListPanel
-            records={pipelineRecords}
-            loading={pipelineLoading}
-            selectedId={selectedLeadId}
-            phaseFilter={phaseFilter}
-            searchQuery={searchQuery}
-            onSelectLead={handleSelectLead}
-            onTagLead={handleTagLead}
-            onPhaseFilterChange={setPhaseFilter}
-            onSearchChange={setSearchQuery}
-          />
+        {/* Content area — switches based on active sidebar tab */}
+        {activeTab === "sales-closer" && (
+          <div className="flex flex-1 overflow-hidden">
+            <LeadListPanel
+              records={pipelineRecords}
+              loading={pipelineLoading}
+              selectedId={selectedLeadId}
+              phaseFilter={phaseFilter}
+              searchQuery={searchQuery}
+              onSelectLead={handleSelectLead}
+              onTagLead={handleTagLead}
+              onPhaseFilterChange={setPhaseFilter}
+              onSearchChange={setSearchQuery}
+            />
 
-          <LeadDetailPanel
-            record={selectedRecord}
-            loading={pipelineLoading}
-            alerts={alerts}
-            directives={directives}
-            directivesLoading={directivesLoading}
-            upcomingMeetings={upcomingMeetings}
-            pastMeetings={pastMeetings}
-            meetingsLoading={meetingsLoading}
-            onApprove={handleApproveDraft}
-            onReject={handleRejectDraft}
-            onDismissAlert={handleDismissAlert}
-            onReplyToRequest={handleReplyToRequest}
-            onDismissRequest={handleDismissRequest}
-            onAddDirective={handleAddDirective}
-            onRemoveDirective={handleRemoveDirective}
-            onFetchTranscript={handleFetchTranscript}
-            onTagForChat={handleTagForChat}
-          />
+            <LeadDetailPanel
+              record={selectedRecord}
+              loading={pipelineLoading}
+              alerts={alerts}
+              directives={directives}
+              directivesLoading={directivesLoading}
+              upcomingMeetings={upcomingMeetings}
+              pastMeetings={pastMeetings}
+              meetingsLoading={meetingsLoading}
+              onApprove={handleApproveDraft}
+              onReject={handleRejectDraft}
+              onDismissAlert={handleDismissAlert}
+              onReplyToRequest={handleReplyToRequest}
+              onDismissRequest={handleDismissRequest}
+              onAddDirective={handleAddDirective}
+              onRemoveDirective={handleRemoveDirective}
+              onFetchTranscript={handleFetchTranscript}
+              onTagForChat={handleTagForChat}
+            />
 
-          <ChatPanel
-            open={chatOpen}
-            onToggle={() => setChatOpen((prev) => !prev)}
-            messages={chatMessages}
-            conversations={conversations}
-            streamingContent={streamingContent}
-            inputValue={chatInput}
-            onInputChange={setChatInput}
-            onSend={handleSendMessage}
-            taggedLead={taggedLead}
-            onClearTag={() => setTaggedLead(null)}
-            isStreaming={isStreaming}
-            onSelectConversation={handleSelectConversation}
-          />
-        </div>
+            <ChatPanel
+              open={chatOpen}
+              onToggle={() => setChatOpen((prev) => !prev)}
+              messages={chatMessages}
+              conversations={conversations}
+              streamingContent={streamingContent}
+              inputValue={chatInput}
+              onInputChange={setChatInput}
+              onSend={handleSendMessage}
+              taggedLead={taggedLead}
+              onClearTag={() => setTaggedLead(null)}
+              isStreaming={isStreaming}
+              onSelectConversation={handleSelectConversation}
+            />
+          </div>
+        )}
+
+        {activeTab === "lead-qualification" && (
+          <div className="flex-1 overflow-y-auto">
+            <LeadQualificationView workspaceId={workspaceId} />
+          </div>
+        )}
+
+        {activeTab === "workflows-settings" && (
+          <div className="flex-1 overflow-y-auto">
+            <WorkflowSettings workspaceId={workspaceId} />
+          </div>
+        )}
       </div>
 
       {/* Right Icon Bar */}

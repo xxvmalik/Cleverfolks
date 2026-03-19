@@ -441,7 +441,7 @@ const AI_EMPLOYEES = [
   { name: "MARTIN", role: "Marketing Manager", avatar: null, status: "soon" as const },
 ];
 
-function MarketplacePanel({ onClose }: { onClose: () => void }) {
+export function MarketplacePanel({ onClose }: { onClose: () => void }) {
   return (
     <div
       className="w-[360px] bg-[#1B1B1B] border-l border-[#2A2D35]/60 flex flex-col flex-shrink-0"
@@ -528,7 +528,7 @@ type DbIntegration = {
   last_synced_at: string | null;
 };
 
-function ConnectorsView({
+export function ConnectorsView({
   sidebarCollapsed,
   setSidebarCollapsed,
   userName,

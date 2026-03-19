@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronUp,
   Zap,
-  Users,
   Target,
   Settings,
   Star,
@@ -17,20 +16,23 @@ import {
 } from "lucide-react";
 import type { ConversationItem } from "./types";
 
-type WorkflowTab = "lead-qualification" | "prospect-engagement" | "sales-closer" | "workflows-settings";
+type WorkflowTab = "lead-qualification" | "sales-closer" | "workflows-settings";
 
 const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "lead-qualification", label: "Lead Qualification", icon: Zap },
-  { id: "prospect-engagement", label: "Prospect Engagement", icon: Users },
   { id: "sales-closer", label: "Sales Closer", icon: Target },
   { id: "workflows-settings", label: "Workflows Settings", icon: Settings },
 ];
+
+export { type WorkflowTab };
 
 export function SkylerSidebar({
   collapsed,
   onCollapse,
   conversations,
   activeConversationId,
+  activeTab,
+  onTabChange,
   onNewChat,
   onSelectConversation,
   onStarConversation,
@@ -41,13 +43,14 @@ export function SkylerSidebar({
   onCollapse: () => void;
   conversations: ConversationItem[];
   activeConversationId: string | null;
+  activeTab: WorkflowTab;
+  onTabChange: (tab: WorkflowTab) => void;
   onNewChat: () => void;
   onSelectConversation: (id: string) => void;
   onStarConversation: (id: string, starred: boolean) => void;
   onRenameConversation: (id: string, title: string) => void;
   onDeleteConversation: (id: string) => void;
 }) {
-  const [activeTab, setActiveTab] = useState<WorkflowTab>("sales-closer");
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
 
   const starredConvs = conversations.filter((c) => c.is_starred);
@@ -112,7 +115,7 @@ export function SkylerSidebar({
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => onTabChange(tab.id)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors"
               style={{
                 color: isActive ? "var(--sk-t1)" : "var(--sk-t3)",
