@@ -71,6 +71,22 @@ export const processMeetingTranscript = inngest.createFunction(
         companyName: string;
       };
 
+    // Guard: skip if pipeline already has a meeting outcome (prevents duplicate processing)
+    const alreadyProcessed = await step.run("check-already-processed", async () => {
+      const db = createAdminSupabaseClient();
+      const { data } = await db
+        .from("skyler_sales_pipeline")
+        .select("meeting_outcome, resolution")
+        .eq("id", pipelineId)
+        .single();
+      return !!(data?.meeting_outcome || data?.resolution);
+    });
+
+    if (alreadyProcessed) {
+      console.log(`[meeting-transcript] Pipeline ${pipelineId} already processed, skipping`);
+      return { skipped: true, pipelineId };
+    }
+
     // Step 1: Store raw transcript
     const transcriptId = await step.run("store-raw-transcript", async () => {
       const db = createAdminSupabaseClient();

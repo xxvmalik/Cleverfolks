@@ -98,7 +98,25 @@ export async function dispatchNotification(
       return;
     }
 
-    // 3. Always save to in-app notifications
+    // 3. Deduplicate — skip if same event_type + pipeline_id exists within the last hour
+    if (pipelineId) {
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const { data: existing } = await db
+        .from("skyler_notifications")
+        .select("id")
+        .eq("pipeline_id", pipelineId)
+        .eq("event_type", eventType)
+        .gte("created_at", oneHourAgo)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`[notifications] Skipping duplicate ${eventType} for pipeline ${pipelineId}`);
+        return;
+      }
+    }
+
+    // 4. Always save to in-app notifications
     try {
       await db.from("skyler_notifications").insert({
         workspace_id: workspaceId,

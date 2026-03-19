@@ -71,6 +71,12 @@ export const recallBotChecker = inngest.createFunction(
             }
           }
 
+          // Check if already processed (meeting_outcome is set by meeting-transcript function)
+          if (record.meeting_outcome) {
+            console.log(`[recall-checker] Bot ${botId.slice(0, 8)} already processed, skipping`);
+            return "already_processed";
+          }
+
           // Fire the transcript processing event
           await inngest.send({
             name: "skyler/meeting.transcript.ready",
@@ -83,6 +89,14 @@ export const recallBotChecker = inngest.createFunction(
               companyName: record.company_name,
             },
           });
+
+          // Mark as having a pending outcome so cron doesn't re-fire
+          // (the meeting-transcript function will set the real outcome)
+          await db
+            .from("skyler_sales_pipeline")
+            .update({ meeting_outcome: { processing: true }, updated_at: new Date().toISOString() })
+            .eq("id", record.id)
+            .is("meeting_outcome", null);
 
           console.log(`[recall-checker] Bot ${botId.slice(0, 8)} done — fired transcript processing`);
           return "completed";
