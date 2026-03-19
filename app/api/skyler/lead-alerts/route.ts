@@ -54,18 +54,26 @@ export async function GET(req: NextRequest) {
   // Fetch unread notifications for this lead
   const { data: notifications } = await db
     .from("skyler_notifications")
-    .select("id, event_type, title, body, created_at, read")
+    .select("id, event_type, title, body, metadata, created_at, read")
     .eq("pipeline_id", pipelineId)
     .eq("read", false)
     .order("created_at", { ascending: false })
     .limit(10);
 
   for (const n of notifications ?? []) {
+    let text = n.body || n.title;
+
+    // For pre-call briefs, show a concise heads-up instead of the full brief
+    // (the full brief is already dispatched to Slack/email via workspace settings)
+    if (n.event_type === "pre_call_brief") {
+      text = `${n.title} — I've sent the full brief to your notification channels.`;
+    }
+
     alerts.push({
       id: n.id,
       type: n.event_type,
       emoji: EMOJI_MAP[n.event_type] ?? "🔔",
-      text: n.body || n.title,
+      text,
       timestamp: n.created_at,
       source: "notification",
     });

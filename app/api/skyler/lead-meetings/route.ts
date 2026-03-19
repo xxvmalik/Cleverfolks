@@ -109,9 +109,12 @@ export async function GET(req: NextRequest) {
     return null;
   }
 
+  // Use pipeline meeting_details.title as last-resort fallback
+  const pipelineTitle = (pipeline.meeting_details as { title?: string } | null)?.title ?? null;
+
   let past = (pastMeetings ?? []).map((m) => ({
     ...m,
-    title: findMeetingTitle(m),
+    title: findMeetingTitle(m) ?? pipelineTitle,
   }));
 
   // Fallback: if no meeting_transcripts rows exist but pipeline has meeting data
