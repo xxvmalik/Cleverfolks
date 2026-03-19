@@ -190,6 +190,47 @@ export async function POST(req: NextRequest) {
         });
       }
 
+      // Update calendar_events with bot completion status
+      if (workspaceId) {
+        try {
+          // Find calendar_events row linked to this bot
+          const { data: calEvent } = await db
+            .from("calendar_events")
+            .select("id")
+            .eq("recall_bot_id", botId)
+            .maybeSingle();
+
+          if (calEvent) {
+            await db
+              .from("calendar_events")
+              .update({ recall_bot_status: "done", updated_at: new Date().toISOString() })
+              .eq("id", calEvent.id);
+            console.log(`[recall-webhook] Updated calendar_events ${calEvent.id} bot status to done`);
+          } else if (leadId) {
+            // Fallback: find by lead_id and closest meeting time
+            const { data: closestEvent } = await db
+              .from("calendar_events")
+              .select("id")
+              .eq("lead_id", leadId)
+              .eq("workspace_id", workspaceId)
+              .is("recall_bot_status", null)
+              .order("start_time", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (closestEvent) {
+              await db
+                .from("calendar_events")
+                .update({ recall_bot_id: botId, recall_bot_status: "done", updated_at: new Date().toISOString() })
+                .eq("id", closestEvent.id);
+              console.log(`[recall-webhook] Linked bot ${botId} to calendar_events ${closestEvent.id} (fallback)`);
+            }
+          }
+        } catch (calErr) {
+          console.warn("[recall-webhook] Failed to update calendar_events:", calErr instanceof Error ? calErr.message : calErr);
+        }
+      }
+
       // Fire Inngest event for processing
       if (pipeline) {
         await inngest.send({

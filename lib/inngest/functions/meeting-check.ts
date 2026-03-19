@@ -118,6 +118,60 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
           meetingsFound++;
           console.log(`[meeting-check] Meeting booked: ${result.contact_email} → pipeline ${result.pipeline_id}`);
 
+          // Ensure calendar_events row exists for this event
+          const providerEventId = event.eventId.replace(/^(gcal|outlook|calendly)-/, "");
+          const providerName = event.provider === "google-calendar" ? "google_calendar"
+            : event.provider === "outlook" ? "microsoft_outlook"
+            : event.provider;
+          let calendarEventId: string | null = null;
+
+          try {
+            // Check if row already exists (dedup by workspace + provider_event_id)
+            const { data: existing } = await db
+              .from("calendar_events")
+              .select("id")
+              .eq("workspace_id", workspaceId)
+              .eq("provider_event_id", providerEventId)
+              .maybeSingle();
+
+            if (existing) {
+              calendarEventId = existing.id;
+              // Update lead_id if not set
+              await db
+                .from("calendar_events")
+                .update({ lead_id: result.pipeline_id, updated_at: new Date().toISOString() })
+                .eq("id", existing.id)
+                .is("lead_id", null);
+            } else {
+              // Insert new calendar_events row
+              const attendeesJson = event.attendeeEmails.map((email) => ({ email }));
+              const { data: inserted } = await db
+                .from("calendar_events")
+                .insert({
+                  workspace_id: workspaceId,
+                  provider: providerName,
+                  provider_event_id: providerEventId,
+                  title: event.title,
+                  start_time: event.startTime,
+                  end_time: event.endTime,
+                  meeting_url: event.meetingLink ?? null,
+                  meeting_provider: detectMeetingProvider(event.meetingLink),
+                  attendees: attendeesJson,
+                  status: "confirmed",
+                  lead_id: result.pipeline_id,
+                })
+                .select("id")
+                .single();
+
+              if (inserted) {
+                calendarEventId = inserted.id;
+                console.log(`[meeting-check] Created calendar_events row ${inserted.id} for "${event.title}"`);
+              }
+            }
+          } catch (calErr) {
+            console.warn(`[meeting-check] Failed to upsert calendar_event:`, calErr instanceof Error ? calErr.message : calErr);
+          }
+
           // Dispatch Recall.ai bot to join the meeting (if supported platform link exists)
           if (result.meetingLink && result.pipeline_id) {
             if (!isSupportedMeetingUrl(result.meetingLink)) {
@@ -150,6 +204,14 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
                   status: "scheduled",
                   bot_name: "Skyler Notetaker",
                 });
+
+                // Link bot to calendar_events row
+                if (calendarEventId) {
+                  await db
+                    .from("calendar_events")
+                    .update({ recall_bot_id: bot.id, recall_bot_status: "scheduled" })
+                    .eq("id", calendarEventId);
+                }
 
                 console.log(`[meeting-check] Recall bot ${bot.id} scheduled for pipeline ${result.pipeline_id}`);
               } catch (recallErr) {
@@ -383,4 +445,15 @@ async function fetchCalendlyEvents(
   }
 
   return events;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+function detectMeetingProvider(url?: string): string | null {
+  if (!url) return null;
+  if (url.includes("zoom.us")) return "zoom";
+  if (url.includes("meet.google.com")) return "google_meet";
+  if (url.includes("teams.microsoft.com")) return "teams";
+  if (url.includes("webex.com")) return "webex";
+  return null;
 }
