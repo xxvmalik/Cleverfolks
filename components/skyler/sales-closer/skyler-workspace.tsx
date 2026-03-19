@@ -211,17 +211,9 @@ export function SkylerWorkspace({
     }
   };
 
-  const handleDismissAlert = async (id: string) => {
+  const handleDismissAlert = (id: string) => {
     setAlerts((prev) => prev.filter((a) => a.id !== id));
-    try {
-      const res = await fetch(`/api/skyler/lead-alerts/${id}/dismiss`, { method: "PATCH" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        console.error("[dismiss-alert] Failed:", res.status, body);
-      }
-    } catch (err) {
-      console.error("[dismiss-alert] Network error:", err);
-    }
+    fetch(`/api/skyler/lead-alerts?alertId=${id}`, { method: "PATCH" }).catch(() => {});
   };
 
   const handleReplyToRequest = (text: string) => {

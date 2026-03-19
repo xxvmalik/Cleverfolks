@@ -1,7 +1,6 @@
 /**
- * GET /api/skyler/lead-alerts?pipelineId={id}
- *
- * Returns alerts for a specific lead: notifications + meeting health signals.
+ * GET  /api/skyler/lead-alerts?pipelineId={id}    — Returns alerts for a lead
+ * PATCH /api/skyler/lead-alerts?alertId={id}       — Dismiss an alert
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -104,4 +103,41 @@ export async function GET(req: NextRequest) {
   alerts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
   return NextResponse.json({ alerts });
+}
+
+export async function PATCH(req: NextRequest) {
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const alertId = req.nextUrl.searchParams.get("alertId");
+  if (!alertId) return NextResponse.json({ error: "alertId required" }, { status: 400 });
+
+  const db = createAdminSupabaseClient();
+
+  // Try marking as read in notifications first
+  const { data: notif } = await db
+    .from("skyler_notifications")
+    .update({ read: true })
+    .eq("id", alertId)
+    .select("id")
+    .maybeSingle();
+
+  if (notif) {
+    return NextResponse.json({ ok: true, source: "notification" });
+  }
+
+  // If not found in notifications, try health signals
+  const { data: signal } = await db
+    .from("meeting_health_signals")
+    .update({ acknowledged: true })
+    .eq("id", alertId)
+    .select("id")
+    .maybeSingle();
+
+  if (signal) {
+    return NextResponse.json({ ok: true, source: "health_signal" });
+  }
+
+  return NextResponse.json({ error: "Alert not found" }, { status: 404 });
 }
