@@ -104,6 +104,27 @@ export async function detectPipelineMeeting(
       `[meeting-detector] Meeting booked! Pipeline ${pipeline.id} — "${meeting.title}" with ${pipeline.contact_email}`
     );
 
+    // Link calendar_events row to this pipeline record (by provider_event_id)
+    // This enables the lead-meetings endpoint to find upcoming events for a lead
+    try {
+      // The eventId format is "provider-originalId" (e.g. "gcal-abc123", "outlook-xyz")
+      const providerEventId = meeting.eventId.replace(/^(gcal|outlook|calendly)-/, "");
+      const { error: linkErr } = await db
+        .from("calendar_events")
+        .update({ lead_id: pipeline.id })
+        .eq("workspace_id", workspaceId)
+        .eq("provider_event_id", providerEventId)
+        .is("lead_id", null);
+
+      if (linkErr) {
+        console.warn(`[meeting-detector] Failed to link calendar_event: ${linkErr.message}`);
+      } else {
+        console.log(`[meeting-detector] Linked calendar_event (provider_event_id=${providerEventId}) to pipeline ${pipeline.id}`);
+      }
+    } catch (linkErr) {
+      console.warn("[meeting-detector] Calendar event link failed:", linkErr);
+    }
+
     // Dispatch notification (fire-and-forget)
     try {
       await dispatchNotification(db, {
