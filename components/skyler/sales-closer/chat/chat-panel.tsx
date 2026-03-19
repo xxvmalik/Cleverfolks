@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { MessageSquare } from "lucide-react";
 import { ChatHeader, type ChatTab } from "./chat-header";
-import { ChatMessages } from "./chat-messages";
 import { ChatInput } from "./chat-input";
 import { ChatEmpty } from "./chat-empty";
 import { ChatHistory } from "./chat-history";
+import { SkylerChat } from "@/components/skyler/SkylerChat";
 import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
 import type { ConversationItem, TaggedLead } from "../types";
 
@@ -83,14 +83,16 @@ export function ChatPanel({
 
       {chatTab === "chat" ? (
         <>
-          {messages.length === 0 && !streamingContent ? (
+          {messages.length === 0 && !streamingContent && !isStreaming ? (
             <ChatEmpty />
           ) : (
-            <ChatMessages
+            <SkylerChat
               messages={messages}
               streamingContent={streamingContent}
               streamingActivities={streamingActivities}
               activitiesDone={activitiesDone}
+              isStreaming={isStreaming}
+              compact={true}
               taggedLeadName={taggedLead?.name}
             />
           )}

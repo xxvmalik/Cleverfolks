@@ -1,21 +1,26 @@
 "use client";
 
-import { Zap } from "lucide-react";
+import Image from "next/image";
 
 export function ChatEmpty() {
   return (
     <div className="flex-1 flex flex-col items-center justify-center px-6">
       <div
-        className="flex items-center justify-center"
         style={{
           width: 44,
           height: 44,
           borderRadius: 12,
-          background: "linear-gradient(135deg, var(--sk-orange), #E8752B)",
+          overflow: "hidden",
           opacity: 0.45,
         }}
       >
-        <Zap size={22} color="#fff" />
+        <Image
+          src="/skyler-icons/skyler-avatar.png"
+          alt="Skyler"
+          width={44}
+          height={44}
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
       </div>
       <p style={{ fontSize: 11, color: "var(--sk-t3)", marginTop: 12, textAlign: "center" }}>
         Ask Skyler about outreach, pipeline, or performance.

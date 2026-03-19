@@ -1,6 +1,7 @@
 "use client";
 
-import { Zap, X } from "lucide-react";
+import { X } from "lucide-react";
+import Image from "next/image";
 
 export type ChatTab = "chat" | "history";
 
@@ -21,15 +22,21 @@ export function ChatHeader({
       {/* Left: avatar + tabs */}
       <div className="flex items-center gap-3">
         <div
-          className="flex items-center justify-center"
           style={{
             width: 28,
             height: 28,
-            borderRadius: 8,
-            background: "linear-gradient(135deg, var(--sk-orange), #E8752B)",
+            borderRadius: 7,
+            overflow: "hidden",
+            flexShrink: 0,
           }}
         >
-          <Zap size={14} color="#fff" />
+          <Image
+            src="/skyler-icons/skyler-avatar.png"
+            alt="Skyler"
+            width={28}
+            height={28}
+            style={{ width: "100%", height: "100%", objectFit: "cover" }}
+          />
         </div>
 
         <div className="flex items-center gap-1" style={{ position: "relative" }}>

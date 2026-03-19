@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import Image from "next/image";
-import { Search, ChevronDown, Mail, Mic, Loader2 } from "lucide-react";
+import { Search, ChevronDown, Mail, Mic } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
-import { ActivitySteps } from "@/components/skyler/shared/activity-steps";
+import { SkylerChat } from "@/components/skyler/SkylerChat";
 import { usePageContext } from "@/hooks/usePageContext";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -141,7 +141,6 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   // Chat (shared hook)
   const [chatInput, setChatInput] = useState("");
   const [promptedLead, setPromptedLead] = useState<Lead | null>(null);
-  const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const chat = useSkylerChat({ workspaceId });
@@ -191,10 +190,6 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
     fetchData();
   }, [fetchData]);
 
-  // Auto-scroll chat
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat.messages, chat.streamingContent, chat.streamingActivities]);
 
   const handleSalesCloserToggle = async () => {
     const newValue = !salesCloserEnabled;
@@ -256,7 +251,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   };
 
-  const hasChatContent = chat.messages.length > 0 || chat.streamingContent;
+  const hasChatContent = chat.messages.length > 0 || chat.streamingContent || chat.isStreaming;
 
   return (
     <div className="flex flex-col h-full" style={{ background: "var(--sk-bg, #0E0E0E)" }}>
@@ -382,114 +377,48 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
           </div>
 
           {/* Chat content */}
-          <div className="flex-1 overflow-y-auto px-5 py-4">
-            {!hasChatContent ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center">
-                  {promptedLead ? (
-                    <>
-                      <Image
-                        src="/skyler-icons/skyler-avatar.png"
-                        alt="Skyler"
-                        width={64}
-                        height={64}
-                        className="rounded-full mx-auto mb-4 opacity-60 object-cover aspect-square"
-                      />
-                      <p className="text-[#8B8F97] text-sm">
-                        Ask Skyler about <span className="text-white font-medium">{promptedLead.contact_name ?? promptedLead.company}</span>
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <Image
-                        src="/skyler-icons/skyler-avatar.png"
-                        alt="Skyler"
-                        width={64}
-                        height={64}
-                        className="rounded-full mx-auto mb-4 opacity-40 object-cover aspect-square"
-                      />
-                      <p className="text-[#555A63] text-sm">
-                        Select a lead to Prompt
-                      </p>
-                    </>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {chat.messages.map((msg) => (
-                  <div key={msg.id}>
-                    {/* Activity steps attached above assistant messages */}
-                    {msg.role === "assistant" && msg.activities && msg.activities.length > 0 && (
-                      <div className="mb-2">
-                        <ActivitySteps activities={msg.activities} isComplete={true} variant="inline" />
-                      </div>
-                    )}
-                    <div className={cn("flex gap-3 items-start", msg.role === "user" ? "justify-end" : "")}>
-                      {msg.role === "assistant" && (
-                        <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
-                          <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
-                        </div>
-                      )}
-                      <div
-                        className={cn(
-                          "rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%]",
-                          msg.role === "user"
-                            ? "bg-[#F2903D]/20 text-white"
-                            : "bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
-                        )}
-                        style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
-                      >
-                        {msg.content}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Live activity steps — shown above the streaming bubble */}
-                {chat.streamingActivities.length > 0 && (
-                  <div className="mb-2">
-                    <ActivitySteps
-                      activities={chat.streamingActivities}
-                      isComplete={chat.streamingContent.length > 0 || chat.activitiesDone}
-                      variant="inline"
+          {!hasChatContent ? (
+            <div className="flex-1 flex items-center justify-center px-5 py-4">
+              <div className="text-center">
+                {promptedLead ? (
+                  <>
+                    <Image
+                      src="/skyler-icons/skyler-avatar.png"
+                      alt="Skyler"
+                      width={64}
+                      height={64}
+                      className="rounded-full mx-auto mb-4 opacity-60 object-cover aspect-square"
                     />
-                  </div>
+                    <p className="text-[#8B8F97] text-sm">
+                      Ask Skyler about <span className="text-white font-medium">{promptedLead.contact_name ?? promptedLead.company}</span>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <Image
+                      src="/skyler-icons/skyler-avatar.png"
+                      alt="Skyler"
+                      width={64}
+                      height={64}
+                      className="rounded-full mx-auto mb-4 opacity-40 object-cover aspect-square"
+                    />
+                    <p className="text-[#555A63] text-sm">
+                      Select a lead to Prompt
+                    </p>
+                  </>
                 )}
-
-                {/* Streaming */}
-                {chat.streamingContent && (
-                  <div className="flex gap-3 items-start">
-                    <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
-                      <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
-                    </div>
-                    <div
-                      className="rounded-xl px-4 py-2.5 text-sm leading-relaxed max-w-[85%] bg-[#1A1714] border border-[#2A2520] text-[#E0E0E0]"
-                      style={{ whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word" }}
-                    >
-                      {chat.streamingContent}
-                      <span className="inline-block w-1.5 h-3.5 ml-0.5 animate-pulse bg-[#F2903D]" style={{ borderRadius: 1 }} />
-                    </div>
-                  </div>
-                )}
-
-                {/* Fallback thinking spinner — only shows before any activities arrive */}
-                {chat.isStreaming && !chat.streamingContent && chat.streamingActivities.length === 0 && (
-                  <div className="flex gap-3 items-start">
-                    <div className="w-7 h-7 rounded-full overflow-hidden flex-shrink-0 mt-0.5">
-                      <Image src="/skyler-icons/skyler-avatar.png" alt="Skyler" width={28} height={28} className="w-full h-full object-cover" />
-                    </div>
-                    <div className="rounded-xl px-4 py-2.5 text-sm bg-[#1A1714] border border-[#2A2520] text-[#8B8F97] flex items-center gap-2">
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span className="text-xs">Thinking...</span>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={chatEndRef} />
               </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <SkylerChat
+              messages={chat.messages}
+              streamingContent={chat.streamingContent}
+              streamingActivities={chat.streamingActivities}
+              activitiesDone={chat.activitiesDone}
+              isStreaming={chat.isStreaming}
+              compact={false}
+            />
+          )}
 
           {/* Quick actions */}
           {!hasChatContent && promptedLead && (
