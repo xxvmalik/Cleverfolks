@@ -47,6 +47,8 @@ export type AgentLoopParams = {
    * When omitted, the entire system prompt is sent without caching.
    */
   systemPromptCacheBreakpoint?: number;
+  /** Override max_tokens for the final text response (default: 4096). Tool loop iterations always use 4096. */
+  finalMaxTokens?: number;
 };
 
 export type AgentLoopResult = {
@@ -485,6 +487,7 @@ export async function runAgentLoop(
     tools: customTools,
     toolExecutor: customToolExecutor,
     systemPromptCacheBreakpoint,
+    finalMaxTokens,
   } = params;
 
   const systemContent = buildSystemContent(systemPrompt, systemPromptCacheBreakpoint);
@@ -626,7 +629,7 @@ export async function runAgentLoop(
   // Make one final call without tools to force a text response
   const finalResponse = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
-    max_tokens: 4096,
+    max_tokens: finalMaxTokens ?? 4096,
     system: systemContent,
     messages,
   });

@@ -6,6 +6,7 @@ import { Search, ChevronDown, Mail, Mic, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
 import { ActivitySteps } from "@/components/skyler/shared/activity-steps";
+import { usePageContext } from "@/hooks/usePageContext";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +91,9 @@ function LeadCard({
   return (
     <button
       onClick={onClick}
+      data-entity-type="lead"
+      data-entity-id={lead.id}
+      data-entity-name={lead.contact_name ?? lead.company}
       className={cn(
         "w-full text-left p-4 rounded-xl border transition-all",
         isActive
@@ -141,6 +145,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const chat = useSkylerChat({ workspaceId });
+  const { getPageContext, trackAction } = usePageContext("lead_qualification");
 
   const fetchData = useCallback(async () => {
     try {
@@ -214,6 +219,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
   const handlePromptLead = (lead: Lead) => {
     setActiveLeadId(lead.id);
     setPromptedLead(lead);
+    trackAction(`prompted_lead:${lead.id}`);
   };
 
   // Send chat message via shared hook
@@ -234,6 +240,7 @@ export function LeadQualificationView({ workspaceId }: { workspaceId: string }) 
             stage: promptedLead.stage,
           }
         : null,
+      pageContext: getPageContext(),
     });
   };
 

@@ -2,12 +2,12 @@
 
 import { useState, useRef, useCallback } from "react";
 import {
-  ACTIVITY_THINKING,
   HIDDEN_ACTIVITIES,
   ERROR_MSG_GENERIC,
   ERROR_MSG_CONNECTION,
   stripMarkdown,
 } from "@/lib/skyler/chat-constants";
+import type { PageContext } from "@/hooks/usePageContext";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,6 +47,7 @@ export type UseSkylerChatReturn = {
     message: string;
     pipelineContext?: PipelineContext | null;
     taggedLead?: { id: string; name: string } | null;
+    pageContext?: PageContext | null;
   }) => Promise<void>;
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>;
   setActiveConversationId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -98,10 +99,12 @@ export function useSkylerChat({
       message,
       pipelineContext,
       taggedLead,
+      pageContext,
     }: {
       message: string;
       pipelineContext?: PipelineContext | null;
       taggedLead?: { id: string; name: string } | null;
+      pageContext?: PageContext | null;
     }) => {
       const trimmed = message.trim();
       if (!trimmed || isStreaming) return;
@@ -132,6 +135,10 @@ export function useSkylerChat({
 
         if (pipelineContext) {
           chatBody.pipelineContext = pipelineContext;
+        }
+
+        if (pageContext) {
+          chatBody.pageContext = pageContext;
         }
 
         const res = await fetch("/api/skyler/chat", {

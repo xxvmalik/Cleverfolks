@@ -38,21 +38,21 @@ export function ActivitySteps({
           onClick={() => setExpanded((p) => !p)}
           className="flex items-center gap-1.5 w-full text-left"
           style={{
-            padding: isPanel ? "6px 10px" : "6px 12px",
-            borderRadius: isPanel ? 10 : 8,
-            background: "rgba(242,144,61,0.06)",
-            border: "1px solid rgba(242,144,61,0.12)",
-            fontSize: isPanel ? 10 : 11,
-            fontWeight: 500,
-            color: isPanel ? "var(--sk-orange, #F2903D)" : "#F2903D",
+            padding: isPanel ? "4px 8px" : "5px 10px",
+            borderRadius: isPanel ? 8 : 6,
+            background: "rgba(242,144,61,0.04)",
+            border: "1px solid rgba(242,144,61,0.08)",
+            fontSize: isPanel ? 9 : 9,
+            fontWeight: 400,
+            color: isPanel ? "var(--sk-t4, rgba(255,255,255,0.18))" : "rgba(255,255,255,0.18)",
             cursor: "pointer",
             transition: "background 0.15s",
           }}
         >
           {isComplete ? (
-            <Check size={isPanel ? 11 : 12} style={{ opacity: 0.7, flexShrink: 0 }} />
+            <Check size={9} style={{ opacity: 0.5, flexShrink: 0 }} />
           ) : (
-            <Loader2 size={isPanel ? 11 : 12} className="animate-spin" style={{ flexShrink: 0 }} />
+            <Loader2 size={9} className="animate-spin" style={{ flexShrink: 0 }} />
           )}
           <span>
             {isComplete
@@ -60,9 +60,9 @@ export function ActivitySteps({
               : steps[steps.length - 1]}
           </span>
           {expanded ? (
-            <ChevronDown size={isPanel ? 10 : 11} style={{ marginLeft: "auto", opacity: 0.5 }} />
+            <ChevronDown size={9} style={{ marginLeft: "auto", opacity: 0.3 }} />
           ) : (
-            <ChevronRight size={isPanel ? 10 : 11} style={{ marginLeft: "auto", opacity: 0.5 }} />
+            <ChevronRight size={9} style={{ marginLeft: "auto", opacity: 0.3 }} />
           )}
         </button>
 
@@ -82,17 +82,17 @@ export function ActivitySteps({
                   key={`${step}-${i}`}
                   className="flex items-center gap-1.5"
                   style={{
-                    padding: "3px 0",
-                    fontSize: isPanel ? 10 : 11,
+                    padding: "2px 0",
+                    fontSize: 9,
                     color: isDone
-                      ? (isPanel ? "var(--sk-t3, #555A63)" : "#555A63")
-                      : (isPanel ? "var(--sk-t2, #8B8F97)" : "#8B8F97"),
+                      ? (isPanel ? "var(--sk-t4, rgba(255,255,255,0.18))" : "rgba(255,255,255,0.18)")
+                      : (isPanel ? "var(--sk-t3, rgba(255,255,255,0.3))" : "rgba(255,255,255,0.3)"),
                   }}
                 >
                   {isDone ? (
-                    <Check size={isPanel ? 9 : 10} style={{ color: isPanel ? "var(--sk-green, #4ADE80)" : "#4ADE80", flexShrink: 0 }} />
+                    <Check size={8} style={{ color: isPanel ? "var(--sk-green, #4ADE80)" : "#4ADE80", opacity: 0.5, flexShrink: 0 }} />
                   ) : (
-                    <Loader2 size={isPanel ? 9 : 10} className="animate-spin" style={{ color: "#F2903D", flexShrink: 0 }} />
+                    <Loader2 size={8} className="animate-spin" style={{ color: "#F2903D", opacity: 0.6, flexShrink: 0 }} />
                   )}
                   <span>{step}</span>
                 </div>

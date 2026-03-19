@@ -15,6 +15,7 @@ import { WorkflowSettings } from "@/components/skyler/workflow-settings";
 import { LeadQualificationView } from "@/components/skyler/lead-qualification-view";
 import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
 import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
+import { usePageContext } from "@/hooks/usePageContext";
 import type {
   PipelineRecord,
   PerformanceMetrics,
@@ -78,6 +79,8 @@ export function SkylerWorkspace({
       // Silently ignore
     }
   }, [workspaceId]);
+
+  const { getPageContext, trackAction } = usePageContext("sales_closer");
 
   const chat = useSkylerChat({
     workspaceId,
@@ -175,6 +178,7 @@ export function SkylerWorkspace({
 
   const handleSelectLead = (id: string) => {
     setSelectedLeadId(id);
+    trackAction(`selected_lead:${id}`);
   };
 
   const handleTagLead = (id: string) => {
@@ -338,6 +342,7 @@ export function SkylerWorkspace({
             stage: taggedLead.stage,
           }
         : null,
+      pageContext: getPageContext(),
     });
   };
 

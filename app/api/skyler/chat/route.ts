@@ -158,7 +158,7 @@ export async function POST(request: NextRequest) {
 
   // ── Parse body ────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let body: { message?: string; workspaceId?: string; conversationId?: string; pipelineContext?: any };
+  let body: { message?: string; workspaceId?: string; conversationId?: string; pipelineContext?: any; pageContext?: any };
   try {
     body = (await request.json()) as typeof body;
   } catch {
@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const { message, workspaceId, conversationId: inputConversationId, pipelineContext } = body;
+  const { message, workspaceId, conversationId: inputConversationId, pipelineContext, pageContext } = body;
   if (!message?.trim() || !workspaceId) {
     return new Response(
       JSON.stringify({ error: "message and workspaceId are required" }),
@@ -311,6 +311,24 @@ export async function POST(request: NextRequest) {
     workflowSettings,
     effectiveAgentMemories
   );
+
+  // ── Inject page context (Part B of Stage 14) ─────────────────────────────
+  if (pageContext) {
+    const pc = pageContext;
+    const entities = (pc.visibleEntities ?? [])
+      .slice(0, 10)
+      .map((e: { type: string; name: string }) => `${e.type}: ${e.name}`)
+      .join(", ");
+    const actions = (pc.recentActions ?? []).slice(0, 5).join(", ");
+
+    systemPrompt += `\n\n<current_context>
+User is chatting from the ${pc.pageType ?? "unknown"} page.
+Route: ${pc.route ?? "/unknown"}
+Current time: ${pc.timestamp ?? new Date().toISOString()}
+${entities ? `Visible on screen: ${entities}` : "No specific entities visible."}
+${actions ? `Recent actions: ${actions}` : ""}
+</current_context>`;
+  }
 
   // Cache boundary: everything up to here is semi-static (identity + settings + tools).
   // Dynamic content (clarification, entity block) is appended after this point.
@@ -735,6 +753,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
             tools: SKYLER_TOOLS,
             toolExecutor: skylerToolExecutor,
             systemPromptCacheBreakpoint,
+            finalMaxTokens: 1024,
           },
           (event: SSEEvent) => {
             send(event);

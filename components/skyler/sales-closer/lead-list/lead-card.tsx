@@ -22,6 +22,9 @@ export function LeadCard({
     <button
       onClick={onSelect}
       className="w-full text-left group"
+      data-entity-type="lead"
+      data-entity-id={record.id}
+      data-entity-name={record.contact_name}
       style={{
         background: "var(--sk-card-lead)",
         border: selected
