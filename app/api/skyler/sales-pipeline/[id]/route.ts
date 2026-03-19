@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import { validateAndLog } from "@/lib/skyler/pipeline/state-machine";
 
 export async function GET(
   _req: NextRequest,
@@ -102,7 +103,21 @@ export async function PATCH(
 
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
-  if (stage) updates.stage = stage;
+  if (stage) {
+    // Get current stage for FSM validation
+    const { data: current } = await db
+      .from("skyler_sales_pipeline")
+      .select("stage")
+      .eq("id", id)
+      .single();
+    const fromStage = (current?.stage as string) ?? "unknown";
+
+    const check = await validateAndLog(id, fromStage, stage, "user_action", "manual PATCH");
+    if (!check.valid) {
+      return NextResponse.json({ error: check.reason }, { status: 400 });
+    }
+    updates.stage = stage;
+  }
   if (resolution) {
     updates.resolution = resolution;
     updates.resolved_at = new Date().toISOString();

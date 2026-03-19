@@ -20,6 +20,9 @@ import { detectNoShow } from "@/lib/inngest/functions/detect-no-show";
 import { detectMeetingPatterns } from "@/lib/inngest/functions/detect-meeting-patterns";
 import { enrichNewAttendee } from "@/lib/inngest/functions/enrich-new-attendee";
 import { logCRMActivity } from "@/lib/inngest/functions/log-crm-activity";
+// Stage 15: Self-Healing Pipeline Engine
+import { reconcilePipeline } from "@/lib/inngest/functions/reconcile-pipeline";
+import { leadWatchdog } from "@/lib/inngest/functions/lead-watchdog";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -51,5 +54,8 @@ export const { GET, POST, PUT } = serve({
     detectMeetingPatterns,
     enrichNewAttendee,
     logCRMActivity,
+    // Stage 15: Self-Healing Pipeline Engine
+    reconcilePipeline,
+    leadWatchdog,
   ],
 });

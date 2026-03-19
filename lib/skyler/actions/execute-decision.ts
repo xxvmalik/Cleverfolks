@@ -16,6 +16,7 @@ import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 import { inngest } from "@/lib/inngest/client";
 import { STAGES } from "@/lib/skyler/pipeline-stages";
+import { validateAndLog, isValidTransition, getValidNextStages } from "@/lib/skyler/pipeline/state-machine";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,20 @@ async function executeUpdateStage(ctx: ExecutionContext): Promise<ExecutionResul
     return { success: false, action: "update_stage", error: "No new_stage in decision" };
   }
 
+  // FSM validation
+  const check = await validateAndLog(
+    pipeline.id,
+    pipeline.stage,
+    newStage,
+    "reasoning_engine",
+    `${ctx.eventType} → ${decision.action_type}`,
+    { reasoning: decision.reasoning },
+    decision.confidence_score
+  );
+  if (!check.valid) {
+    return { success: false, action: "update_stage", error: check.reason };
+  }
+
   const { error } = await db
     .from("skyler_sales_pipeline")
     .update({ stage: newStage, updated_at: new Date().toISOString() })
@@ -231,6 +246,17 @@ async function executeCreateNote(ctx: ExecutionContext): Promise<ExecutionResult
 async function executeCloseWon(ctx: ExecutionContext): Promise<ExecutionResult> {
   const { db, workspaceId, pipeline, decision } = ctx;
 
+  // Log transition (close_won is valid from most engaged stages)
+  await validateAndLog(
+    pipeline.id,
+    pipeline.stage,
+    STAGES.CLOSED_WON,
+    "reasoning_engine",
+    `close_won: ${decision.reasoning}`,
+    { reasoning: decision.reasoning, won_amount: decision.parameters.won_amount },
+    decision.confidence_score
+  );
+
   const { error } = await db
     .from("skyler_sales_pipeline")
     .update({
@@ -262,6 +288,17 @@ async function executeCloseWon(ctx: ExecutionContext): Promise<ExecutionResult> 
 
 async function executeCloseLost(ctx: ExecutionContext): Promise<ExecutionResult> {
   const { db, workspaceId, pipeline, decision } = ctx;
+
+  // Log transition
+  await validateAndLog(
+    pipeline.id,
+    pipeline.stage,
+    STAGES.CLOSED_LOST,
+    "reasoning_engine",
+    `close_lost: ${decision.parameters.lost_reason ?? decision.reasoning}`,
+    { reasoning: decision.reasoning },
+    decision.confidence_score
+  );
 
   const { error } = await db
     .from("skyler_sales_pipeline")

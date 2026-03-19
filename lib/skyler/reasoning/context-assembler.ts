@@ -40,6 +40,7 @@ import {
   inferTrackedTaskType,
   type ConfidenceRecord,
 } from "@/lib/skyler/learning/confidence-tracking";
+import { getValidNextStages } from "@/lib/skyler/pipeline/state-machine";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,6 +128,10 @@ export type ReasoningContext = {
     details: Record<string, unknown> | null;
     created_at: string;
   }>;
+  // Stage 15: Pre-computed temporal context
+  meetingStatus: string;
+  stalenessNotes: string[];
+  validNextStages: string[];
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -246,6 +251,10 @@ export async function assembleReasoningContext(
     ? profile[0]?.full_name ?? null
     : profile?.full_name ?? null;
 
+  // Stage 15: Pre-compute meeting status and staleness notes
+  const { meetingStatus, stalenessNotes } = await computeMeetingStatus(db, pipelineId, pipeline.stage);
+  const validNextStages = getValidNextStages(pipeline.stage);
+
   return {
     event,
     workflowSettings,
@@ -266,13 +275,16 @@ export async function assembleReasoningContext(
       details: Record<string, unknown> | null;
       created_at: string;
     }>,
+    meetingStatus,
+    stalenessNotes,
+    validNextStages,
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord, healthSignals } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord, healthSignals, meetingStatus, stalenessNotes, validNextStages } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -329,6 +341,13 @@ ${p.action_notes && p.action_notes.length > 0 ? `- Action items: ${p.action_note
 - Max follow-ups: ${ws.maxFollowUpAttempts ?? 4}
 - Book demos using: ${ws.bookDemosUsing || "Not set"}${ws.phrasesToNeverUse.length > 0 ? `\n- NEVER use: ${ws.phrasesToNeverUse.map((p) => `"${p}"`).join(", ")}` : ""}${ws.phrasesToAlwaysUse.length > 0 ? `\n- Always use: ${ws.phrasesToAlwaysUse.map((p) => `"${p}"`).join(", ")}` : ""}`;
 
+  // Stage 15: Pre-computed meeting status + staleness + valid stages
+  const meetingStatusBlock = meetingStatus ? `\n- Meetings: ${meetingStatus}` : "";
+  const stalenessBlock = stalenessNotes.length > 0 ? `\n\n## Stage Alerts\n${stalenessNotes.map((n) => `⚠ ${n}`).join("\n")}` : "";
+  const validStagesBlock = validNextStages.length > 0
+    ? `\n- Valid next stages: ${validNextStages.join(", ")}`
+    : "\n- Valid next stages: none (terminal state)";
+
   return `## What Just Happened
 ${eventDescription}
 
@@ -336,14 +355,14 @@ ${eventDescription}
 - Name: ${p.contact_name}
 - Email: ${p.contact_email}
 - Company: ${p.company_name}
-- Pipeline Stage: ${p.stage}
+- Pipeline Stage: ${p.stage}${validStagesBlock}
 - Emails Sent: ${p.emails_sent}, Opened: ${p.emails_opened ?? 0}, Replied: ${p.emails_replied ?? 0}
 - Lead Score: ${p.lead_score ?? "not scored"}
 - Resolution: ${p.resolution ?? "none (active)"}
 - Awaiting Reply: ${p.awaiting_reply ? "Yes" : "No"}
 - In Pipeline Since: ${p.created_at}
-${p.deal_value != null ? `- Deal Value: $${p.deal_value.toLocaleString()}` : ""}
-${meetingBlock}
+${p.deal_value != null ? `- Deal Value: $${p.deal_value.toLocaleString()}` : ""}${meetingStatusBlock}
+${meetingBlock}${stalenessBlock}
 
 ## Conversation Thread
 ${threadBlock}
@@ -432,6 +451,117 @@ function formatLearningContext(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+// ── Stage 15: Pre-computed temporal context ─────────────────────────────────
+
+function relativeTime(date: Date): string {
+  const now = Date.now();
+  const diffMs = now - date.getTime();
+  const future = diffMs < 0;
+  const absDiff = Math.abs(diffMs);
+  const mins = Math.floor(absDiff / 60000);
+  const hours = Math.floor(absDiff / 3600000);
+  const days = Math.floor(absDiff / 86400000);
+
+  if (mins < 60) {
+    const label = `${mins} minute${mins !== 1 ? "s" : ""}`;
+    return future ? `in ${label}` : `${label} ago`;
+  }
+  if (hours < 24) {
+    const label = `${hours} hour${hours !== 1 ? "s" : ""}`;
+    return future ? `in ${label}` : `${label} ago`;
+  }
+  const label = `${days} day${days !== 1 ? "s" : ""}`;
+  return future ? `in ${label}` : `${label} ago`;
+}
+
+async function computeMeetingStatus(
+  db: ReturnType<typeof createAdminSupabaseClient>,
+  pipelineId: string,
+  currentStage: string
+): Promise<{ meetingStatus: string; stalenessNotes: string[] }> {
+  const now = new Date().toISOString();
+  const stalenessNotes: string[] = [];
+
+  // Load upcoming and past meetings
+  const [upcomingResult, pastResult] = await Promise.all([
+    db
+      .from("calendar_events")
+      .select("id, start_time, end_time, title")
+      .eq("lead_id", pipelineId)
+      .gt("start_time", now)
+      .eq("status", "confirmed")
+      .order("start_time", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+    db
+      .from("calendar_events")
+      .select("id, start_time, end_time, title")
+      .eq("lead_id", pipelineId)
+      .lt("end_time", now)
+      .order("end_time", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const upcoming = upcomingResult.data;
+  const past = pastResult.data;
+
+  // Count total meetings
+  const { count } = await db
+    .from("calendar_events")
+    .select("id", { count: "exact", head: true })
+    .eq("lead_id", pipelineId);
+  const totalMeetings = count ?? 0;
+
+  // Build meeting status string
+  let meetingStatus = "";
+  if (past && upcoming) {
+    const pastTime = relativeTime(new Date(past.end_time));
+    const upcomingTime = relativeTime(new Date(upcoming.start_time));
+    meetingStatus = `Last meeting was ${pastTime}. Next meeting is ${upcomingTime}. ${totalMeetings} total meetings on record.`;
+  } else if (past && !upcoming) {
+    const pastTime = relativeTime(new Date(past.end_time));
+    meetingStatus = `Last meeting was ${pastTime}. No upcoming meetings scheduled.`;
+  } else if (!past && upcoming) {
+    const upcomingTime = relativeTime(new Date(upcoming.start_time));
+    meetingStatus = `Next meeting is ${upcomingTime}. No past meetings on record.`;
+  } else {
+    meetingStatus = "No meetings scheduled or completed.";
+  }
+
+  // Stage staleness detection
+  if (
+    (currentStage === "demo_booked" || currentStage === "meeting_booked") &&
+    past
+  ) {
+    const pastTime = relativeTime(new Date(past.end_time));
+    stalenessNotes.push(
+      `WARNING: Stage is still '${currentStage}' but the meeting already happened ${pastTime}. Stage likely needs updating based on the meeting outcome.`
+    );
+  }
+
+  // Check for reply in prospecting stages
+  if (
+    ["initial_outreach", "follow_up_1", "follow_up_2", "follow_up_3"].includes(
+      currentStage
+    )
+  ) {
+    const { data: pipeline } = await db
+      .from("skyler_sales_pipeline")
+      .select("emails_replied")
+      .eq("id", pipelineId)
+      .single();
+
+    if (pipeline && (pipeline.emails_replied ?? 0) > 0) {
+      stalenessNotes.push(
+        `WARNING: Stage is '${currentStage}' but the lead has replied to emails. Stage may need updating to 'replied'.`
+      );
+    }
+  }
+
+  return { meetingStatus, stalenessNotes };
+}
 
 function formatEventDescription(event: ReasoningEvent): string {
   const d = event.data;

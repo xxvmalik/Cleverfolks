@@ -25,6 +25,7 @@ import { checkGuardrails } from "@/lib/skyler/reasoning/guardrail-engine";
 import { executeDecision, type ExecutionContext } from "@/lib/skyler/actions/execute-decision";
 import { assembleReasoningContext } from "@/lib/skyler/reasoning/context-assembler";
 import { STAGES } from "@/lib/skyler/pipeline-stages";
+import { validateAndLog } from "@/lib/skyler/pipeline/state-machine";
 import { chunkAndEmbedTranscript } from "@/lib/skyler/meetings/transcript-chunker";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -315,7 +316,16 @@ ${transcriptText.slice(0, 12000)}`,
         key_discussion_points: summary.key_takeaways,
       };
 
+      // Get current stage for event logging
+      const { data: currentPipeline } = await db
+        .from("skyler_sales_pipeline")
+        .select("stage")
+        .eq("id", pipelineId)
+        .single();
+      const fromStage = (currentPipeline?.stage as string) ?? "unknown";
+
       if (summary.outcome === "won") {
+        await validateAndLog(pipelineId, fromStage, STAGES.CLOSED_WON, "webhook", `meeting_transcript: ${summary.reasoning}`);
         await db
           .from("skyler_sales_pipeline")
           .update({
@@ -350,6 +360,7 @@ ${transcriptText.slice(0, 12000)}`,
         });
       } else if (summary.outcome === "proposal") {
         // Prospect committed but a commercial step remains (invoice, contract, payment)
+        await validateAndLog(pipelineId, fromStage, STAGES.PROPOSAL, "webhook", `meeting_transcript: ${summary.reasoning}`);
         await db
           .from("skyler_sales_pipeline")
           .update({
@@ -372,6 +383,7 @@ ${transcriptText.slice(0, 12000)}`,
         });
 
       } else if (summary.outcome === "lost") {
+        await validateAndLog(pipelineId, fromStage, STAGES.CLOSED_LOST, "webhook", `meeting_transcript: ${summary.reasoning}`);
         await db
           .from("skyler_sales_pipeline")
           .update({
@@ -405,6 +417,7 @@ ${transcriptText.slice(0, 12000)}`,
           resolution: "closed_lost",
         });
       } else {
+        await validateAndLog(pipelineId, fromStage, STAGES.FOLLOW_UP_MEETING, "webhook", `meeting_transcript: needs_follow_up`);
         await db
           .from("skyler_sales_pipeline")
           .update({
