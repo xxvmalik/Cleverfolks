@@ -7,7 +7,8 @@ import { ChatMessages } from "./chat-messages";
 import { ChatInput } from "./chat-input";
 import { ChatEmpty } from "./chat-empty";
 import { ChatHistory } from "./chat-history";
-import type { ChatMessage, ConversationItem, TaggedLead } from "../types";
+import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
+import type { ConversationItem, TaggedLead } from "../types";
 
 export function ChatPanel({
   open,

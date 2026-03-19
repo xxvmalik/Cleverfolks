@@ -5,6 +5,13 @@ import type { UnifiedResult } from "@/lib/strategy-executor";
 import type { WebResult } from "@/lib/web-search";
 import type { IntegrationInfo } from "@/lib/integrations-manifest";
 import type { createAdminSupabaseClient } from "@/lib/supabase-admin";
+import {
+  ACTIVITY_GENERATING,
+  ACTIVITY_FALLBACK,
+  ACTIVITY_RENDER_DELAY_MS,
+  STREAM_CHUNK_SIZE,
+  STREAM_DELAY_MS,
+} from "@/lib/skyler/chat-constants";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -177,7 +184,7 @@ function generateActivityLabel(
     case "send_email":
       return "Preparing email draft...";
     default:
-      return "Processing...";
+      return ACTIVITY_FALLBACK;
   }
 }
 
@@ -535,9 +542,9 @@ export async function runAgentLoop(
       const fullText = textBlocks.map((b) => b.text).join("");
 
       // Stream the final response with tag buffering for [ROLE_UPDATE:]
-      onEvent({ type: "activity", action: "Generating response..." });
+      onEvent({ type: "activity", action: ACTIVITY_GENERATING });
       // Small gap so the frontend can render the activity before text starts
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, ACTIVITY_RENDER_DELAY_MS));
       await streamTextWithTagBuffering(fullText, onEvent);
 
       return { fullResponse: fullText, allResults, webResults };
@@ -629,8 +636,8 @@ export async function runAgentLoop(
   );
   const fullText = textBlocks.map((b) => b.text).join("");
 
-  onEvent({ type: "activity", action: "Generating response..." });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  onEvent({ type: "activity", action: ACTIVITY_GENERATING });
+  await new Promise((resolve) => setTimeout(resolve, ACTIVITY_RENDER_DELAY_MS));
   await streamTextWithTagBuffering(fullText, onEvent);
 
   return { fullResponse: fullText, allResults, webResults };
@@ -652,8 +659,8 @@ async function streamTextWithTagBuffering(
   const cleanText = text.replace(/\[ROLE_UPDATE:[^\]]*\]/gi, "").trimEnd();
 
   // Send in small chunks with micro-delays so the stream flushes progressively
-  const CHUNK_SIZE = 30;
-  const DELAY_MS = 8;
+  const CHUNK_SIZE = STREAM_CHUNK_SIZE;
+  const DELAY_MS = STREAM_DELAY_MS;
   for (let i = 0; i < cleanText.length; i += CHUNK_SIZE) {
     const chunk = cleanText.slice(i, i + CHUNK_SIZE);
     onEvent({ type: "text", text: chunk });

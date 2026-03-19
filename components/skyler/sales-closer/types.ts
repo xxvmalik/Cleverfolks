@@ -76,6 +76,8 @@ export type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   taggedLead?: { id: string; name: string } | null;
+  /** Activity steps that were performed before this message was generated */
+  activities?: string[];
 };
 
 export type ConversationItem = {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { PanelLeftOpen, Bell, ChevronDown } from "lucide-react";
@@ -13,10 +13,11 @@ import { ChatPanel } from "./chat/chat-panel";
 import { RightIconBar } from "./right-icon-bar";
 import { WorkflowSettings } from "@/components/skyler/workflow-settings";
 import { LeadQualificationView } from "@/components/skyler/lead-qualification-view";
+import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
+import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
 import type {
   PipelineRecord,
   PerformanceMetrics,
-  ChatMessage,
   ConversationItem,
   TaggedLead,
   AlertItem,
@@ -60,21 +61,31 @@ export function SkylerWorkspace({
   const [activeTab, setActiveTab] = useState<WorkflowTab>("sales-closer");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
-  // ── Chat state ──────────────────────────────────────────────────
+  // ── Chat state (shared hook) ────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [taggedLead, setTaggedLead] = useState<TaggedLead | null>(null);
-  const [streamingActivities, setStreamingActivities] = useState<string[]>([]);
-  const [activitiesDone, setActivitiesDone] = useState(false);
 
-  // Ref to track activeConversationId inside SSE handler
-  const activeConvIdRef = useRef(activeConversationId);
-  activeConvIdRef.current = activeConversationId;
+  const fetchConversationsRef = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/skyler/conversations?workspaceId=${workspaceId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setConversations(data.conversations ?? []);
+      }
+    } catch {
+      // Silently ignore
+    }
+  }, [workspaceId]);
+
+  const chat = useSkylerChat({
+    workspaceId,
+    onResponseComplete: () => {
+      fetchConversationsRef();
+      fetchPipelineData();
+    },
+  });
 
   // ── Data fetching ───────────────────────────────────────────────
 
@@ -103,23 +114,11 @@ export function SkylerWorkspace({
     }
   }, [workspaceId]);
 
-  const fetchConversations = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/skyler/conversations?workspaceId=${workspaceId}`);
-      if (res.ok) {
-        const data = await res.json();
-        setConversations(data.conversations ?? []);
-      }
-    } catch {
-      // Silently ignore
-    }
-  }, [workspaceId]);
-
   // On mount
   useEffect(() => {
     fetchPipelineData();
-    fetchConversations();
-  }, [fetchPipelineData, fetchConversations]);
+    fetchConversationsRef();
+  }, [fetchPipelineData, fetchConversationsRef]);
 
   // ── Lead selection side effects ─────────────────────────────────
 
@@ -289,9 +288,7 @@ export function SkylerWorkspace({
   // ── Conversation management ──────────────────────────────────────
 
   const handleNewChat = () => {
-    setActiveConversationId(null);
-    setChatMessages([]);
-    setStreamingContent("");
+    chat.clearChat();
     setChatOpen(true);
   };
 
@@ -315,9 +312,8 @@ export function SkylerWorkspace({
 
   const handleDeleteConversation = async (id: string) => {
     setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (activeConversationId === id) {
-      setActiveConversationId(null);
-      setChatMessages([]);
+    if (chat.activeConversationId === id) {
+      chat.clearChat();
     }
     await fetch(`/api/conversations/${id}`, { method: "DELETE" });
   };
@@ -326,133 +322,26 @@ export function SkylerWorkspace({
 
   const handleSendMessage = async () => {
     const trimmed = chatInput.trim();
-    if (!trimmed || isStreaming) return;
+    if (!trimmed || chat.isStreaming) return;
 
-    const userMsg: ChatMessage = {
-      id: `user-${Date.now()}`,
-      role: "user",
-      content: trimmed,
-      taggedLead: taggedLead ? { id: taggedLead.id, name: taggedLead.name } : null,
-    };
-
-    setChatMessages((prev) => [...prev, userMsg]);
     setChatInput("");
-    setIsStreaming(true);
-    setStreamingContent("");
-    setStreamingActivities([]);
-    setActivitiesDone(false);
-
-    let currentConversationId = activeConvIdRef.current;
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const chatBody: Record<string, any> = {
-        message: trimmed,
-        workspaceId,
-        conversationId: currentConversationId ?? undefined,
-      };
-
-      if (taggedLead) {
-        chatBody.pipelineContext = {
-          source: "pipeline",
-          pipeline_id: taggedLead.id,
-          contact_name: taggedLead.name,
-          company_name: taggedLead.company,
-          contact_email: taggedLead.email,
-          stage: taggedLead.stage,
-        };
-      }
-
-      const res = await fetch("/api/skyler/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(chatBody),
-      });
-
-      if (!res.ok || !res.body) {
-        throw new Error("Failed to connect to Skyler");
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let accumulatedText = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const event = JSON.parse(line.slice(6));
-
-            if (event.type === "activity") {
-              setStreamingActivities((prev) => {
-                if (prev[prev.length - 1] === event.action) return prev;
-                return [...prev, event.action];
-              });
-            } else if (event.type === "text") {
-              accumulatedText += event.text;
-              setStreamingContent(accumulatedText);
-            } else if (event.type === "metadata") {
-              if (event.conversationId) {
-                currentConversationId = event.conversationId;
-                if (!activeConvIdRef.current) {
-                  setActiveConversationId(event.conversationId);
-                }
-              }
-            } else if (event.type === "done") {
-              setChatMessages((prev) => [
-                ...prev,
-                {
-                  id: `assistant-${Date.now()}`,
-                  role: "assistant",
-                  content: accumulatedText,
-                },
-              ]);
-              setStreamingContent("");
-              setActivitiesDone(true);
-              fetchConversations();
-              // Refresh pipeline in case chat triggered any actions
-              fetchPipelineData();
-            } else if (event.type === "error") {
-              setChatMessages((prev) => [
-                ...prev,
-                {
-                  id: `error-${Date.now()}`,
-                  role: "assistant",
-                  content: "Something went wrong. Please try again.",
-                },
-              ]);
-              setStreamingContent("");
-            }
-          } catch {
-            // Skip malformed SSE lines
+    await chat.sendMessage({
+      message: trimmed,
+      taggedLead: taggedLead ? { id: taggedLead.id, name: taggedLead.name } : null,
+      pipelineContext: taggedLead
+        ? {
+            source: "pipeline",
+            pipeline_id: taggedLead.id,
+            contact_name: taggedLead.name,
+            company_name: taggedLead.company,
+            contact_email: taggedLead.email,
+            stage: taggedLead.stage,
           }
-        }
-      }
-    } catch {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          id: `error-${Date.now()}`,
-          role: "assistant",
-          content: "Failed to connect to Skyler. Please try again.",
-        },
-      ]);
-      setStreamingContent("");
-    } finally {
-      setIsStreaming(false);
-    }
+        : null,
+    });
   };
 
   const handleSelectConversation = async (convId: string) => {
-    setActiveConversationId(convId);
     try {
       const res = await fetch(`/api/skyler/conversations/${convId}/messages`);
       if (res.ok) {
@@ -464,7 +353,7 @@ export function SkylerWorkspace({
             content: m.content,
           })
         );
-        setChatMessages(msgs);
+        chat.switchConversation(convId, msgs);
       }
     } catch {
       // Silently ignore
@@ -480,7 +369,7 @@ export function SkylerWorkspace({
         collapsed={sidebarCollapsed}
         onCollapse={() => setSidebarCollapsed(true)}
         conversations={conversations}
-        activeConversationId={activeConversationId}
+        activeConversationId={chat.activeConversationId}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         onNewChat={handleNewChat}
@@ -606,17 +495,17 @@ export function SkylerWorkspace({
             <ChatPanel
               open={chatOpen}
               onToggle={() => setChatOpen((prev) => !prev)}
-              messages={chatMessages}
+              messages={chat.messages}
               conversations={conversations}
-              streamingContent={streamingContent}
-              streamingActivities={streamingActivities}
-              activitiesDone={activitiesDone}
+              streamingContent={chat.streamingContent}
+              streamingActivities={chat.streamingActivities}
+              activitiesDone={chat.activitiesDone}
               inputValue={chatInput}
               onInputChange={setChatInput}
               onSend={handleSendMessage}
               taggedLead={taggedLead}
               onClearTag={() => setTaggedLead(null)}
-              isStreaming={isStreaming}
+              isStreaming={chat.isStreaming}
               onSelectConversation={handleSelectConversation}
             />
           </div>
