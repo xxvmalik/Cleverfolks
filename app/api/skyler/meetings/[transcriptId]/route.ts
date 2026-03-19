@@ -89,17 +89,28 @@ export async function GET(
     return NextResponse.json({ transcript: [] });
   }
 
-  // Format raw transcript into readable lines
-  const raw = data.raw_transcript as Array<{
-    speaker?: string;
-    words?: Array<{ text: string; start_time?: number }>;
-  }> | null;
+  // raw_transcript can be either:
+  // 1. A JSONB array of { speaker, words: [{ text, start_time }] } (from Recall API)
+  // 2. A JSONB string in "Speaker: text\nSpeaker: text\n" format (from real-time transcript)
+  const raw = data.raw_transcript;
+
+  if (typeof raw === "string") {
+    // Parse "Speaker: text\n" format
+    const lines = raw.split("\n").filter(Boolean).map((line) => {
+      const colonIdx = line.indexOf(": ");
+      if (colonIdx > 0) {
+        return { speaker: line.slice(0, colonIdx), text: line.slice(colonIdx + 2), timestamp: null };
+      }
+      return { speaker: "Unknown", text: line, timestamp: null };
+    });
+    return NextResponse.json({ transcript: lines });
+  }
 
   if (!raw || !Array.isArray(raw)) {
     return NextResponse.json({ transcript: [] });
   }
 
-  const lines = raw.map((segment) => ({
+  const lines = (raw as Array<{ speaker?: string; words?: Array<{ text: string; start_time?: number }> }>).map((segment) => ({
     speaker: segment.speaker ?? "Unknown",
     text: (segment.words ?? []).map((w) => w.text).join(" "),
     timestamp: segment.words?.[0]?.start_time ?? null,
