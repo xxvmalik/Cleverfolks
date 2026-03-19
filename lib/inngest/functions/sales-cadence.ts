@@ -133,39 +133,70 @@ export const salesCadenceScheduler = inngest.createFunction(
       return stale.length;
     });
 
-    // Step 4: Mark leads as no_response if no reply 48h after last email
+    // Step 4: Mark leads as no_response if no reply 48h after the LAST follow-up
+    // Only triggers when cadence_step >= maxFollowUpAttempts (from workspace settings)
     // These can be re-engaged if the lead replies later (reply-detector clears resolution)
     const noResponseCount = await step.run("mark-48h-no-response", async () => {
       const db = createAdminSupabaseClient();
       const fortyEightHoursAgo = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
-      const { data: unresponsive } = await db
+      // Find leads that have exhausted their cadence and still no reply after 48h
+      const { data: candidates } = await db
         .from("skyler_sales_pipeline")
-        .select("id, workspace_id, contact_email, contact_name, company_name")
+        .select("id, workspace_id, contact_email, contact_name, company_name, cadence_step")
         .is("resolution", null)
         .eq("awaiting_reply", true)
         .lte("last_email_sent_at", fortyEightHoursAgo)
-        .is("last_reply_at", null) // Never replied at all
+        .is("last_reply_at", null)
         .limit(50);
 
-      if (!unresponsive || unresponsive.length === 0) return 0;
+      if (!candidates || candidates.length === 0) return 0;
 
-      const now = new Date().toISOString();
-      for (const record of unresponsive) {
-        await db
-          .from("skyler_sales_pipeline")
-          .update({
-            resolution: "no_response",
-            resolution_notes: "No reply within 48 hours of last outreach",
-            resolved_at: now,
-            awaiting_reply: false,
-            updated_at: now,
-          })
-          .eq("id", record.id);
+      // Group by workspace to check each workspace's maxFollowUpAttempts
+      const byWorkspace = new Map<string, typeof candidates>();
+      for (const c of candidates) {
+        const wId = c.workspace_id as string;
+        if (!byWorkspace.has(wId)) byWorkspace.set(wId, []);
+        byWorkspace.get(wId)!.push(c);
       }
 
-      console.log(`[cadence-scheduler] Marked ${unresponsive.length} leads as no_response (48h timeout)`);
-      return unresponsive.length;
+      let count = 0;
+      const now = new Date().toISOString();
+
+      for (const [wsId, leads] of byWorkspace) {
+        // Load workspace's maxFollowUpAttempts setting
+        const { data: ws } = await db
+          .from("workspaces")
+          .select("settings")
+          .eq("id", wsId)
+          .single();
+
+        const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+        const workflow = (settings.skyler_workflow ?? {}) as Record<string, unknown>;
+        const maxAttempts = (workflow.maxFollowUpAttempts as number) ?? 4;
+
+        // Only mark as no_response if cadence is fully exhausted
+        const exhausted = leads.filter((l) => (l.cadence_step as number) >= maxAttempts);
+
+        for (const record of exhausted) {
+          await db
+            .from("skyler_sales_pipeline")
+            .update({
+              resolution: "no_response",
+              resolution_notes: `No reply within 48 hours after ${maxAttempts} follow-up attempts`,
+              resolved_at: now,
+              awaiting_reply: false,
+              updated_at: now,
+            })
+            .eq("id", record.id);
+          count++;
+        }
+      }
+
+      if (count > 0) {
+        console.log(`[cadence-scheduler] Marked ${count} leads as no_response (48h after final follow-up)`);
+      }
+      return count;
     });
 
     return {
