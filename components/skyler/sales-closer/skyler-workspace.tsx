@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { PanelLeftOpen } from "lucide-react";
+import Image from "next/image";
+import Link from "next/link";
+import { PanelLeftOpen, Bell, ChevronDown } from "lucide-react";
+import { signOut } from "@/lib/auth";
 import { SkylerSidebar, type WorkflowTab } from "./skyler-sidebar";
 import { MetricsBar } from "./metrics-bar";
 import { LeadListPanel } from "./lead-list/lead-list-panel";
@@ -55,6 +58,7 @@ export function SkylerWorkspace({
   // ── Sidebar state ───────────────────────────────────────────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [activeTab, setActiveTab] = useState<WorkflowTab>("sales-closer");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   // ── Chat state ──────────────────────────────────────────────────
   const [chatOpen, setChatOpen] = useState(true);
@@ -463,25 +467,92 @@ export function SkylerWorkspace({
 
       {/* Main workspace area */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Top area: expand sidebar button (when collapsed) + metrics */}
-        <div className="flex items-center" style={{ background: "var(--sk-surface)", borderBottom: "1px solid var(--sk-border)" }}>
-          {sidebarCollapsed && (
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className="flex-shrink-0 transition-colors"
-              style={{ padding: "14px 12px 14px 18px", color: "var(--sk-t3)" }}
-            >
-              <PanelLeftOpen className="w-5 h-5" />
-            </button>
-          )}
-          <div className="flex-1">
-            <MetricsBar
-              metrics={performanceMetrics}
-              salesCloserEnabled={salesCloserEnabled}
-              onToggle={handleToggleSalesCloser}
-            />
+        {/* Top bar — Sales Closer gets MetricsBar, other tabs get standard top bar */}
+        {activeTab === "sales-closer" ? (
+          <div className="flex items-center" style={{ background: "var(--sk-surface)", borderBottom: "1px solid var(--sk-border)" }}>
+            {sidebarCollapsed && (
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="flex-shrink-0 transition-colors"
+                style={{ padding: "14px 12px 14px 18px", color: "var(--sk-t3)" }}
+              >
+                <PanelLeftOpen className="w-5 h-5" />
+              </button>
+            )}
+            <div className="flex-1">
+              <MetricsBar
+                metrics={performanceMetrics}
+                salesCloserEnabled={salesCloserEnabled}
+                onToggle={handleToggleSalesCloser}
+              />
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="h-[60px] flex items-center justify-between px-6 flex-shrink-0 border-b border-[#2A2D35]/40 bg-[#1B1B1B]">
+            <div className="flex items-center gap-4">
+              {sidebarCollapsed && (
+                <button
+                  onClick={() => setSidebarCollapsed(false)}
+                  className="text-[#8B8F97] hover:text-white transition-colors"
+                  aria-label="Show sidebar"
+                >
+                  <PanelLeftOpen className="w-5 h-5" />
+                </button>
+              )}
+              <Image
+                src="/cleverbrain-chat-icons/cleverfolks-logo.png"
+                alt="Cleverfolks"
+                width={120}
+                height={24}
+                className="brightness-0 invert"
+              />
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <Bell className="w-5 h-5 text-[#8B8F97]" />
+              </div>
+              <Image
+                src="/cleverbrain-chat-icons/organization-dp.png"
+                alt="User"
+                width={32}
+                height={32}
+                className="rounded-full"
+              />
+              <div className="relative">
+                <button
+                  onClick={() => setUserMenuOpen((v) => !v)}
+                  className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+                >
+                  <div className="text-right">
+                    <p className="text-white text-sm font-medium leading-tight">{userName || "User"}</p>
+                    <p className="text-[#8B8F97] text-xs leading-tight">{companyName || "Company"}</p>
+                  </div>
+                  <ChevronDown className="w-4 h-4 text-[#8B8F97]" />
+                </button>
+                {userMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
+                    <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
+                      <Link
+                        href="/settings"
+                        className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
+                        onClick={() => setUserMenuOpen(false)}
+                      >
+                        Settings
+                      </Link>
+                      <button
+                        onClick={() => void signOut()}
+                        className="w-full text-left px-4 py-2 text-sm text-[#F87171] hover:bg-white/5 transition-colors"
+                      >
+                        Sign Out
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Content area — switches based on active sidebar tab */}
         {activeTab === "sales-closer" && (
