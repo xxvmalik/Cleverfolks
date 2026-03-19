@@ -140,6 +140,42 @@ function generateActivityLabel(
       return "Executing approved action...";
     case "reject_pending_action":
       return "Cancelling action...";
+    // ── Skyler-specific tools ──
+    case "get_sales_pipeline":
+      return "Checking your sales pipeline...";
+    case "get_performance_metrics":
+      return "Pulling your performance metrics...";
+    case "score_lead":
+      return "Scoring this lead...";
+    case "get_lead_scores":
+      return "Loading lead scores...";
+    case "move_to_sales_closer":
+      return "Adding lead to Sales Closer...";
+    case "pickup_conversation":
+      return "Reading previous email history...";
+    case "draft_correction_email":
+      return "Drafting a corrected email...";
+    case "check_calendar_availability":
+      return "Checking your calendar...";
+    case "create_calendar_event":
+      return "Creating a calendar event...";
+    case "get_booking_link":
+      return "Getting a booking link...";
+    case "get_skyler_data": {
+      const dataType = input.data_type as string | undefined;
+      switch (dataType) {
+        case "calendar_events": return "Checking calendar events...";
+        case "activity_log": return "Loading activity history...";
+        case "pending_actions": return "Checking pending actions...";
+        case "open_requests": return "Loading open requests...";
+        case "meeting_signals": return "Checking meeting health...";
+        case "lead_memories": return "Recalling lead details...";
+        case "decisions": return "Reviewing past decisions...";
+        default: return "Looking up your data...";
+      }
+    }
+    case "send_email":
+      return "Preparing email draft...";
     default:
       return "Processing...";
   }

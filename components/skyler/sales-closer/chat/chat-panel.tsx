@@ -15,6 +15,7 @@ export function ChatPanel({
   messages,
   conversations,
   streamingContent,
+  streamingActivities,
   inputValue,
   onInputChange,
   onSend,
@@ -28,6 +29,7 @@ export function ChatPanel({
   messages: ChatMessage[];
   conversations: ConversationItem[];
   streamingContent: string;
+  streamingActivities: string[];
   inputValue: string;
   onInputChange: (v: string) => void;
   onSend: () => void;
@@ -84,6 +86,7 @@ export function ChatPanel({
             <ChatMessages
               messages={messages}
               streamingContent={streamingContent}
+              streamingActivities={streamingActivities}
               taggedLeadName={taggedLead?.name}
             />
           )}

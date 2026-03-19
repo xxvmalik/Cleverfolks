@@ -69,6 +69,7 @@ export function SkylerWorkspace({
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [taggedLead, setTaggedLead] = useState<TaggedLead | null>(null);
+  const [streamingActivities, setStreamingActivities] = useState<string[]>([]);
 
   // Ref to track activeConversationId inside SSE handler
   const activeConvIdRef = useRef(activeConversationId);
@@ -337,6 +338,7 @@ export function SkylerWorkspace({
     setChatInput("");
     setIsStreaming(true);
     setStreamingContent("");
+    setStreamingActivities([]);
 
     let currentConversationId = activeConvIdRef.current;
 
@@ -387,7 +389,12 @@ export function SkylerWorkspace({
           try {
             const event = JSON.parse(line.slice(6));
 
-            if (event.type === "text") {
+            if (event.type === "activity") {
+              setStreamingActivities((prev) => {
+                if (prev[prev.length - 1] === event.action) return prev;
+                return [...prev, event.action];
+              });
+            } else if (event.type === "text") {
               accumulatedText += event.text;
               setStreamingContent(accumulatedText);
             } else if (event.type === "metadata") {
@@ -407,6 +414,7 @@ export function SkylerWorkspace({
                 },
               ]);
               setStreamingContent("");
+              setStreamingActivities([]);
               fetchConversations();
               // Refresh pipeline in case chat triggered any actions
               fetchPipelineData();
@@ -599,6 +607,7 @@ export function SkylerWorkspace({
               messages={chatMessages}
               conversations={conversations}
               streamingContent={streamingContent}
+              streamingActivities={streamingActivities}
               inputValue={chatInput}
               onInputChange={setChatInput}
               onSend={handleSendMessage}
