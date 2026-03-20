@@ -27,7 +27,7 @@ function outcomeLabel(reason: string | null | undefined): { text: string; color:
     case "recording_failed":
       return { text: "Recording failed", color: "#F2903D", bg: "rgba(242,144,61,0.08)" };
     default:
-      return { text: "No recording available", color: "var(--sk-t4)", bg: "rgba(255,255,255,0.02)" };
+      return { text: "This meeting wasn\u2019t recorded", color: "var(--sk-t4)", bg: "rgba(255,255,255,0.02)" };
   }
 }
 
@@ -346,7 +346,7 @@ export function MeetingsTab({
                         marginBottom: 12,
                       }}>
                         <p style={{ fontSize: 11, color: label.color, lineHeight: 1.6 }}>
-                          {label.text}. The meeting bot may not have been scheduled or the recording failed.
+                          {label.text}.
                         </p>
                       </div>
                     );
