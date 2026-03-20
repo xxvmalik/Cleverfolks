@@ -66,6 +66,7 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   meeting_booked: [
     "demo_booked",
     "negotiation",
+    "pending_clarification",
     "stalled",
     "follow_up_meeting",
     "closed_lost",

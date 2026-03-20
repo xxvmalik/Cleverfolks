@@ -13,6 +13,7 @@ import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { detectPipelineMeeting, type MeetingRecord } from "@/lib/sync/meeting-detector";
 import { createRecallBot, isSupportedMeetingUrl } from "@/lib/recall/client";
+import { inngest as inngestClient } from "@/lib/inngest/client";
 
 // ── Cron: Meeting Check ─────────────────────────────────────────────────────
 
@@ -217,6 +218,23 @@ async function checkWorkspaceMeetings(workspaceId: string): Promise<number> {
               } catch (recallErr) {
                 console.error(`[meeting-check] Failed to create Recall bot:`, recallErr instanceof Error ? recallErr.message : recallErr);
               }
+            }
+          }
+
+          // Emit lifecycle event so pre-call brief, transcript recovery, and no-show check are scheduled
+          if (calendarEventId && result.pipeline_id) {
+            try {
+              await inngestClient.send({
+                name: "skyler/meeting.lifecycle-start",
+                data: {
+                  calendarEventId,
+                  workspaceId,
+                  pipelineId: result.pipeline_id,
+                },
+              });
+              console.log(`[meeting-check] Lifecycle event emitted for calendar event ${calendarEventId}`);
+            } catch (lifecycleErr) {
+              console.warn(`[meeting-check] Failed to emit lifecycle event:`, lifecycleErr instanceof Error ? lifecycleErr.message : lifecycleErr);
             }
           }
         }

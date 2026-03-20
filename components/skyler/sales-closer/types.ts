@@ -60,6 +60,12 @@ export type PipelineRecord = {
   meeting_count: number;
   updated_at: string;
   created_at: string;
+  // Stage 15.1: No-show & re-engagement
+  no_show_count?: number;
+  re_engagement_status?: "none" | "active" | "completed" | "cancelled";
+  re_engagement_touch?: number;
+  last_re_engagement_action?: { type: string; timestamp: string; summary: string; action_id?: string } | null;
+  next_re_engagement_at?: string | null;
 };
 
 export type PerformanceMetrics = {
@@ -97,6 +103,17 @@ export type TaggedLead = {
   email?: string;
   stage?: string;
   healthScore?: number | null;
+};
+
+export type PipelineEvent = {
+  id: string;
+  event_type: string;
+  from_stage?: string;
+  to_stage?: string;
+  source: string;
+  source_detail?: string;
+  payload?: Record<string, unknown>;
+  created_at: string;
 };
 
 export type AlertItem = {

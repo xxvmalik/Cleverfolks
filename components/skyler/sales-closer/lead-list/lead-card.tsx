@@ -5,6 +5,19 @@ import { HealthDot } from "../shared/health-dot";
 import { StageBadge } from "./stage-badge";
 import type { PipelineRecord } from "../types";
 
+function relativeTimeShort(date: string): string {
+  const diffMs = Date.now() - new Date(date).getTime();
+  const future = diffMs < 0;
+  const abs = Math.abs(diffMs);
+  const mins = Math.floor(abs / 60000);
+  const hours = Math.floor(abs / 3600000);
+  const days = Math.floor(abs / 86400000);
+
+  if (mins < 60) return future ? `in ${mins}m` : `${mins}m ago`;
+  if (hours < 24) return future ? `in ${hours}h` : `${hours}h ago`;
+  return future ? `in ${days}d` : `${days}d ago`;
+}
+
 export function LeadCard({
   record,
   selected,
@@ -17,6 +30,8 @@ export function LeadCard({
   onTag: () => void;
 }) {
   const hasPending = (record.pending_actions?.length ?? 0) > 0;
+  const isNoShow = (record.no_show_count ?? 0) > 0;
+  const isReengaging = record.re_engagement_status === "active";
 
   return (
     <button
@@ -30,6 +45,11 @@ export function LeadCard({
         border: selected
           ? "1px solid rgba(242,144,61,0.27)"
           : "1px solid var(--sk-border)",
+        borderLeft: isReengaging
+          ? "3px solid var(--sk-orange)"
+          : selected
+            ? "1px solid rgba(242,144,61,0.27)"
+            : "1px solid var(--sk-border)",
         borderRadius: 10,
         padding: "12px 14px",
         transition: "border-color 0.2s var(--sk-ease-out), background 0.15s var(--sk-ease-out), transform 0.1s",
@@ -68,6 +88,42 @@ export function LeadCard({
         </button>
       </div>
 
+      {/* Row 1.5: No-show + re-engaging badges */}
+      {isNoShow && (
+        <div className="flex items-center gap-1.5 mt-1">
+          <span
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              padding: "2px 8px",
+              borderRadius: 4,
+              background: record.re_engagement_status === "completed"
+                ? "rgba(255,255,255,0.04)"
+                : "rgba(229,69,69,0.1)",
+              color: record.re_engagement_status === "completed"
+                ? "var(--sk-t4)"
+                : "#E54545",
+            }}
+          >
+            NO-SHOW
+          </span>
+          {isReengaging && (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 600,
+                padding: "2px 8px",
+                borderRadius: 4,
+                background: "rgba(242,144,61,0.1)",
+                color: "#F2903D",
+              }}
+            >
+              RE-ENGAGING
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Row 2: Company + stage */}
       <div className="flex items-center justify-between mt-1">
         <span style={{ fontSize: 10, color: "var(--sk-t3)" }} className="truncate">
@@ -88,6 +144,16 @@ export function LeadCard({
           </>
         )}
       </div>
+
+      {/* Row 4: Re-engagement action summary */}
+      {isReengaging && record.last_re_engagement_action && (
+        <div className="mt-1.5" style={{ fontSize: 9, color: "var(--sk-t4)" }}>
+          <div>✨ {record.last_re_engagement_action.summary}</div>
+          {record.next_re_engagement_at && (
+            <div>Next: Follow-up {relativeTimeShort(record.next_re_engagement_at)}</div>
+          )}
+        </div>
+      )}
     </button>
   );
 }

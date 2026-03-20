@@ -25,6 +25,7 @@ import type {
   DirectiveItem,
   CalendarEvent,
   MeetingRecord,
+  PipelineEvent,
 } from "./types";
 
 type PhaseFilter = "all" | "prospecting" | "engaged" | "resolved";
@@ -56,6 +57,7 @@ export function SkylerWorkspace({
   const [upcomingMeetings, setUpcomingMeetings] = useState<CalendarEvent[]>([]);
   const [pastMeetings, setPastMeetings] = useState<MeetingRecord[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
+  const [pipelineEvents, setPipelineEvents] = useState<PipelineEvent[]>([]);
 
   // ── Sidebar state ───────────────────────────────────────────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -133,6 +135,7 @@ export function SkylerWorkspace({
       setDirectives([]);
       setUpcomingMeetings([]);
       setPastMeetings([]);
+      setPipelineEvents([]);
       return;
     }
 
@@ -142,6 +145,12 @@ export function SkylerWorkspace({
       .then((res) => (res.ok ? res.json() : { directives: [] }))
       .then((data) => setDirectives(data.directives ?? []))
       .finally(() => setDirectivesLoading(false));
+
+    // Fetch pipeline events for activity timeline
+    fetch(`/api/skyler/pipeline-events?pipelineId=${selectedLeadId}`)
+      .then((res) => (res.ok ? res.json() : { events: [] }))
+      .then((data) => setPipelineEvents(data.events ?? []))
+      .catch(() => setPipelineEvents([]));
 
     // Fetch alerts (if endpoint exists)
     fetch(`/api/skyler/lead-alerts?pipelineId=${selectedLeadId}`)
@@ -480,6 +489,7 @@ export function SkylerWorkspace({
               record={selectedRecord}
               loading={pipelineLoading}
               alerts={alerts}
+              pipelineEvents={pipelineEvents}
               directives={directives}
               directivesLoading={directivesLoading}
               upcomingMeetings={upcomingMeetings}

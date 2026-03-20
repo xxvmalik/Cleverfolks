@@ -132,6 +132,14 @@ export type ReasoningContext = {
   meetingStatus: string;
   stalenessNotes: string[];
   validNextStages: string[];
+  // Stage 15.1: No-show & re-engagement context
+  noShowContext: {
+    noShowCount: number;
+    reEngagementStatus: "none" | "active" | "completed" | "cancelled";
+    reEngagementTouch: number;
+    lastReEngagementAction: string | null;
+    nextReEngagementAt: string | null;
+  };
 };
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -278,13 +286,21 @@ export async function assembleReasoningContext(
     meetingStatus,
     stalenessNotes,
     validNextStages,
+    // Stage 15.1: No-show context
+    noShowContext: {
+      noShowCount: (pipeline as unknown as Record<string, unknown>).no_show_count as number ?? 0,
+      reEngagementStatus: ((pipeline as unknown as Record<string, unknown>).re_engagement_status as "none" | "active" | "completed" | "cancelled") ?? "none",
+      reEngagementTouch: (pipeline as unknown as Record<string, unknown>).re_engagement_touch as number ?? 0,
+      lastReEngagementAction: ((pipeline as unknown as Record<string, unknown>).last_re_engagement_action as { summary?: string } | null)?.summary ?? null,
+      nextReEngagementAt: (pipeline as unknown as Record<string, unknown>).next_re_engagement_at as string | null ?? null,
+    },
   };
 }
 
 // ── Format context into a reasoning prompt ───────────────────────────────────
 
 export function formatReasoningPrompt(ctx: ReasoningContext): string {
-  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord, healthSignals, meetingStatus, stalenessNotes, validNextStages } = ctx;
+  const { event, workflowSettings: ws, pipeline: p, memories, sender, directives, pendingRequests, meetingContext, agentMemories, corrections, goldenExamples, behaviouralDimensions, confidenceRecord, healthSignals, meetingStatus, stalenessNotes, validNextStages, noShowContext } = ctx;
 
   // Event description
   const eventDescription = formatEventDescription(event);
@@ -380,6 +396,7 @@ ${pendingRequests.length > 0 ? `\n## Your Pending Info Requests\nYou previously 
 ${agentMemories.length > 0 ? `\n## What You Know About This Business\nThese are verified facts provided by the user. NEVER ask for information that is already listed here.\n${formatMemoriesForPrompt(agentMemories)}\n\nCRITICAL: If you need information NOT listed above, use request_info. Do NOT fabricate, guess, or use placeholders.` : "\n## What You Know About This Business\n(No stored facts yet. If you need specific business data — payment details, legal terms, pricing — use request_info to ask the user.)"}
 ${formatLearningContext(corrections, goldenExamples, behaviouralDimensions, confidenceRecord)}
 ${healthSignals.length > 0 ? `\n## Meeting Health Signals\nThese are active alerts about this lead's meeting behaviour. Factor them into your decision.\n${healthSignals.map((s) => `- [${s.severity.toUpperCase()}] ${s.signal_type}: ${(s.details as Record<string, unknown>)?.message ?? JSON.stringify(s.details)}`).join("\n")}` : ""}
+${noShowContext.noShowCount > 0 ? `\n## No-Show Status\n- No-show count: ${noShowContext.noShowCount}\n- Re-engagement: ${noShowContext.reEngagementStatus}${noShowContext.reEngagementStatus === "active" ? ` (touch ${noShowContext.reEngagementTouch} of 5)` : ""}\n${noShowContext.lastReEngagementAction ? `- Last action: ${noShowContext.lastReEngagementAction}` : ""}${noShowContext.nextReEngagementAt ? `\n- Next action scheduled: ${relativeTime(new Date(noShowContext.nextReEngagementAt))}` : ""}` : ""}
 
 ## Your Task
 Based on everything above, decide the single best action to take right now.

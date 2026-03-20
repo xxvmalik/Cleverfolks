@@ -10,12 +10,13 @@ import { ActivityTab } from "./detail-tabs/activity-tab";
 import { MeetingsTab } from "./detail-tabs/meetings-tab";
 import { InstructionsTab } from "./detail-tabs/instructions-tab";
 import { DetailHeaderSkeleton } from "../shared/skeleton-loaders";
-import type { PipelineRecord, AlertItem, DirectiveItem, CalendarEvent, MeetingRecord } from "../types";
+import type { PipelineRecord, AlertItem, DirectiveItem, CalendarEvent, MeetingRecord, PipelineEvent } from "../types";
 
 export function LeadDetailPanel({
   record,
   loading,
   alerts,
+  pipelineEvents,
   directives,
   directivesLoading,
   upcomingMeetings,
@@ -35,6 +36,7 @@ export function LeadDetailPanel({
   record: PipelineRecord | null;
   loading: boolean;
   alerts: AlertItem[];
+  pipelineEvents?: PipelineEvent[];
   directives: DirectiveItem[];
   directivesLoading: boolean;
   upcomingMeetings: CalendarEvent[];
@@ -113,7 +115,7 @@ export function LeadDetailPanel({
         {/* Tab content with crossfade */}
         <div key={`${record.id}-${activeTab}`} style={{ animation: "sk-contentIn 0.25s var(--sk-ease-out)" }}>
           {activeTab === "activity" && (
-            <ActivityTab thread={record.conversation_thread ?? []} loading={false} contactFirstName={contactFirstName} />
+            <ActivityTab thread={record.conversation_thread ?? []} pipelineEvents={pipelineEvents} loading={false} contactFirstName={contactFirstName} />
           )}
           {activeTab === "meetings" && (
             <MeetingsTab

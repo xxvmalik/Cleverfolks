@@ -31,6 +31,8 @@ const EVENT_LABELS: Record<NotificationEventType, string> = {
   new_attendee_detected: "New Attendee Detected",
   pre_call_brief: "Pre-Call Brief",
   health_signal: "Meeting Health Signal",
+  reengagement_exhausted: "Re-Engagement Exhausted",
+  reengagement_reply: "Re-Engagement Reply Received",
 };
 
 /**

@@ -26,7 +26,9 @@ export type NotificationEventType =
   | "meeting_rescheduled"
   | "new_attendee_detected"
   | "pre_call_brief"
-  | "health_signal";
+  | "health_signal"
+  | "reengagement_exhausted"
+  | "reengagement_reply";
 
 export type NotificationParams = {
   workspaceId: string;

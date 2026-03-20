@@ -53,6 +53,7 @@ export async function draftOutreachEmail(
     .from("skyler_actions")
     .insert({
       workspace_id: params.workspaceId,
+      pipeline_id: params.pipelineId,
       tool_name: "send_email",
       tool_input: {
         to: params.to,

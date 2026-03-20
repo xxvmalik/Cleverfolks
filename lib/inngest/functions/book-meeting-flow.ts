@@ -246,55 +246,29 @@ export const bookMeetingFlow = inngest.createFunction(
 );
 
 // ── Post-booking tasks ───────────────────────────────────────────────────────
+// Now delegates to the unified meeting-lifecycle-orchestrator (Stage 15.1).
+// Keeps Recall bot scheduling and CRM logging here since they're booking-specific.
 
 async function schedulePostBookingTasks(
   step: { sendEvent: (id: string, events: { name: string; data: Record<string, unknown> } | Array<{ name: string; data: Record<string, unknown> }>) => Promise<unknown> },
   workspaceId: string,
   pipelineId: string,
   createdEvent: { id: string; meetingUrl: string | null; start: string; end: string; provider: string },
-  settings: SkylerWorkflowSettings
+  _settings: SkylerWorkflowSettings
 ) {
   const events: Array<{ name: string; data: Record<string, unknown> }> = [];
 
-  // Schedule pre-call brief
-  if (settings.preCallBriefEnabled) {
-    const timingMap: Record<string, number> = {
-      "30min": 30,
-      "1hr": 60,
-      "24hr": 1440,
-    };
-    const minutesBefore = timingMap[settings.preCallBriefTiming] ?? 30;
-    const briefTime = new Date(
-      new Date(createdEvent.start).getTime() - minutesBefore * 60 * 1000
-    );
-
-    events.push({
-      name: "skyler/meeting.pre-call-brief",
-      data: {
-        workspaceId,
-        calendarEventId: createdEvent.id,
-        pipelineId,
-        scheduledFor: briefTime.toISOString(),
-      },
-    });
-  }
-
-  // Schedule no-show check (15 minutes after meeting END)
-  const noShowTime = new Date(
-    new Date(createdEvent.end).getTime() + 15 * 60 * 1000
-  );
+  // Emit unified lifecycle event — handles pre-call brief, transcript recovery, and no-show detection
   events.push({
-    name: "skyler/meeting.no-show-check",
+    name: "skyler/meeting.lifecycle-start",
     data: {
-      workspaceId,
       calendarEventId: createdEvent.id,
+      workspaceId,
       pipelineId,
-      provider: createdEvent.provider,
-      scheduledFor: noShowTime.toISOString(),
     },
   });
 
-  // Schedule Recall bot
+  // Schedule Recall bot (booking-specific — lifecycle doesn't handle this)
   if (createdEvent.meetingUrl) {
     events.push({
       name: "skyler/meeting.schedule-bot",
@@ -306,7 +280,7 @@ async function schedulePostBookingTasks(
     });
   }
 
-  // Update pipeline stage
+  // Log CRM activity
   events.push({
     name: "skyler/crm.log-activity",
     data: {

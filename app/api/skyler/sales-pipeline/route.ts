@@ -51,16 +51,16 @@ export async function GET(req: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Also fetch pending email actions for these pipeline records
+  // Also fetch pending actions for these pipeline records
   const pipelineIds = (data ?? []).map((p) => p.id);
   let pendingActions: Record<string, unknown>[] = [];
   if (pipelineIds.length > 0) {
     const { data: actions } = await db
       .from("skyler_actions")
-      .select("id, description, tool_input, status, result, created_at")
+      .select("id, pipeline_id, description, tool_input, status, result, created_at")
       .eq("workspace_id", workspaceId)
-      .eq("tool_name", "send_email")
       .in("status", ["pending", "failed"])
+      .in("pipeline_id", pipelineIds)
       .order("created_at", { ascending: false });
     pendingActions = actions ?? [];
   }
@@ -96,7 +96,7 @@ export async function GET(req: NextRequest) {
   // Map pending actions to their pipeline records
   const actionsByPipeline: Record<string, Array<Record<string, unknown>>> = {};
   for (const action of pendingActions) {
-    const pId = (action.tool_input as Record<string, unknown>)?.pipelineId as string;
+    const pId = (action.pipeline_id ?? (action.tool_input as Record<string, unknown>)?.pipelineId) as string;
     if (pId) {
       if (!actionsByPipeline[pId]) actionsByPipeline[pId] = [];
       actionsByPipeline[pId].push(action);
