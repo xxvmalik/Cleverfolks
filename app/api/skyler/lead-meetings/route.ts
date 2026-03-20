@@ -1,7 +1,9 @@
 /**
  * GET /api/skyler/lead-meetings?pipelineId={id}
  *
- * Returns upcoming calendar events and past meeting transcripts for a lead.
+ * Returns upcoming and past calendar events for a lead.
+ * Past meetings come from calendar_events where end_time < NOW().
+ * Transcript data enriches past meetings but doesn't define their existence.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -18,19 +20,21 @@ export async function GET(req: NextRequest) {
 
   const db = createAdminSupabaseClient();
 
-  // Get the pipeline record — includes meeting fields from old system as fallback
+  // Get the pipeline record
   const { data: pipeline } = await db
     .from("skyler_sales_pipeline")
-    .select("id, contact_email, workspace_id, meeting_event_id, meeting_details, meeting_transcript, meeting_outcome, recall_bot_id")
+    .select("id, contact_email, workspace_id, meeting_details, recall_bot_id")
     .eq("id", pipelineId)
     .single();
 
   if (!pipeline) return NextResponse.json({ error: "Pipeline record not found" }, { status: 404 });
 
   const now = new Date().toISOString();
+  const contactEmail = (pipeline.contact_email as string)?.toLowerCase();
 
-  // Fetch upcoming calendar events — match by lead_id OR by attendee email
-  const { data: linkedEvents } = await db
+  // ── Upcoming: calendar_events where start_time >= now ──────────────────
+
+  const { data: linkedUpcoming } = await db
     .from("calendar_events")
     .select("id, title, start_time, end_time, meeting_url, event_type, attendees, pre_call_brief_sent, status")
     .eq("lead_id", pipelineId)
@@ -38,8 +42,8 @@ export async function GET(req: NextRequest) {
     .neq("status", "cancelled")
     .order("start_time", { ascending: true });
 
-  // Also check for events where lead_id isn't set but attendee email matches
-  const { data: unmatchedEvents } = await db
+  // Also check unlinked events where attendee email matches
+  const { data: unmatchedUpcoming } = await db
     .from("calendar_events")
     .select("id, title, start_time, end_time, meeting_url, event_type, attendees, pre_call_brief_sent, status")
     .eq("workspace_id", pipeline.workspace_id)
@@ -49,24 +53,21 @@ export async function GET(req: NextRequest) {
     .order("start_time", { ascending: true })
     .limit(50);
 
-  // Filter unmatched events by attendee email
-  const contactEmail = pipeline.contact_email?.toLowerCase();
-  const emailMatchedEvents = (unmatchedEvents ?? []).filter((event) => {
+  const emailMatchedUpcoming = (unmatchedUpcoming ?? []).filter((event) => {
     const attendees = event.attendees as Array<{ email?: string }> | null;
     if (!attendees || !contactEmail) return false;
     return attendees.some((a) => a.email?.toLowerCase() === contactEmail);
   });
 
-  // Merge and deduplicate by id
   const seenIds = new Set<string>();
-  const upcoming = [...(linkedEvents ?? []), ...emailMatchedEvents].filter((e) => {
+  const upcoming = [...(linkedUpcoming ?? []), ...emailMatchedUpcoming].filter((e) => {
     if (seenIds.has(e.id)) return false;
     seenIds.add(e.id);
     return true;
   });
 
-  // Backfill lead_id on any email-matched events (fire-and-forget)
-  const idsToBackfill = emailMatchedEvents.map((e) => e.id);
+  // Backfill lead_id on email-matched events (fire-and-forget)
+  const idsToBackfill = emailMatchedUpcoming.map((e) => e.id);
   if (idsToBackfill.length > 0) {
     db.from("calendar_events")
       .update({ lead_id: pipelineId })
@@ -74,87 +75,116 @@ export async function GET(req: NextRequest) {
       .then(() => {});
   }
 
-  // Fetch past meetings from meeting_transcripts
-  const { data: pastMeetings } = await db
-    .from("meeting_transcripts")
-    .select("id, bot_id, meeting_date, meeting_url, summary, intelligence, participants, processing_status, duration_seconds, created_at")
-    .eq("lead_id", pipelineId)
-    .order("meeting_date", { ascending: false });
+  // ── Past: calendar_events where end_time < now ────────────────────────
 
-  // Look up calendar event titles for past meetings (by lead_id, ordered by start_time desc to match)
   const { data: pastCalEvents } = await db
     .from("calendar_events")
-    .select("id, title, start_time, recall_bot_id")
+    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, status, attendees")
     .eq("lead_id", pipelineId)
-    .order("start_time", { ascending: false });
+    .lt("end_time", now)
+    .neq("status", "cancelled")
+    .order("end_time", { ascending: false });
 
-  // Build a title lookup: match by recall_bot_id first, then by closest date
-  const calEvents = pastCalEvents ?? [];
-  function findMeetingTitle(meeting: { bot_id?: string | null; meeting_date?: string | null }): string | null {
-    if (meeting.bot_id) {
-      const byBot = calEvents.find((ce) => ce.recall_bot_id === meeting.bot_id);
-      if (byBot) return byBot.title;
+  // Also check unlinked past events by attendee email
+  const { data: unmatchedPast } = await db
+    .from("calendar_events")
+    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, status, attendees")
+    .eq("workspace_id", pipeline.workspace_id)
+    .is("lead_id", null)
+    .lt("end_time", now)
+    .neq("status", "cancelled")
+    .order("end_time", { ascending: false })
+    .limit(50);
+
+  const emailMatchedPast = (unmatchedPast ?? []).filter((event) => {
+    const attendees = event.attendees as Array<{ email?: string }> | null;
+    if (!attendees || !contactEmail) return false;
+    return attendees.some((a) => a.email?.toLowerCase() === contactEmail);
+  });
+
+  // Backfill lead_id on past email-matched events
+  const pastIdsToBackfill = emailMatchedPast.map((e) => e.id);
+  if (pastIdsToBackfill.length > 0) {
+    db.from("calendar_events")
+      .update({ lead_id: pipelineId })
+      .in("id", pastIdsToBackfill)
+      .then(() => {});
+  }
+
+  const pastSeenIds = new Set<string>();
+  const allPastCalEvents = [...(pastCalEvents ?? []), ...emailMatchedPast].filter((e) => {
+    if (pastSeenIds.has(e.id)) return false;
+    pastSeenIds.add(e.id);
+    return true;
+  });
+
+  // Load all meeting_transcripts for this lead (to enrich past meetings)
+  const { data: transcripts } = await db
+    .from("meeting_transcripts")
+    .select("id, bot_id, meeting_date, meeting_url, summary, intelligence, participants, processing_status, duration_seconds")
+    .eq("lead_id", pipelineId);
+
+  // Build transcript lookup: match by recall_bot_id first, then by closest date
+  const transcriptList = transcripts ?? [];
+
+  function findTranscript(calEvent: { recall_bot_id: string | null; end_time: string; meeting_url: string | null }) {
+    // Match by bot ID
+    if (calEvent.recall_bot_id) {
+      const byBot = transcriptList.find((t) => t.bot_id === calEvent.recall_bot_id);
+      if (byBot) return byBot;
     }
-    if (meeting.meeting_date && calEvents.length > 0) {
-      const mDate = new Date(meeting.meeting_date).getTime();
-      let closest = calEvents[0];
-      let closestDiff = Math.abs(new Date(closest.start_time).getTime() - mDate);
-      for (const ce of calEvents) {
-        const diff = Math.abs(new Date(ce.start_time).getTime() - mDate);
-        if (diff < closestDiff) { closest = ce; closestDiff = diff; }
+    // Match by meeting URL
+    if (calEvent.meeting_url) {
+      const byUrl = transcriptList.find((t) => t.meeting_url === calEvent.meeting_url);
+      if (byUrl) return byUrl;
+    }
+    // Match by closest date (within 24h)
+    if (transcriptList.length > 0) {
+      const calEnd = new Date(calEvent.end_time).getTime();
+      let closest = transcriptList[0];
+      let closestDiff = Math.abs(new Date(closest.meeting_date).getTime() - calEnd);
+      for (const t of transcriptList) {
+        const diff = Math.abs(new Date(t.meeting_date).getTime() - calEnd);
+        if (diff < closestDiff) { closest = t; closestDiff = diff; }
       }
-      // Only match if within 24 hours
-      if (closestDiff < 86400000) return closest.title;
+      if (closestDiff < 86400000) return closest;
     }
     return null;
   }
 
-  // Use pipeline meeting_details.title as last-resort fallback
-  const pipelineTitle = (pipeline.meeting_details as { title?: string } | null)?.title ?? null;
+  // Build past meetings: calendar event is the source of truth, transcript enriches
+  const past = allPastCalEvents.map((calEvent) => {
+    const transcript = findTranscript(calEvent);
+    const durationMin = Math.round(
+      (new Date(calEvent.end_time).getTime() - new Date(calEvent.start_time).getTime()) / 60000
+    );
 
-  let past = (pastMeetings ?? []).map((m) => ({
-    ...m,
-    title: findMeetingTitle(m) ?? pipelineTitle,
-  }));
+    return {
+      id: calEvent.id,
+      title: calEvent.title ?? "Meeting",
+      meeting_date: calEvent.start_time,
+      start_time: calEvent.start_time,
+      end_time: calEvent.end_time,
+      meeting_url: calEvent.meeting_url,
+      duration_seconds: transcript?.duration_seconds ?? durationMin * 60,
+      no_show_detected: calEvent.no_show_detected ?? false,
+      // Transcript enrichment (null if no transcript)
+      transcript_id: transcript?.id ?? null,
+      summary: transcript?.summary ?? null,
+      intelligence: transcript?.intelligence ?? null,
+      participants: transcript?.participants ?? null,
+      processing_status: transcript?.processing_status ?? null,
+      has_transcript: !!transcript,
+    };
+  });
 
-  // Fallback: if no meeting_transcripts rows exist but pipeline has meeting data
-  // (old system stored transcripts directly on skyler_sales_pipeline fields)
-  if (past.length === 0 && pipeline.meeting_event_id && pipeline.meeting_transcript) {
-    const details = pipeline.meeting_details as { title?: string; start?: string; end?: string; link?: string } | null;
-    const outcome = pipeline.meeting_outcome as { executive_summary?: string; outcome?: string; key_takeaways?: string[] } | null;
-
-    // Build a summary from meeting_outcome if available
-    let summary: string | null = null;
-    if (outcome) {
-      const parts: string[] = [];
-      if (outcome.executive_summary) parts.push(outcome.executive_summary);
-      if (outcome.key_takeaways?.length) parts.push("Key takeaways: " + outcome.key_takeaways.join("; "));
-      summary = parts.join("\n\n") || null;
-    }
-
-    past = [{
-      id: `pipeline-${pipelineId}`,
-      bot_id: pipeline.recall_bot_id ?? null,
-      title: details?.title ?? null,
-      meeting_date: details?.start ?? pipeline.meeting_event_id,
-      meeting_url: details?.link ?? null,
-      summary,
-      intelligence: outcome ?? null,
-      participants: null,
-      processing_status: outcome ? "complete" : "pending",
-      duration_seconds: null,
-      created_at: details?.start ?? new Date().toISOString(),
-    }];
-  }
-
-  // Fallback: if no calendar_events rows but pipeline has meeting_details
-  if (upcoming.length === 0 && pipeline.meeting_details) {
+  // Fallback: if no calendar_events but pipeline has meeting_details (old system)
+  if (upcoming.length === 0 && past.length === 0 && pipeline.meeting_details) {
     const details = pipeline.meeting_details as { title?: string; start?: string; end?: string; link?: string } | null;
     if (details?.start) {
       const meetingStart = new Date(details.start);
       const nowDate = new Date();
       if (meetingStart > nowDate) {
-        // Future meeting → show as upcoming
         upcoming.push({
           id: `pipeline-event-${pipelineId}`,
           title: details.title ?? "Meeting",

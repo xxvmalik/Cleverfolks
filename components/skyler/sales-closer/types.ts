@@ -134,16 +134,20 @@ export type DirectiveItem = {
 
 export type MeetingRecord = {
   id: string;
-  bot_id?: string;
-  title?: string;
+  title: string;
   meeting_date: string;
-  meeting_url?: string;
-  summary?: string;
-  intelligence?: Record<string, unknown>;
-  participants?: unknown[];
-  processing_status?: string;
-  duration_seconds?: number;
-  created_at: string;
+  start_time: string;
+  end_time: string;
+  meeting_url?: string | null;
+  duration_seconds?: number | null;
+  no_show_detected: boolean;
+  has_transcript: boolean;
+  // Transcript enrichment (null if no transcript exists)
+  transcript_id?: string | null;
+  summary?: string | null;
+  intelligence?: Record<string, unknown> | null;
+  participants?: unknown[] | null;
+  processing_status?: string | null;
 };
 
 export type CalendarEvent = {

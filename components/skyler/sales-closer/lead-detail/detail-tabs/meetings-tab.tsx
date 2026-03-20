@@ -162,6 +162,7 @@ export function MeetingsTab({
           const intel = m.intelligence as Record<string, unknown> | undefined;
           const decisions = (intel?.key_decisions as string[]) ?? (intel?.commitments as Array<{ text: string }>)?.map((c) => c.text) ?? [];
           const actionItems = (intel?.action_items as Array<{ text: string; assigned_to?: string }>)?.map((a) => a.text) ?? [];
+          const dur = durationMin(m.start_time, m.end_time);
 
           return (
             <div
@@ -169,6 +170,7 @@ export function MeetingsTab({
               style={{
                 background: "var(--sk-card-lead)",
                 border: "1px solid var(--sk-border)",
+                borderLeft: m.no_show_detected ? "3px solid #E54545" : "1px solid var(--sk-border)",
                 borderRadius: 10,
                 marginBottom: 8,
                 overflow: "hidden",
@@ -180,16 +182,85 @@ export function MeetingsTab({
                 className="w-full flex items-center gap-2 text-left"
                 style={{ padding: "10px 14px" }}
               >
-                <span className="flex-1" style={{ fontSize: 12, fontWeight: 700, color: "var(--sk-t1)" }}>
-                  {m.title ?? "Meeting"}
+                <span className="flex-1 flex items-center gap-2">
+                  <span style={{ fontSize: 12, fontWeight: 700, color: "var(--sk-t1)" }}>
+                    {m.title}
+                  </span>
+                  {/* Status badge */}
+                  {m.no_show_detected ? (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: "rgba(229,69,69,0.1)",
+                      color: "#E54545",
+                    }}>
+                      No-show
+                    </span>
+                  ) : m.has_transcript ? (
+                    m.processing_status === "complete" && (
+                      <span style={{
+                        fontSize: 9,
+                        fontWeight: 600,
+                        padding: "2px 8px",
+                        borderRadius: 4,
+                        background: "rgba(62,207,142,0.08)",
+                        color: "var(--sk-green)",
+                      }}>
+                        Recorded
+                      </span>
+                    )
+                  ) : (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: "rgba(255,255,255,0.04)",
+                      color: "var(--sk-t4)",
+                    }}>
+                      No recording
+                    </span>
+                  )}
                 </span>
-                <span style={{ fontSize: 10, color: "var(--sk-t4)" }}>{formatMeetingDate(m.meeting_date)}</span>
+                <span style={{ fontSize: 10, color: "var(--sk-t4)" }}>
+                  {formatMeetingDate(m.meeting_date)} · {dur} min
+                </span>
                 {expanded ? <ChevronDown size={13} style={{ color: "var(--sk-t4)" }} /> : <ChevronRight size={13} style={{ color: "var(--sk-t4)" }} />}
               </button>
 
               {expanded && (
                 <div style={{ padding: "0 14px 14px" }}>
-                  {/* Summary */}
+                  {/* No-show message */}
+                  {m.no_show_detected && !m.has_transcript && (
+                    <div style={{
+                      background: "rgba(229,69,69,0.05)",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      marginBottom: 12,
+                    }}>
+                      <p style={{ fontSize: 11, color: "#E54545", lineHeight: 1.6 }}>
+                        The attendee did not join this meeting. A re-engagement sequence may have been started.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* No recording message */}
+                  {!m.no_show_detected && !m.has_transcript && (
+                    <div style={{
+                      background: "rgba(255,255,255,0.02)",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      marginBottom: 12,
+                    }}>
+                      <p style={{ fontSize: 11, color: "var(--sk-t4)", lineHeight: 1.6 }}>
+                        No recording available for this meeting. The meeting bot may not have been scheduled or the recording failed.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Summary (only if transcript exists) */}
                   {m.summary && (
                     <div style={{ background: "rgba(0,0,0,0.2)", borderRadius: 8, padding: "10px 12px", marginBottom: 12 }}>
                       <p style={{ fontSize: 9, fontWeight: 700, color: "var(--sk-t3)", textTransform: "uppercase", marginBottom: 4 }}>SUMMARY</p>
@@ -223,76 +294,80 @@ export function MeetingsTab({
                     </div>
                   )}
 
-                  {/* Transcript toggle */}
-                  <button
-                    onClick={async () => {
-                      if (transcriptOpen === m.id) {
-                        setTranscriptOpen(null);
-                        return;
-                      }
-                      setTranscriptOpen(m.id);
-                      if (onFetchTranscript) {
-                        const lines = await onFetchTranscript(m.id);
-                        setTranscriptLines(lines);
-                      }
-                    }}
-                    className="flex items-center gap-1.5"
-                    style={{ fontSize: 9, color: "var(--sk-t3)", textTransform: "uppercase" }}
-                  >
-                    {transcriptOpen === m.id ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                    TRANSCRIPT
-                  </button>
+                  {/* Transcript toggle (only if transcript exists) */}
+                  {m.has_transcript && (
+                    <>
+                      <button
+                        onClick={async () => {
+                          if (transcriptOpen === m.id) {
+                            setTranscriptOpen(null);
+                            return;
+                          }
+                          setTranscriptOpen(m.id);
+                          if (onFetchTranscript && m.transcript_id) {
+                            const lines = await onFetchTranscript(m.transcript_id);
+                            setTranscriptLines(lines);
+                          }
+                        }}
+                        className="flex items-center gap-1.5"
+                        style={{ fontSize: 9, color: "var(--sk-t3)", textTransform: "uppercase" }}
+                      >
+                        {transcriptOpen === m.id ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                        TRANSCRIPT
+                      </button>
 
-                  {transcriptOpen === m.id && (
-                    <div style={{ marginTop: 8 }}>
-                      <div className="relative mb-2">
-                        <Search size={11} className="absolute" style={{ left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--sk-t4)" }} />
-                        <input
-                          value={transcriptSearch}
-                          onChange={(e) => setTranscriptSearch(e.target.value)}
-                          placeholder="Search..."
-                          style={{
-                            width: "100%",
-                            background: "rgba(0,0,0,0.2)",
-                            border: "1px solid var(--sk-border)",
-                            borderRadius: 6,
-                            padding: "6px 8px 6px 26px",
-                            fontSize: 10,
-                            color: "var(--sk-t2)",
-                            outline: "none",
-                          }}
-                        />
-                      </div>
-                      <div style={{ maxHeight: 300, overflowY: "auto", background: "rgba(0,0,0,0.15)", borderRadius: 8, padding: 8 }}>
-                        {transcriptLines
-                          .filter((l) => !transcriptSearch || l.text.toLowerCase().includes(transcriptSearch.toLowerCase()))
-                          .map((line, i) => {
-                            const isMatch = transcriptSearch && line.text.toLowerCase().includes(transcriptSearch.toLowerCase());
-                            return (
-                              <div
-                                key={i}
-                                className="flex gap-2 py-1"
-                                style={{
-                                  background: isMatch ? "rgba(242,144,61,0.03)" : undefined,
-                                  borderLeft: isMatch ? "2px solid var(--sk-orange)" : "2px solid transparent",
-                                  paddingLeft: 6,
-                                }}
-                              >
-                                <span style={{ fontSize: 9, color: "var(--sk-t4)", width: 36, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
-                                  {line.timestamp ?? ""}
-                                </span>
-                                <span style={{ fontSize: 9, fontWeight: 700, width: 56, flexShrink: 0, color: "var(--sk-orange)" }}>
-                                  {line.speaker}
-                                </span>
-                                <span style={{ fontSize: 11, color: "var(--sk-t2)", lineHeight: 1.55 }}>{line.text}</span>
-                              </div>
-                            );
-                          })}
-                        {transcriptLines.length === 0 && (
-                          <p style={{ fontSize: 10, color: "var(--sk-t4)", textAlign: "center", padding: 16 }}>No transcript available</p>
-                        )}
-                      </div>
-                    </div>
+                      {transcriptOpen === m.id && (
+                        <div style={{ marginTop: 8 }}>
+                          <div className="relative mb-2">
+                            <Search size={11} className="absolute" style={{ left: 8, top: "50%", transform: "translateY(-50%)", color: "var(--sk-t4)" }} />
+                            <input
+                              value={transcriptSearch}
+                              onChange={(e) => setTranscriptSearch(e.target.value)}
+                              placeholder="Search..."
+                              style={{
+                                width: "100%",
+                                background: "rgba(0,0,0,0.2)",
+                                border: "1px solid var(--sk-border)",
+                                borderRadius: 6,
+                                padding: "6px 8px 6px 26px",
+                                fontSize: 10,
+                                color: "var(--sk-t2)",
+                                outline: "none",
+                              }}
+                            />
+                          </div>
+                          <div style={{ maxHeight: 300, overflowY: "auto", background: "rgba(0,0,0,0.15)", borderRadius: 8, padding: 8 }}>
+                            {transcriptLines
+                              .filter((l) => !transcriptSearch || l.text.toLowerCase().includes(transcriptSearch.toLowerCase()))
+                              .map((line, i) => {
+                                const isMatch = transcriptSearch && line.text.toLowerCase().includes(transcriptSearch.toLowerCase());
+                                return (
+                                  <div
+                                    key={i}
+                                    className="flex gap-2 py-1"
+                                    style={{
+                                      background: isMatch ? "rgba(242,144,61,0.03)" : undefined,
+                                      borderLeft: isMatch ? "2px solid var(--sk-orange)" : "2px solid transparent",
+                                      paddingLeft: 6,
+                                    }}
+                                  >
+                                    <span style={{ fontSize: 9, color: "var(--sk-t4)", width: 36, fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>
+                                      {line.timestamp ?? ""}
+                                    </span>
+                                    <span style={{ fontSize: 9, fontWeight: 700, width: 56, flexShrink: 0, color: "var(--sk-orange)" }}>
+                                      {line.speaker}
+                                    </span>
+                                    <span style={{ fontSize: 11, color: "var(--sk-t2)", lineHeight: 1.55 }}>{line.text}</span>
+                                  </div>
+                                );
+                              })}
+                            {transcriptLines.length === 0 && (
+                              <p style={{ fontSize: 10, color: "var(--sk-t4)", textAlign: "center", padding: 16 }}>Loading transcript...</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}
