@@ -148,6 +148,7 @@ export type MeetingRecord = {
   intelligence?: Record<string, unknown> | null;
   participants?: unknown[] | null;
   processing_status?: string | null;
+  meeting_outcome_reason?: "nobody_joined" | "lead_no_show" | "user_no_show" | "recording_failed" | "completed" | null;
 };
 
 export type CalendarEvent = {

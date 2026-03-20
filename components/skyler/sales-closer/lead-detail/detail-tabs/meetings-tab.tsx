@@ -15,6 +15,22 @@ function durationMin(start: string, end: string): number {
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000);
 }
 
+/** Human-readable label for meeting outcome reasons */
+function outcomeLabel(reason: string | null | undefined): { text: string; color: string; bg: string } {
+  switch (reason) {
+    case "lead_no_show":
+      return { text: "Lead didn\u2019t show up", color: "#E54545", bg: "rgba(229,69,69,0.08)" };
+    case "user_no_show":
+      return { text: "You missed this meeting", color: "#F2903D", bg: "rgba(242,144,61,0.08)" };
+    case "nobody_joined":
+      return { text: "Nobody joined the meeting", color: "var(--sk-t4)", bg: "rgba(255,255,255,0.03)" };
+    case "recording_failed":
+      return { text: "Recording failed", color: "#F2903D", bg: "rgba(242,144,61,0.08)" };
+    default:
+      return { text: "No recording available", color: "var(--sk-t4)", bg: "rgba(255,255,255,0.02)" };
+  }
+}
+
 export function MeetingsTab({
   upcoming,
   past,
@@ -170,7 +186,13 @@ export function MeetingsTab({
               style={{
                 background: "var(--sk-card-lead)",
                 border: "1px solid var(--sk-border)",
-                borderLeft: m.no_show_detected ? "3px solid #E54545" : "1px solid var(--sk-border)",
+                borderLeft: (m.no_show_detected || m.meeting_outcome_reason === "lead_no_show" || m.meeting_outcome_reason === "nobody_joined")
+                  ? "3px solid #E54545"
+                  : m.meeting_outcome_reason === "user_no_show"
+                    ? "3px solid #F2903D"
+                    : m.meeting_outcome_reason === "recording_failed"
+                      ? "3px solid #F2903D"
+                      : "1px solid var(--sk-border)",
                 borderRadius: 10,
                 marginBottom: 8,
                 overflow: "hidden",
@@ -187,16 +209,38 @@ export function MeetingsTab({
                     {m.title}
                   </span>
                   {/* Status badge */}
-                  {m.no_show_detected ? (
+                  {m.no_show_detected || m.meeting_outcome_reason === "lead_no_show" || m.meeting_outcome_reason === "nobody_joined" ? (
                     <span style={{
                       fontSize: 9,
                       fontWeight: 600,
                       padding: "2px 8px",
                       borderRadius: 4,
-                      background: "rgba(229,69,69,0.1)",
-                      color: "#E54545",
+                      background: outcomeLabel(m.meeting_outcome_reason ?? "lead_no_show").bg,
+                      color: outcomeLabel(m.meeting_outcome_reason ?? "lead_no_show").color,
                     }}>
-                      No-show
+                      {m.meeting_outcome_reason === "nobody_joined" ? "No-show" : "No-show"}
+                    </span>
+                  ) : m.meeting_outcome_reason === "user_no_show" ? (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: "rgba(242,144,61,0.1)",
+                      color: "#F2903D",
+                    }}>
+                      You missed
+                    </span>
+                  ) : m.meeting_outcome_reason === "recording_failed" ? (
+                    <span style={{
+                      fontSize: 9,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      background: "rgba(242,144,61,0.1)",
+                      color: "#F2903D",
+                    }}>
+                      Recording failed
                     </span>
                   ) : m.has_transcript ? (
                     m.processing_status === "complete" && (
@@ -232,33 +276,81 @@ export function MeetingsTab({
 
               {expanded && (
                 <div style={{ padding: "0 14px 14px" }}>
-                  {/* No-show message */}
-                  {m.no_show_detected && !m.has_transcript && (
-                    <div style={{
-                      background: "rgba(229,69,69,0.05)",
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                      marginBottom: 12,
-                    }}>
-                      <p style={{ fontSize: 11, color: "#E54545", lineHeight: 1.6 }}>
-                        The attendee did not join this meeting. A re-engagement sequence may have been started.
-                      </p>
-                    </div>
-                  )}
+                  {/* Meeting outcome message (when no transcript) */}
+                  {!m.has_transcript && (() => {
+                    const reason = m.meeting_outcome_reason;
+                    const label = outcomeLabel(reason);
 
-                  {/* No recording message */}
-                  {!m.no_show_detected && !m.has_transcript && (
-                    <div style={{
-                      background: "rgba(255,255,255,0.02)",
-                      borderRadius: 8,
-                      padding: "10px 12px",
-                      marginBottom: 12,
-                    }}>
-                      <p style={{ fontSize: 11, color: "var(--sk-t4)", lineHeight: 1.6 }}>
-                        No recording available for this meeting. The meeting bot may not have been scheduled or the recording failed.
-                      </p>
-                    </div>
-                  )}
+                    if (reason === "lead_no_show" || (m.no_show_detected && !reason)) {
+                      return (
+                        <div style={{
+                          background: "rgba(229,69,69,0.05)",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 12,
+                        }}>
+                          <p style={{ fontSize: 11, color: "#E54545", lineHeight: 1.6 }}>
+                            The lead didn&apos;t show up to this meeting. A re-engagement sequence may have been started.
+                          </p>
+                        </div>
+                      );
+                    }
+                    if (reason === "user_no_show") {
+                      return (
+                        <div style={{
+                          background: "rgba(242,144,61,0.05)",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 12,
+                        }}>
+                          <p style={{ fontSize: 11, color: "#F2903D", lineHeight: 1.6 }}>
+                            The lead joined this meeting but you weren&apos;t there. Consider reaching out to apologise and reschedule.
+                          </p>
+                        </div>
+                      );
+                    }
+                    if (reason === "nobody_joined") {
+                      return (
+                        <div style={{
+                          background: "rgba(255,255,255,0.03)",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 12,
+                        }}>
+                          <p style={{ fontSize: 11, color: "var(--sk-t4)", lineHeight: 1.6 }}>
+                            Nobody joined this meeting. Both parties may have forgotten or the link may not have worked. Consider reaching out to reschedule.
+                          </p>
+                        </div>
+                      );
+                    }
+                    if (reason === "recording_failed") {
+                      return (
+                        <div style={{
+                          background: "rgba(242,144,61,0.05)",
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                          marginBottom: 12,
+                        }}>
+                          <p style={{ fontSize: 11, color: "#F2903D", lineHeight: 1.6 }}>
+                            The meeting took place but the recording failed. The conversation was not captured.
+                          </p>
+                        </div>
+                      );
+                    }
+                    // Default: unknown reason
+                    return (
+                      <div style={{
+                        background: label.bg,
+                        borderRadius: 8,
+                        padding: "10px 12px",
+                        marginBottom: 12,
+                      }}>
+                        <p style={{ fontSize: 11, color: label.color, lineHeight: 1.6 }}>
+                          {label.text}. The meeting bot may not have been scheduled or the recording failed.
+                        </p>
+                      </div>
+                    );
+                  })()}
 
                   {/* Summary (only if transcript exists) */}
                   {m.summary && (

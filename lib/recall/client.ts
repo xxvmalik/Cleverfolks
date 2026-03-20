@@ -160,12 +160,21 @@ export async function createRecallBot(
 
 // ── getBot ──────────────────────────────────────────────────────────────────
 
+export type RecallParticipant = {
+  id: number;
+  name: string;
+  is_host: boolean;
+  platform?: string;
+  extra_data?: Record<string, unknown>;
+};
+
 export type RecallBotInfo = {
   id: string;
   status: string;
-  statusChanges: Array<{ code: string; created_at: string }>;
+  statusChanges: Array<{ code: string; created_at: string; sub_code?: string | null }>;
   meetingUrl?: string;
   metadata?: Record<string, string>;
+  meetingParticipants?: RecallParticipant[];
 };
 
 /**
@@ -191,10 +200,103 @@ export async function getRecallBot(
       statusChanges: data.status_changes ?? [],
       meetingUrl: data.meeting_url,
       metadata: data.metadata,
+      meetingParticipants: data.meeting_participants ?? [],
     };
   } catch {
     return null;
   }
+}
+
+/**
+ * Determine what actually happened in a meeting based on Recall bot data.
+ *
+ * Scenarios:
+ * - "completed": bot recorded successfully (status reached in_call_recording or done with transcript)
+ * - "recording_failed": bot joined but recording/transcript failed
+ * - "nobody_joined": bot never entered the call (no in_call status)
+ * - "lead_no_show": bot joined, host was present, but lead never appeared
+ * - "user_no_show": bot joined, lead appeared, but host never did
+ *
+ * @param botInfo - Full bot info from getRecallBot()
+ * @param contactEmail - The lead's email (to identify them in participants)
+ * @param hostEmail - The user/host email (to identify them in participants)
+ */
+export function determineMeetingOutcome(
+  botInfo: RecallBotInfo,
+  contactEmail?: string,
+  hostEmail?: string,
+): "completed" | "recording_failed" | "nobody_joined" | "lead_no_show" | "user_no_show" {
+  const statuses = botInfo.statusChanges.map((s) => s.code);
+  const subCodes = botInfo.statusChanges.map((s) => s.sub_code).filter(Boolean);
+  const participants = botInfo.meetingParticipants ?? [];
+
+  // Check if bot timed out in waiting room — nobody started/admitted it
+  if (subCodes.includes("timeout_exceeded_waiting_room")) {
+    return "nobody_joined";
+  }
+
+  // Check if bot ever entered the call
+  const wasInCall = statuses.some((s) =>
+    ["in_call_not_recording", "in_call_recording"].includes(s)
+  );
+
+  // Check for fatal errors
+  const hasFatalError = statuses.some((s) =>
+    ["fatal", "analysis_failed", "media_expired"].includes(s)
+  );
+
+  // If bot recorded successfully and there were participants beyond the bot
+  if (statuses.includes("in_call_recording") && participants.length > 0) {
+    if (hasFatalError) return "recording_failed";
+    return "completed";
+  }
+
+  // Bot never entered the call — nobody started the meeting
+  if (!wasInCall) {
+    return "nobody_joined";
+  }
+
+  // Bot was in call but no recording — might be waiting room timeout or similar
+  if (wasInCall && !statuses.includes("in_call_recording")) {
+    if (participants.length === 0) {
+      return "nobody_joined";
+    }
+  }
+
+  // Bot was in the call — check who showed up based on participants
+  if (participants.length === 0) {
+    return "nobody_joined";
+  }
+
+  // Try to identify lead vs host in participants
+  const participantNames = participants.map((p) => p.name?.toLowerCase() ?? "");
+  const contactLower = contactEmail?.toLowerCase() ?? "";
+  const hostLower = hostEmail?.toLowerCase() ?? "";
+
+  const leadPresent = contactLower
+    ? participants.some((p) => {
+        const name = p.name?.toLowerCase() ?? "";
+        const email = (p.extra_data?.email as string)?.toLowerCase() ?? "";
+        return email === contactLower || name.includes(contactLower.split("@")[0]);
+      })
+    : false;
+
+  const hostPresent = hostLower
+    ? participants.some((p) => {
+        const name = p.name?.toLowerCase() ?? "";
+        const email = (p.extra_data?.email as string)?.toLowerCase() ?? "";
+        return p.is_host || email === hostLower || name.includes(hostLower.split("@")[0]);
+      })
+    : participants.some((p) => p.is_host);
+
+  if (!leadPresent && !hostPresent) return "nobody_joined";
+  if (!leadPresent && hostPresent) return "lead_no_show";
+  if (leadPresent && !hostPresent) return "user_no_show";
+
+  // Both present but no recording — recording failed
+  if (hasFatalError) return "recording_failed";
+
+  return "completed";
 }
 
 /** @deprecated Use getRecallBot instead. Kept for backward compatibility. */
@@ -202,7 +304,7 @@ export async function getRecallBotStatus(
   botId: string
 ): Promise<{
   status: string;
-  statusChanges: Array<{ code: string; created_at: string }>;
+  statusChanges: Array<{ code: string; created_at: string; sub_code?: string | null }>;
 } | null> {
   return getRecallBot(botId);
 }

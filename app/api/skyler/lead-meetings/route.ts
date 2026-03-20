@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
 
   const { data: pastCalEvents } = await db
     .from("calendar_events")
-    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, status, attendees")
+    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, meeting_outcome_reason, status, attendees")
     .eq("lead_id", pipelineId)
     .lt("end_time", now)
     .neq("status", "cancelled")
@@ -88,7 +88,7 @@ export async function GET(req: NextRequest) {
   // Also check unlinked past events by attendee email
   const { data: unmatchedPast } = await db
     .from("calendar_events")
-    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, status, attendees")
+    .select("id, title, start_time, end_time, meeting_url, recall_bot_id, no_show_detected, meeting_outcome_reason, status, attendees")
     .eq("workspace_id", pipeline.workspace_id)
     .is("lead_id", null)
     .lt("end_time", now)
@@ -127,7 +127,7 @@ export async function GET(req: NextRequest) {
   // Build transcript lookup: match by recall_bot_id first, then by closest date
   const transcriptList = transcripts ?? [];
 
-  function findTranscript(calEvent: { recall_bot_id: string | null; end_time: string; meeting_url: string | null }) {
+  function findTranscript(calEvent: { recall_bot_id: string | null; end_time: string; meeting_url: string | null; meeting_outcome_reason?: string | null }) {
     // Match by bot ID
     if (calEvent.recall_bot_id) {
       const byBot = transcriptList.find((t) => t.bot_id === calEvent.recall_bot_id);
@@ -175,6 +175,7 @@ export async function GET(req: NextRequest) {
       participants: transcript?.participants ?? null,
       processing_status: transcript?.processing_status ?? null,
       has_transcript: !!transcript,
+      meeting_outcome_reason: calEvent.meeting_outcome_reason ?? null,
     };
   });
 

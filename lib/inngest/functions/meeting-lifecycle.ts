@@ -15,7 +15,7 @@
 
 import { inngest } from "@/lib/inngest/client";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
-import { getRecallTranscriptRaw } from "@/lib/recall/client";
+import { getRecallTranscriptRaw, getRecallBot, determineMeetingOutcome } from "@/lib/recall/client";
 
 export const meetingLifecycleOrchestrator = inngest.createFunction(
   {
@@ -218,16 +218,122 @@ export const meetingLifecycleOrchestrator = inngest.createFunction(
       return { status: "transcript_recovered", calendarEventId };
     }
 
-    // Step 7: No transcript and no recording — confirmed no-show
-    await step.sendEvent("emit-no-show", {
-      name: "skyler/meeting.no-show-confirmed",
-      data: {
-        workspaceId,
-        calendarEventId,
-        pipelineId: effectivePipelineId,
-      },
+    // Step 7: No transcript — determine WHY via Recall bot metadata
+    const outcomeResult = await step.run("determine-meeting-outcome", async () => {
+      const db = createAdminSupabaseClient();
+      const botId = recoveryResult.botId as string | null;
+
+      if (!botId) {
+        // No bot was ever created — we can't determine outcome
+        return { outcome: "nobody_joined" as const, botId: null };
+      }
+
+      // Fetch full bot details including meeting_participants
+      const botInfo = await getRecallBot(botId);
+      if (!botInfo) {
+        return { outcome: "nobody_joined" as const, botId };
+      }
+
+      // Get contact and host emails for participant matching
+      const { data: pipeline } = await db
+        .from("skyler_sales_pipeline")
+        .select("contact_email, workspace_id")
+        .eq("id", effectivePipelineId)
+        .single();
+
+      // Get the workspace owner's email (the "host")
+      let hostEmail: string | undefined;
+      if (pipeline?.workspace_id) {
+        const { data: workspace } = await db
+          .from("workspaces")
+          .select("owner_id")
+          .eq("id", pipeline.workspace_id)
+          .single();
+        if (workspace?.owner_id) {
+          const { data: profile } = await db
+            .from("profiles")
+            .select("email")
+            .eq("id", workspace.owner_id)
+            .single();
+          hostEmail = profile?.email ?? undefined;
+        }
+      }
+
+      const outcome = determineMeetingOutcome(
+        botInfo,
+        pipeline?.contact_email ?? undefined,
+        hostEmail,
+      );
+
+      // Store outcome on the calendar event
+      await db
+        .from("calendar_events")
+        .update({
+          meeting_outcome_reason: outcome,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", calendarEventId);
+
+      return { outcome, botId, statusChanges: botInfo.statusChanges, participants: botInfo.meetingParticipants };
     });
 
-    return { status: "no_show_detected", calendarEventId };
+    // Step 8: Take action based on outcome
+    const { outcome } = outcomeResult;
+
+    if (outcome === "lead_no_show" || outcome === "nobody_joined") {
+      // Lead didn't show — trigger no-show detection + re-engagement
+      await step.sendEvent("emit-no-show", {
+        name: "skyler/meeting.no-show-confirmed",
+        data: {
+          workspaceId,
+          calendarEventId,
+          pipelineId: effectivePipelineId,
+          outcomeReason: outcome,
+        },
+      });
+    } else if (outcome === "user_no_show") {
+      // Host/user didn't show — notify them via Slack, don't penalise the lead
+      await step.run("notify-user-no-show", async () => {
+        const db = createAdminSupabaseClient();
+        const { dispatchNotification } = await import("@/lib/skyler/notifications");
+
+        const { data: pipeline } = await db
+          .from("skyler_sales_pipeline")
+          .select("contact_name, company_name")
+          .eq("id", effectivePipelineId)
+          .single();
+
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "meeting_no_show",
+          pipelineId: effectivePipelineId,
+          title: `You missed a meeting with ${pipeline?.contact_name ?? "a lead"}`,
+          body: `${pipeline?.contact_name ?? "The lead"}${pipeline?.company_name ? ` from ${pipeline.company_name}` : ""} joined the meeting but you weren't there. Consider reaching out to apologise and reschedule.`,
+          metadata: { calendarEventId, outcomeReason: outcome },
+        });
+
+        // Mark on calendar event
+        await db
+          .from("calendar_events")
+          .update({ no_show_detected: false, updated_at: new Date().toISOString() })
+          .eq("id", calendarEventId);
+      });
+    } else if (outcome === "recording_failed") {
+      // Recording failed — try transcript recovery one more time
+      await step.run("log-recording-failure", async () => {
+        const db = createAdminSupabaseClient();
+        try {
+          await db.from("pipeline_events").insert({
+            lead_id: effectivePipelineId,
+            event_type: "recording_failed",
+            source: "lifecycle",
+            source_detail: `Bot ${outcomeResult.botId} had recording failure`,
+            payload: { calendarEventId, botId: outcomeResult.botId },
+          });
+        } catch { /* audit logging should not block */ }
+      });
+    }
+
+    return { status: `outcome_${outcome}`, calendarEventId, outcome };
   }
 );

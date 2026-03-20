@@ -23,13 +23,14 @@ export const detectNoShow = inngest.createFunction(
     { event: "skyler/meeting.no-show-confirmed" },
   ],
   async ({ event, step }) => {
-    const { workspaceId, calendarEventId, pipelineId, provider, inviteeUri } =
+    const { workspaceId, calendarEventId, pipelineId, provider, inviteeUri, outcomeReason } =
       event.data as {
         workspaceId: string;
         calendarEventId: string;
         pipelineId?: string;
         provider?: string;
         inviteeUri?: string;
+        outcomeReason?: "nobody_joined" | "lead_no_show";
       };
 
     // Step 1: Check if meeting actually happened (skip for lifecycle-confirmed events)
@@ -103,11 +104,12 @@ export const detectNoShow = inngest.createFunction(
     const noShowResult = await step.run("mark-no-show", async () => {
       const db = createAdminSupabaseClient();
 
-      // Mark on calendar event
+      // Mark on calendar event with outcome reason
       await db
         .from("calendar_events")
         .update({
           no_show_detected: true,
+          meeting_outcome_reason: outcomeReason ?? "lead_no_show",
           updated_at: new Date().toISOString(),
         })
         .eq("id", calendarEventId);
