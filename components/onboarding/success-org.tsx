@@ -8,7 +8,7 @@ export function OrgSuccessScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    const t = setTimeout(() => router.push("/onboarding?step=8"), 3000);
+    const t = setTimeout(() => router.push("/onboarding/skyler"), 3000);
     return () => clearTimeout(t);
   }, [router]);
 

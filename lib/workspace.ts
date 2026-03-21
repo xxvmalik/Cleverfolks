@@ -23,7 +23,7 @@ export async function createWorkspace(client: SupabaseClient, name: string) {
 export async function getUserWorkspaces(client: SupabaseClient, userId: string) {
   return client
     .from("workspace_memberships")
-    .select("role, workspaces(id, name, slug, onboarding_completed)")
+    .select("role, workspaces(id, name, slug, onboarding_completed, skyler_onboarding_completed)")
     .eq("user_id", userId);
 }
 

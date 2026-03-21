@@ -1,6 +1,9 @@
 /**
  * GET / POST Skyler Workflow Settings.
- * Stored in workspaces.settings JSONB under the key "skyler_workflow".
+ *
+ * Primary source: agent_configurations (agent_type = 'skyler').
+ * Fallback: workspaces.settings.skyler_workflow (backwards compat for existing workspaces).
+ * On write: updates both agent_configurations AND workspaces.settings.skyler_workflow.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -145,13 +148,29 @@ export async function GET(req: NextRequest) {
   if (!workspaceId) return NextResponse.json({ error: "workspaceId required" }, { status: 400 });
 
   const db = createAdminSupabaseClient();
-  const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
+
+  // Try agent_configurations first (primary source)
+  const [{ data: agentConfig }, { data: ws }] = await Promise.all([
+    db
+      .from("agent_configurations")
+      .select("config")
+      .eq("workspace_id", workspaceId)
+      .eq("agent_type", "skyler")
+      .maybeSingle(),
+    db.from("workspaces").select("settings").eq("id", workspaceId).single(),
+  ]);
+
   const settings = (ws?.settings ?? {}) as Record<string, unknown>;
-  const workflow = (settings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
   const meetingSettings = (settings.skyler_meeting ?? {}) as Record<string, unknown>;
 
+  // Merge: defaults ← workspaces.settings.skyler_workflow ← agent_configurations.config
+  const legacyWorkflow = (settings.skyler_workflow ?? {}) as Partial<SkylerWorkflowSettings>;
+  const agentCfg = (agentConfig?.config ?? {}) as Partial<SkylerWorkflowSettings>;
+
+  const merged = { ...DEFAULT_WORKFLOW_SETTINGS, ...legacyWorkflow, ...agentCfg };
+
   return NextResponse.json({
-    settings: { ...DEFAULT_WORKFLOW_SETTINGS, ...workflow },
+    settings: merged,
     meetingSettings: {
       autoJoinMeetings: meetingSettings.autoJoinMeetings ?? false,
       botDisplayName: meetingSettings.botDisplayName ?? "",
@@ -178,29 +197,53 @@ export async function POST(req: NextRequest) {
 
   const db = createAdminSupabaseClient();
 
-  // Read current settings
-  const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
+  // Read current state from both sources
+  const [{ data: agentConfig }, { data: ws }] = await Promise.all([
+    db
+      .from("agent_configurations")
+      .select("config")
+      .eq("workspace_id", workspaceId)
+      .eq("agent_type", "skyler")
+      .maybeSingle(),
+    db.from("workspaces").select("settings").eq("id", workspaceId).single(),
+  ]);
+
   const currentSettings = (ws?.settings ?? {}) as Record<string, unknown>;
   const currentWorkflow = (currentSettings.skyler_workflow ?? DEFAULT_WORKFLOW_SETTINGS) as SkylerWorkflowSettings;
+  const currentAgentCfg = (agentConfig?.config ?? {}) as Record<string, unknown>;
 
   // Merge workflow settings
   const merged = { ...currentWorkflow, ...newSettings };
 
-  // Merge meeting settings (stored under skyler_meeting key)
+  // Merge meeting settings
   const currentMeeting = (currentSettings.skyler_meeting ?? {}) as Record<string, unknown>;
   const mergedMeeting = newMeetingSettings
     ? { ...currentMeeting, ...newMeetingSettings }
     : currentMeeting;
 
-  // Write back
-  const { error } = await db
-    .from("workspaces")
-    .update({
-      settings: { ...currentSettings, skyler_workflow: merged, skyler_meeting: mergedMeeting },
-    })
-    .eq("id", workspaceId);
+  // Write to BOTH agent_configurations and workspaces.settings
+  const mergedAgentCfg = { ...currentAgentCfg, ...newSettings };
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  await Promise.all([
+    // Primary: agent_configurations
+    db
+      .from("agent_configurations")
+      .upsert(
+        {
+          workspace_id: workspaceId,
+          agent_type: "skyler",
+          config: mergedAgentCfg,
+        },
+        { onConflict: "workspace_id,agent_type" }
+      ),
+    // Backwards compat: workspaces.settings.skyler_workflow
+    db
+      .from("workspaces")
+      .update({
+        settings: { ...currentSettings, skyler_workflow: merged, skyler_meeting: mergedMeeting },
+      })
+      .eq("id", workspaceId),
+  ]);
 
   return NextResponse.json({ ok: true, settings: merged });
 }

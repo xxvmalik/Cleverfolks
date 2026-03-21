@@ -152,7 +152,7 @@ export async function assembleReasoningContext(
   const db = createAdminSupabaseClient();
 
   // Load everything in parallel
-  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult, correctionsResult, dimensionsResult, healthSignalsResult] = await Promise.all([
+  const [workspaceResult, pipelineResult, memoriesResult, directivesResult, requestsResult, meetingContextResult, agentMemoriesResult, correctionsResult, dimensionsResult, healthSignalsResult, agentConfigResult] = await Promise.all([
     // Workspace settings + sender identity
     db
       .from("workspaces")
@@ -205,9 +205,16 @@ export async function assembleReasoningContext(
       .in("severity", ["warning", "critical"])
       .order("created_at", { ascending: false })
       .limit(5),
+    // Agent-specific config (primary source for Skyler settings)
+    db
+      .from("agent_configurations")
+      .select("config")
+      .eq("workspace_id", workspaceId)
+      .eq("agent_type", "skyler")
+      .maybeSingle(),
   ]);
 
-  // Extract workflow settings
+  // Extract workflow settings — agent_configurations takes priority over legacy skyler_workflow
   const wsSettings = (workspaceResult.data?.settings ?? {}) as Record<
     string,
     unknown
@@ -215,9 +222,12 @@ export async function assembleReasoningContext(
   const rawWorkflow = wsSettings.skyler_workflow as
     | SkylerWorkflowSettings
     | undefined;
-  const workflowSettings: SkylerWorkflowSettings = rawWorkflow
-    ? { ...DEFAULT_WORKFLOW_SETTINGS, ...rawWorkflow }
-    : DEFAULT_WORKFLOW_SETTINGS;
+  const agentCfg = (agentConfigResult?.data?.config ?? {}) as Partial<SkylerWorkflowSettings>;
+  const workflowSettings: SkylerWorkflowSettings = {
+    ...DEFAULT_WORKFLOW_SETTINGS,
+    ...(rawWorkflow ?? {}),
+    ...agentCfg,
+  };
 
   // Pipeline record
   if (!pipelineResult.data) {

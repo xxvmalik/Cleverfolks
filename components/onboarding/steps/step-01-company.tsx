@@ -5,15 +5,19 @@ import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { StepNav } from "@/components/onboarding/step-nav";
+import { InfoBanner } from "@/components/onboarding/shared/info-banner";
+import { SelectableChips } from "@/components/onboarding/shared/selectable-chips";
 import { saveOnboardingStepAction } from "@/app/actions/onboarding";
 
-const INDUSTRIES = ["Technology","Healthcare","Finance","Retail","Education","Marketing","Real Estate","Legal","Consulting","Other"];
-const STAGES = ["Pre-revenue","Early stage","Growth","Established"];
-const TEAM_SIZES = ["Just me","2–5","6–10","11–20","21–50","51+"];
+const COMPANY_STAGES = ["Pre-revenue", "Early Traction", "Growth", "Established"];
+const TEAM_SIZES = ["1-5", "6-20", "21-50", "50+"];
 
-type Props = { workspaceId: string; savedData?: Record<string, unknown> };
+type Props = {
+  workspaceId: string;
+  savedData?: Record<string, unknown>;
+  allOrgData?: Record<string, unknown>;
+};
 
 export function Step01Company({ workspaceId, savedData }: Props) {
   const router = useRouter();
@@ -30,12 +34,14 @@ export function Step01Company({ workspaceId, savedData }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   function set(k: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+    return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
       setForm((p) => ({ ...p, [k]: e.target.value }));
   }
 
   async function handleContinue() {
     if (!form.companyName.trim()) { setError("Company name is required"); return; }
+    if (!form.companyDescription.trim()) { setError("Please describe what your company does"); return; }
+    if (!form.industry.trim()) { setError("Industry/Sector is required"); return; }
     setLoading(true); setError(null);
     const result = await saveOnboardingStepAction({ workspaceId, step: 1, orgData: { step1: form } });
     if (result.error) { setError(result.error); setLoading(false); return; }
@@ -44,50 +50,89 @@ export function Step01Company({ workspaceId, savedData }: Props) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading font-bold text-2xl text-white">Your Company</h1>
-        <p className="text-[#8B8F97] text-sm mt-1">Tell us about your business so Cleverfolks can personalise everything for you.</p>
-      </div>
+      {/* Title */}
+      <h1 className="font-heading font-bold text-2xl text-white">Your Company</h1>
 
-      <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl p-6 space-y-5">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="companyName">Company name <span className="text-[#F87171]">*</span></Label>
-            <Input id="companyName" value={form.companyName} onChange={set("companyName")} placeholder="Acme Inc." />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="companyWebsite">Website</Label>
-            <Input id="companyWebsite" value={form.companyWebsite} onChange={set("companyWebsite")} placeholder="https://acme.com" />
-          </div>
-        </div>
+      {/* Info banner */}
+      <InfoBanner
+        title="Welcome to Cleverfolks!"
+        description="Let's set up your workspace. This information powers CleverBrain and all your AI Employees. The more context you give, the smarter they are from day one."
+      />
 
+      {/* Form fields */}
+      <div className="space-y-5">
+        {/* Company Name */}
         <div className="space-y-1.5">
-          <Label htmlFor="companyDescription">Company description</Label>
-          <Textarea id="companyDescription" value={form.companyDescription} onChange={set("companyDescription")} placeholder="Describe what your company does in 2–3 sentences" rows={3} />
+          <Label htmlFor="companyName">
+            Company Name <span className="text-[#F87171]">*</span>
+          </Label>
+          <Input
+            id="companyName"
+            value={form.companyName}
+            onChange={set("companyName")}
+            placeholder="e.g. Cleverfolks"
+          />
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="industry">Industry</Label>
-            <Select id="industry" value={form.industry} onChange={set("industry")}>
-              <option value="">Select…</option>
-              {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="companyStage">Stage</Label>
-            <Select id="companyStage" value={form.companyStage} onChange={set("companyStage")}>
-              <option value="">Select…</option>
-              {STAGES.map(s => <option key={s} value={s}>{s}</option>)}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="teamSize">Team size</Label>
-            <Select id="teamSize" value={form.teamSize} onChange={set("teamSize")}>
-              <option value="">Select…</option>
-              {TEAM_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-            </Select>
-          </div>
+        {/* Company Website */}
+        <div className="space-y-1.5">
+          <Label htmlFor="companyWebsite">Company Website</Label>
+          <Input
+            id="companyWebsite"
+            value={form.companyWebsite}
+            onChange={set("companyWebsite")}
+            placeholder="e.g. https://cleverfolks.com"
+          />
+        </div>
+
+        {/* What does your company do? */}
+        <div className="space-y-1.5">
+          <Label htmlFor="companyDescription">
+            What does your company do? <span className="text-[#F87171]">*</span>
+          </Label>
+          <Textarea
+            id="companyDescription"
+            value={form.companyDescription}
+            onChange={set("companyDescription")}
+            placeholder="Be specific. Not 'we help businesses grow' — more like 'we build AI-powered sales assistants that automate outreach for B2B SaaS startups.'"
+            rows={4}
+          />
+          <p className="text-xs text-[#8B8F97]">
+            This becomes the foundation for how CleverBrain and all AI Employees understand your business.
+          </p>
+        </div>
+
+        {/* Industry/Sector */}
+        <div className="space-y-1.5">
+          <Label htmlFor="industry">
+            Industry / Sector <span className="text-[#F87171]">*</span>
+          </Label>
+          <Input
+            id="industry"
+            value={form.industry}
+            onChange={set("industry")}
+            placeholder="e.g. SaaS, E-commerce, Healthcare, Fintech"
+          />
+        </div>
+
+        {/* Company Stage */}
+        <div className="space-y-2">
+          <Label>Company Stage</Label>
+          <SelectableChips
+            options={COMPANY_STAGES}
+            value={form.companyStage}
+            onChange={(v) => setForm((p) => ({ ...p, companyStage: v as string }))}
+          />
+        </div>
+
+        {/* Team Size */}
+        <div className="space-y-2">
+          <Label>Team Size</Label>
+          <SelectableChips
+            options={TEAM_SIZES}
+            value={form.teamSize}
+            onChange={(v) => setForm((p) => ({ ...p, teamSize: v as string }))}
+          />
         </div>
       </div>
 

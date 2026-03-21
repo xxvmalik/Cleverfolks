@@ -30,6 +30,7 @@ export default async function AppLayout({
         name: string;
         slug: string;
         onboarding_completed: boolean;
+        skyler_onboarding_completed: boolean;
       };
       return {
         id: ws.id,
@@ -37,12 +38,18 @@ export default async function AppLayout({
         slug: ws.slug,
         role: m.role,
         onboarding_completed: ws.onboarding_completed,
+        skyler_onboarding_completed: ws.skyler_onboarding_completed,
       };
     });
 
-  // If onboarding not completed, redirect to the wizard
+  // If general onboarding not completed, redirect to the wizard
   if (workspaces.length > 0 && !workspaces[0].onboarding_completed) {
     redirect("/onboarding");
+  }
+
+  // If Skyler onboarding not completed, redirect to Skyler setup
+  if (workspaces.length > 0 && !workspaces[0].skyler_onboarding_completed) {
+    redirect("/onboarding/skyler");
   }
 
   return (

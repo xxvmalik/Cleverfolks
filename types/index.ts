@@ -19,4 +19,5 @@ export type Workspace = {
   slug: string;
   role: string;
   onboarding_completed: boolean;
+  skyler_onboarding_completed: boolean;
 };

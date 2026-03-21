@@ -4,123 +4,179 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
-import { Checkbox } from "@/components/ui/checkbox";
 import { StepNav } from "@/components/onboarding/step-nav";
-import { saveOnboardingStepAction } from "@/app/actions/onboarding";
-import { updateWorkspaceSettingsAction } from "@/app/actions/workspace";
+import { InfoBanner } from "@/components/onboarding/shared/info-banner";
+import { SelectableCards } from "@/components/onboarding/shared/selectable-cards";
+import {
+  saveOnboardingStepAction,
+  completeGeneralOnboardingAction,
+} from "@/app/actions/onboarding";
+import { Sparkles } from "lucide-react";
 
-const GOALS = [
-  "Generate more qualified leads",
-  "Shorten sales cycle",
-  "Increase close rate",
-  "Improve follow-up consistency",
-  "Reduce time spent on admin",
-  "Scale outreach without hiring",
-  "Better pipeline visibility",
-  "Improve team collaboration",
+const FOCUS_AREA_OPTIONS = [
+  {
+    value: "sales_automation",
+    title: "Sales Automation",
+    description: "Lead follow-ups, outreach, pipeline management",
+  },
+  {
+    value: "meeting_management",
+    title: "Meeting Management",
+    description: "Prep, scheduling, follow-ups, notes",
+  },
+  {
+    value: "email_management",
+    title: "Email Management",
+    description: "Triage, drafts, summaries, organisation",
+  },
+  {
+    value: "data_insights",
+    title: "Data and Insights",
+    description: "Reports, trends, business intelligence",
+  },
+  {
+    value: "content_creation",
+    title: "Content Creation",
+    description: "Marketing copy, socials, campaigns",
+  },
+  {
+    value: "team_coordination",
+    title: "Team Coordination",
+    description: "Status updates, task tracking, alignment",
+  },
 ];
 
-const HEARD_ABOUT = ["Google search","LinkedIn","Friend / colleague","Twitter / X","Newsletter","Podcast","Conference","Other"];
+type Props = {
+  workspaceId: string;
+  savedData?: Record<string, unknown>;
+  allOrgData?: Record<string, unknown>;
+};
 
-type Props = { workspaceId: string; savedData?: Record<string, unknown> };
-
-export function Step07Goals({ workspaceId, savedData }: Props) {
+export function Step07Goals({ workspaceId, savedData, allOrgData }: Props) {
   const router = useRouter();
-  const s = savedData ?? {};
-  const [selectedGoals, setSelectedGoals] = useState<string[]>((s.goals as string[]) ?? []);
-  const [bottleneck, setBottleneck] = useState((s.bottleneck as string) ?? "");
-  const [heardAbout, setHeardAbout] = useState((s.heardAbout as string) ?? "");
-  const [businessContext, setBusinessContext] = useState((s.businessContext as string) ?? "");
+  const s = (savedData ?? {}) as Record<string, unknown>;
+
+  const [focusAreas, setFocusAreas] = useState<string[]>(
+    (s.focusAreas as string[]) ?? []
+  );
+  const [bottleneck, setBottleneck] = useState<string>(
+    (s.bottleneck as string) ?? ""
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function toggleGoal(goal: string) {
-    setSelectedGoals(p => p.includes(goal) ? p.filter(g => g !== goal) : [...p, goal]);
-  }
+  async function handleComplete() {
+    if (focusAreas.length === 0) {
+      setError("Please select at least one area.");
+      return;
+    }
+    if (!bottleneck.trim()) {
+      setError("Please describe your biggest bottleneck.");
+      return;
+    }
 
-  async function handleContinue() {
-    if (selectedGoals.length === 0) { setError("Please select at least one goal"); return; }
-    setLoading(true); setError(null);
+    setLoading(true);
+    setError(null);
 
-    const [saveResult, settingsResult] = await Promise.all([
-      saveOnboardingStepAction({
-        workspaceId, step: 7,
-        orgData: { step7: { goals: selectedGoals, bottleneck, heardAbout, businessContext } },
-      }),
-      businessContext.trim()
-        ? updateWorkspaceSettingsAction(workspaceId, { business_context: businessContext.trim() })
-        : Promise.resolve({} as { error?: string }),
-    ]);
+    const step7Data = { focusAreas, bottleneck };
 
-    if (saveResult.error) { setError(saveResult.error); setLoading(false); return; }
-    if (settingsResult.error) { setError(settingsResult.error); setLoading(false); return; }
+    // 1. Save step data
+    const saveResult = await saveOnboardingStepAction({
+      workspaceId,
+      step: 7,
+      orgData: { step7: step7Data },
+    });
+
+    if (saveResult.error) {
+      setError(saveResult.error);
+      setLoading(false);
+      return;
+    }
+
+    // 2. Complete general onboarding with merged org data
+    const allOrgDataMerged = { ...allOrgData, step7: step7Data };
+    const completeResult = await completeGeneralOnboardingAction(
+      workspaceId,
+      allOrgDataMerged
+    );
+
+    if (completeResult.error) {
+      setError(completeResult.error);
+      setLoading(false);
+      return;
+    }
+
+    // 3. Navigate to phase1done
     router.push("/onboarding?step=phase1done");
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading font-bold text-2xl text-white">Goals & Context</h1>
-        <p className="text-[#8B8F97] text-sm mt-1">What do you want Cleverfolks to help you achieve?</p>
+      <InfoBanner
+        title="Your Goals"
+        description="What do you want CleverFolks to help with? This helps us personalise your dashboard and configure your AI Employees to focus on what matters most to you."
+      />
+
+      {/* Focus Areas */}
+      <div className="space-y-3">
+        <Label className="text-white text-sm font-medium">
+          What do you want CleverFolks to help with?{" "}
+          <span className="text-[#F87171]">*</span>
+        </Label>
+        <SelectableCards
+          options={FOCUS_AREA_OPTIONS}
+          value={focusAreas}
+          onChange={(val) => setFocusAreas(val as string[])}
+          multi={true}
+          columns={2}
+        />
       </div>
 
-      <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl p-6 space-y-6">
-        <div className="space-y-3">
-          <Label className="text-white text-sm font-medium">Primary goals <span className="text-[#F87171]">*</span></Label>
-          <div className="grid grid-cols-2 gap-3">
-            {GOALS.map(goal => (
-              <label key={goal} className="flex items-start gap-3 cursor-pointer group">
-                <Checkbox
-                  checked={selectedGoals.includes(goal)}
-                  onCheckedChange={() => toggleGoal(goal)}
-                  className="mt-0.5"
-                />
-                <span className="text-sm text-[#8B8F97] group-hover:text-white transition-colors">{goal}</span>
-              </label>
-            ))}
+      {/* Bottleneck */}
+      <div className="space-y-2">
+        <Label htmlFor="bottleneck" className="text-white text-sm font-medium">
+          What&apos;s your biggest bottleneck right now?{" "}
+          <span className="text-[#F87171]">*</span>
+        </Label>
+        <Textarea
+          id="bottleneck"
+          value={bottleneck}
+          onChange={(e) => setBottleneck(e.target.value)}
+          placeholder="Be honest. What takes up the most time that shouldn't? What drops through the cracks? This directly shapes how your AI Employees prioritise their work."
+          rows={4}
+        />
+      </div>
+
+      {/* Transition Banner */}
+      <div className="rounded-xl border border-[#5B3DC8]/30 bg-[#5B3DC8]/8 p-5">
+        <div className="flex items-start gap-3">
+          <div className="w-8 h-8 rounded-lg bg-[#5B3DC8]/20 flex items-center justify-center shrink-0 mt-0.5">
+            <Sparkles className="w-4 h-4 text-[#5B3DC8]" />
           </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="bottleneck">Biggest sales bottleneck right now <span className="text-[#8B8F97] text-xs">(optional)</span></Label>
-          <Textarea
-            id="bottleneck"
-            value={bottleneck}
-            onChange={e => setBottleneck(e.target.value)}
-            placeholder="e.g. Not enough time to follow up with every lead consistently"
-            rows={3}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="businessContext">
-            Help CleverBrain understand your business language{" "}
-            <span className="text-[#8B8F97] text-xs">(optional)</span>
-          </Label>
-          <p className="text-[#8B8F97] text-xs -mt-0.5">
-            Add any terms, ID formats, or internal jargon your team uses so CleverBrain interprets messages correctly.
-          </p>
-          <Textarea
-            id="businessContext"
-            value={businessContext}
-            onChange={e => setBusinessContext(e.target.value)}
-            rows={5}
-            placeholder={`Service IDs are 4-digit numbers (e.g., 1467). When staff say "[number] failed", it means orders for that service are failing.\nOrder IDs are 6-7 digit numbers (e.g., 6543872). These appear with actions like "speed up", "refill", or "cancel".\n"SMM" refers to Social Media Marketing panel services, our core product.`}
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label>How did you hear about Cleverfolks? <span className="text-[#8B8F97] text-xs">(optional)</span></Label>
-          <Select value={heardAbout} onChange={e => setHeardAbout(e.target.value)}>
-            <option value="">Select…</option>
-            {HEARD_ABOUT.map(h => <option key={h} value={h}>{h}</option>)}
-          </Select>
+          <div>
+            <div className="font-semibold text-white text-sm">
+              Almost there — SKYLER setup is next
+            </div>
+            <p className="text-xs text-[#8B8F97] mt-1.5 leading-relaxed">
+              Your AI Sales Assistant needs a few more details to start working.
+              Once your workspace is ready, we&apos;ll walk you through setting up
+              SKYLER — your AI Sales Assistant. She&apos;ll need to know about your
+              sales process, messaging style, and a few rules. Takes about 5
+              minutes.
+            </p>
+          </div>
         </div>
       </div>
 
       {error && <p className="text-[#F87171] text-sm">{error}</p>}
-      <StepNav step={7} loading={loading} onBack={() => router.push("/onboarding?step=6")} onContinue={handleContinue} />
+
+      <StepNav
+        step={7}
+        loading={loading}
+        onBack={() => router.push("/onboarding?step=6")}
+        onContinue={handleComplete}
+        continueLabel="Complete Setup ✓"
+      />
     </div>
   );
 }

@@ -26,6 +26,8 @@ import { leadWatchdog } from "@/lib/inngest/functions/lead-watchdog";
 // Stage 15.1: Meeting Lifecycle & No-Show Re-Engagement
 import { meetingLifecycleOrchestrator } from "@/lib/inngest/functions/meeting-lifecycle";
 import { noShowReengagement } from "@/lib/inngest/functions/no-show-reengagement";
+// Onboarding completion background jobs
+import { onboardingComplete } from "@/lib/inngest/functions/onboarding-complete";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -63,5 +65,7 @@ export const { GET, POST, PUT } = serve({
     // Stage 15.1: Meeting Lifecycle & No-Show Re-Engagement
     meetingLifecycleOrchestrator,
     noShowReengagement,
+    // Onboarding
+    onboardingComplete,
   ],
 });

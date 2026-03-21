@@ -4,109 +4,221 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
 import { StepNav } from "@/components/onboarding/step-nav";
+import { InfoBanner } from "@/components/onboarding/shared/info-banner";
+import { SelectableCards } from "@/components/onboarding/shared/selectable-cards";
+import { FileUploadZone } from "@/components/onboarding/shared/file-upload-zone";
 import { saveOnboardingStepAction } from "@/app/actions/onboarding";
-import { Upload } from "lucide-react";
 
-const FONTS = ["Inter","DM Sans","Roboto","Open Sans","Lato","Montserrat","Poppins","Nunito","Raleway","Source Sans Pro"];
-const VOICES = ["Professional","Friendly","Casual","Technical","Authoritative"];
+const BRAND_VOICE_OPTIONS = [
+  {
+    value: "professional",
+    title: "Professional & Polished",
+    description: "Corporate, trustworthy, authoritative",
+  },
+  {
+    value: "friendly",
+    title: "Friendly & Approachable",
+    description: "Warm, conversational, relatable",
+  },
+  {
+    value: "bold",
+    title: "Bold & Confident",
+    description: "Direct, assertive, no-nonsense",
+  },
+  {
+    value: "innovative",
+    title: "Innovative & Modern",
+    description: "Forward thinking, tech-savvy, fresh",
+  },
+];
 
-type Props = { workspaceId: string; savedData?: Record<string, unknown> };
+type Props = {
+  workspaceId: string;
+  savedData?: Record<string, unknown>;
+  allOrgData?: Record<string, unknown>;
+};
 
 export function Step03Brand({ workspaceId, savedData }: Props) {
   const router = useRouter();
   const s = savedData ?? {};
   const [form, setForm] = useState({
-    primaryColor:   (s.primaryColor as string)   ?? "#3A89FF",
-    secondaryColor: (s.secondaryColor as string)  ?? "#7C3AED",
-    brandFont:      (s.brandFont as string)       ?? "Inter",
-    brandVoice:     (s.brandVoice as string)      ?? "",
-    tagline:        (s.tagline as string)         ?? "",
+    primaryColor:   (s.primaryColor as string)   ?? "#4A6CF7",
+    secondaryColor: (s.secondaryColor as string) ?? "#1A1A2E",
+    accentColor:    (s.accentColor as string)    ?? "#10B981",
+    headingFont:    (s.headingFont as string)    ?? "",
+    bodyFont:       (s.bodyFont as string)       ?? "",
+    brandVoice:     (s.brandVoice as string)     ?? "",
+    tagline:        (s.tagline as string)        ?? "",
   });
+  const [primaryLogo, setPrimaryLogo] = useState<File[]>([]);
+  const [darkLogo, setDarkLogo] = useState<File[]>([]);
+  const [guidelineFiles, setGuidelineFiles] = useState<File[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function set(k: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-      setForm(p => ({ ...p, [k]: e.target.value }));
+    return (e: React.ChangeEvent<HTMLInputElement>) =>
+      setForm((p) => ({ ...p, [k]: e.target.value }));
   }
 
   async function handleContinue() {
+    if (!form.brandVoice) { setError("Please select a brand voice"); return; }
     setLoading(true); setError(null);
-    const result = await saveOnboardingStepAction({ workspaceId, step: 3, orgData: { step3: form } });
+    // File uploads would be handled via Supabase Storage on completion;
+    // for now we save the text/selection data
+    const result = await saveOnboardingStepAction({
+      workspaceId,
+      step: 3,
+      orgData: {
+        step3: {
+          ...form,
+          hasLogo: primaryLogo.length > 0,
+          hasDarkLogo: darkLogo.length > 0,
+          guidelineFileCount: guidelineFiles.length,
+        },
+      },
+    });
     if (result.error) { setError(result.error); setLoading(false); return; }
     router.push("/onboarding?step=4");
   }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-heading font-bold text-2xl text-white">Your Brand</h1>
-        <p className="text-[#8B8F97] text-sm mt-1">Upload your logo and define your visual identity.</p>
-      </div>
+      {/* Title */}
+      <h1 className="font-heading font-bold text-2xl text-white">Your Brand</h1>
 
-      <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-2xl p-6 space-y-6">
-        {/* Logo uploads */}
-        <div className="grid grid-cols-2 gap-4">
-          {[
-            { label: "Primary logo", desc: "Light/default version" },
-            { label: "Dark logo", desc: "Optional — for dark backgrounds" },
-          ].map(({ label, desc }) => (
-            <div key={label} className="space-y-1.5">
-              <Label>{label}</Label>
-              <label className="flex flex-col items-center justify-center gap-2 h-28 border-2 border-dashed border-[#2A2D35] rounded-xl cursor-pointer hover:border-[#3A89FF] transition-colors">
-                <Upload className="w-5 h-5 text-[#8B8F97]" />
-                <span className="text-xs text-[#8B8F97]">{desc}</span>
-                <span className="text-xs text-[#3A89FF]">Click to upload</span>
-                <input type="file" accept="image/*" className="hidden" />
-              </label>
-            </div>
-          ))}
-        </div>
+      {/* Info banner */}
+      <InfoBanner
+        title="Your brand identity"
+        description="Your AI Employees use your branding in proposals, outreach materials, documents, reports, and presentations. The more you provide, the more professional everything looks."
+      />
 
-        {/* Colors */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>Primary brand color</Label>
-            <div className="flex items-center gap-3 h-10 px-3 rounded-md border border-[#2A2D35] bg-[#131619]">
-              <input type="color" value={form.primaryColor} onChange={set("primaryColor")} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0" />
-              <span className="text-sm text-white font-mono">{form.primaryColor}</span>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Secondary brand color</Label>
-            <div className="flex items-center gap-3 h-10 px-3 rounded-md border border-[#2A2D35] bg-[#131619]">
-              <input type="color" value={form.secondaryColor} onChange={set("secondaryColor")} className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0" />
-              <span className="text-sm text-white font-mono">{form.secondaryColor}</span>
-            </div>
+      {/* Form fields */}
+      <div className="space-y-6">
+        {/* Logo uploads — side by side */}
+        <div className="space-y-2">
+          <Label>Company Logo</Label>
+          <div className="grid grid-cols-2 gap-4">
+            <FileUploadZone
+              label="Primary Logo"
+              description="PNG or SVG, light/default version"
+              accept="image/png,image/svg+xml"
+              files={primaryLogo}
+              onFilesChange={setPrimaryLogo}
+            />
+            <FileUploadZone
+              label="Dark Version"
+              description="Optional — for dark backgrounds"
+              accept="image/png,image/svg+xml"
+              files={darkLogo}
+              onFilesChange={setDarkLogo}
+            />
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <Label>Brand font</Label>
-            <Select value={form.brandFont} onChange={set("brandFont")}>
-              {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Brand voice</Label>
-            <Select value={form.brandVoice} onChange={set("brandVoice")}>
-              <option value="">Select…</option>
-              {VOICES.map(v => <option key={v} value={v}>{v}</option>)}
-            </Select>
+        {/* Brand Colors — 3 hex inputs in a row */}
+        <div className="space-y-2">
+          <Label>Brand Colors</Label>
+          <div className="grid grid-cols-3 gap-4">
+            {([
+              { key: "primaryColor" as const, label: "Primary" },
+              { key: "secondaryColor" as const, label: "Secondary" },
+              { key: "accentColor" as const, label: "Accent" },
+            ]).map(({ key, label }) => (
+              <div key={key} className="space-y-1.5">
+                <span className="text-xs text-[#8B8F97]">{label}</span>
+                <div className="flex items-center gap-3 h-10 px-3 rounded-lg border border-[#2A2D35] bg-[#131619]">
+                  <input
+                    type="color"
+                    value={form[key]}
+                    onChange={set(key)}
+                    className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
+                  />
+                  <input
+                    type="text"
+                    value={form[key]}
+                    onChange={set(key)}
+                    className="flex-1 bg-transparent text-sm text-white font-mono border-0 outline-none"
+                    placeholder="#000000"
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
+        {/* Brand Fonts — 2 text inputs */}
+        <div className="space-y-2">
+          <Label>Brand Fonts</Label>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <span className="text-xs text-[#8B8F97]">Heading Font</span>
+              <Input
+                value={form.headingFont}
+                onChange={set("headingFont")}
+                placeholder="e.g. Inter, Montserrat"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <span className="text-xs text-[#8B8F97]">Body Font</span>
+              <Input
+                value={form.bodyFont}
+                onChange={set("bodyFont")}
+                placeholder="e.g. DM Sans, Open Sans"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Brand Guidelines file upload */}
+        <div className="space-y-2">
+          <Label>Brand Guidelines &amp; Documents</Label>
+          <FileUploadZone
+            label="Upload brand guidelines"
+            description="PDF, DOCX, or images — anything that defines your visual identity"
+            accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.svg"
+            multiple
+            files={guidelineFiles}
+            onFilesChange={setGuidelineFiles}
+          />
+        </div>
+
+        {/* Brand Voice — 2x2 selectable cards */}
+        <div className="space-y-2">
+          <Label>
+            Brand Voice <span className="text-[#F87171]">*</span>
+          </Label>
+          <SelectableCards
+            options={BRAND_VOICE_OPTIONS}
+            value={form.brandVoice}
+            onChange={(v) => setForm((p) => ({ ...p, brandVoice: v as string }))}
+            columns={2}
+          />
+        </div>
+
+        {/* Tagline */}
         <div className="space-y-1.5">
-          <Label htmlFor="tagline">Tagline <span className="text-[#8B8F97] text-xs">(optional)</span></Label>
-          <Input id="tagline" value={form.tagline} onChange={set("tagline")} placeholder="Your company tagline" />
+          <Label htmlFor="tagline">
+            Tagline or Slogan{" "}
+            <span className="text-[#8B8F97] text-xs font-normal">(optional)</span>
+          </Label>
+          <Input
+            id="tagline"
+            value={form.tagline}
+            onChange={set("tagline")}
+            placeholder="e.g. 'AI ideas worth millions'"
+          />
         </div>
       </div>
 
       {error && <p className="text-[#F87171] text-sm">{error}</p>}
-      <StepNav step={3} loading={loading} onBack={() => router.push("/onboarding?step=2")} onContinue={handleContinue} />
+      <StepNav
+        step={3}
+        loading={loading}
+        onBack={() => router.push("/onboarding?step=2")}
+        onContinue={handleContinue}
+      />
     </div>
   );
 }

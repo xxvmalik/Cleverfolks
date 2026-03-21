@@ -202,12 +202,14 @@ export async function POST(request: NextRequest) {
     { data: profileRow },
     { data: integrationsRows },
     agentMemoriesResult,
+    { data: agentConfigRow },
   ] = await Promise.all([
     db.from("workspaces").select("name, settings").eq("id", workspaceId).single(),
     db.from("onboarding_state").select("org_data, skyler_data").eq("workspace_id", workspaceId).maybeSingle(),
     db.from("knowledge_profiles").select("profile, status").eq("workspace_id", workspaceId).maybeSingle(),
     db.from("integrations").select("provider").eq("workspace_id", workspaceId).eq("status", "connected"),
     getMemories(db, workspaceId),
+    db.from("agent_configurations").select("config").eq("workspace_id", workspaceId).eq("agent_type", "skyler").maybeSingle(),
   ]);
 
   const agentMemories: AgentMemory[] = agentMemoriesResult;
@@ -234,9 +236,12 @@ export async function POST(request: NextRequest) {
     : "approval_required" as const; // default when null/undefined
   console.log(`[skyler-chat] Autonomy level resolved to: ${autonomyLevel} (raw setting: ${rawAutonomy ?? "null"})`);
 
-  // Extract Workflow Settings (stored in workspaces.settings.skyler_workflow)
+  // Extract Workflow Settings — agent_configurations takes priority over legacy skyler_workflow
   const rawWorkflow = wsSettings.skyler_workflow as SkylerWorkflowSettings | undefined;
-  const workflowSettings: SkylerWorkflowSettings | null = rawWorkflow ?? null;
+  const agentCfg = (agentConfigRow?.config ?? {}) as Partial<SkylerWorkflowSettings>;
+  const workflowSettings: SkylerWorkflowSettings | null = rawWorkflow || Object.keys(agentCfg).length > 0
+    ? { ...(rawWorkflow ?? {} as SkylerWorkflowSettings), ...agentCfg }
+    : null;
   if (workflowSettings) {
     console.log(`[skyler-chat] Workflow settings loaded — autonomy: ${workflowSettings.autonomyLevel}, goal: ${workflowSettings.primaryGoal ?? "not set"}`);
   } else {
