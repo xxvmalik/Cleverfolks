@@ -34,9 +34,12 @@ export function LeadCard({
   const isReengaging = record.re_engagement_status === "active";
 
   return (
-    <button
+    <div
       onClick={onSelect}
-      className="w-full text-left group"
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onSelect(); }}
+      className="w-full text-left group cursor-pointer"
       data-entity-type="lead"
       data-entity-id={record.id}
       data-entity-name={record.contact_name}
@@ -154,6 +157,6 @@ export function LeadCard({
           )}
         </div>
       )}
-    </button>
+    </div>
   );
 }
