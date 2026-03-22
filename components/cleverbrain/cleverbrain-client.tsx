@@ -732,7 +732,7 @@ export function ConnectorsView({
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
-                  <Link href="/connectors" className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors" onClick={() => setUserMenuOpen(false)}>
+                  <Link href="/settings" className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors" onClick={() => setUserMenuOpen(false)}>
                     Settings
                   </Link>
                   <button onClick={onSignOut} className="w-full text-left px-4 py-2 text-sm text-[#F87171] hover:bg-white/5 transition-colors">
@@ -935,9 +935,9 @@ function RightIconBar({
           <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
         </button>
 
-        {/* Organization */}
-        <Link href="/connectors" title="Organization" className="hover:opacity-80 transition-opacity">
-          <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Organization" width={36} height={36} />
+        {/* Settings */}
+        <Link href="/settings" title="Settings" className="opacity-70 hover:opacity-100 transition-opacity">
+          <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Settings" width={36} height={36} />
         </Link>
       </div>
     </div>
@@ -1492,7 +1492,7 @@ export function CleverBrainClient({
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
                   <Link
-                    href="/connectors"
+                    href="/settings"
                     className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
                     onClick={() => setUserMenuOpen(false)}
                   >

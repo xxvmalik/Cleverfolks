@@ -76,7 +76,7 @@ type MeetingSettings = {
   calendarEmail: string;
 };
 
-type SettingsTab = "global-rules" | "lead-qualification" | "sales-closer" | "meetings";
+type SettingsTab = "global-rules" | "lead-qualification" | "sales-closer" | "meetings" | "skyler-profile";
 
 // ── Colours for weight distribution bar segments ────────────────────────────
 
@@ -489,6 +489,47 @@ function EmailMultiInput({
   );
 }
 
+// ── Skyler Profile helpers ──────────────────────────────────────────────────
+
+function ProfileField({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl px-4 py-3">
+      <p className="text-xs text-[#8B8F97] mb-1">{label}</p>
+      <p className="text-sm text-white">{value || "—"}</p>
+    </div>
+  );
+}
+
+function ProfileTagField({ label, items, color }: { label: string; items?: string[] | null; color: string }) {
+  return (
+    <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl px-4 py-3">
+      <p className="text-xs text-[#8B8F97] mb-2">{label}</p>
+      {items && items.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {items.map((item) => (
+            <span key={item} className="px-2.5 py-1 rounded-full text-xs font-medium border" style={{ color, borderColor: `${color}33`, background: `${color}15` }}>
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-[#8B8F97]">—</p>
+      )}
+    </div>
+  );
+}
+
+function GuardrailItem({ label, enabled }: { label: string; enabled: boolean }) {
+  return (
+    <div className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl px-4 py-3 flex items-center justify-between">
+      <span className="text-sm text-white">{label}</span>
+      <span className={cn("text-xs font-medium px-2 py-0.5 rounded-full", enabled ? "bg-[#4ADE80]/10 text-[#4ADE80]" : "bg-[#F87171]/10 text-[#F87171]")}>
+        {enabled ? "ON" : "OFF"}
+      </span>
+    </div>
+  );
+}
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
@@ -509,16 +550,24 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
   const [slackLoading, setSlackLoading] = useState(false);
   const [editingDimension, setEditingDimension] = useState<number | null>(null);
   const [editDimensionValues, setEditDimensionValues] = useState<ScoringDimension | null>(null);
+  const [agentConfig, setAgentConfig] = useState<Record<string, unknown> | null>(null);
 
   const fetchSettings = useCallback(async () => {
     try {
-      const res = await fetch(`/api/skyler/workflow-settings?workspaceId=${workspaceId}`);
-      if (res.ok) {
-        const data = await res.json();
+      const [settingsRes, configRes] = await Promise.all([
+        fetch(`/api/skyler/workflow-settings?workspaceId=${workspaceId}`),
+        fetch(`/api/skyler/agent-config?workspaceId=${workspaceId}`),
+      ]);
+      if (settingsRes.ok) {
+        const data = await settingsRes.json();
         setSettings(data.settings);
         if (data.meetingSettings) {
           setMeetingSettings((prev) => ({ ...prev, ...data.meetingSettings }));
         }
+      }
+      if (configRes.ok) {
+        const data = await configRes.json();
+        setAgentConfig(data.config ?? null);
       }
     } finally {
       setLoading(false);
@@ -661,6 +710,7 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
   if (!settings) return null;
 
   const TABS: { id: SettingsTab; label: string }[] = [
+    { id: "skyler-profile", label: "Skyler Profile" },
     { id: "global-rules", label: "Global Rules" },
     { id: "lead-qualification", label: "Lead Qualification" },
     { id: "sales-closer", label: "Sales Closer" },
@@ -1406,6 +1456,123 @@ export function WorkflowSettings({ workspaceId }: { workspaceId: string }) {
                 discussed on the call.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* ── Skyler Profile Tab ───────────────────────────────────────── */}
+        {activeTab === "skyler-profile" && (
+          <div className="space-y-8">
+            {agentConfig ? (
+              <>
+                {/* Business Context */}
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">Business Context</h3>
+                  <p className="text-[#8B8F97] text-xs mb-4">
+                    How Skyler understands your business. Set during onboarding.
+                  </p>
+                  <div className="space-y-3">
+                    <ProfileField label="Ideal Customer" value={agentConfig.ideal_customer as string} />
+                    <ProfileField label="Primary Pain Point" value={agentConfig.primary_pain_point as string} />
+                    <ProfileField label="Primary Outcome" value={agentConfig.primary_outcome as string} />
+                  </div>
+                </div>
+
+                {/* Sales Process */}
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">Sales Process</h3>
+                  <p className="text-[#8B8F97] text-xs mb-4">
+                    How Skyler approaches your sales cycle.
+                  </p>
+                  <div className="space-y-3">
+                    <ProfileField label="Sales Journey" value={agentConfig.sales_journey as string} />
+                    <ProfileField label="Average Cycle Length" value={(agentConfig.averageSalesCycle ?? agentConfig.cycle_length) as string} />
+                    <ProfileField label="Pricing Structure" value={(agentConfig.pricingStructure ?? agentConfig.pricing_structure) as string} />
+                    <ProfileField label="Average Deal Size" value={(agentConfig.averageDealSize ?? agentConfig.average_deal_size) as string} />
+                    <ProfileField label="Outreach Goal" value={(agentConfig.primaryGoal ?? agentConfig.outreach_goal) as string} />
+                  </div>
+                </div>
+
+                {/* Objections & Competitors */}
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">Objections & Competitors</h3>
+                  <p className="text-[#8B8F97] text-xs mb-4">
+                    How Skyler handles pushback and competitive positioning.
+                  </p>
+                  <div className="space-y-3">
+                    {(agentConfig.general_objections as Array<{ objection?: string; response?: string }> | undefined)?.map((obj, i) => (
+                      obj?.objection ? (
+                        <div key={i} className="bg-[#1C1F24] border border-[#2A2D35] rounded-xl p-4">
+                          <p className="text-xs text-[#8B8F97] mb-1">Objection {i + 1}</p>
+                          <p className="text-sm text-white mb-2">&ldquo;{obj.objection}&rdquo;</p>
+                          {obj.response && (
+                            <>
+                              <p className="text-xs text-[#8B8F97] mb-1">Response</p>
+                              <p className="text-sm text-[#4ADE80]">{obj.response}</p>
+                            </>
+                          )}
+                        </div>
+                      ) : null
+                    ))}
+                    <ProfileField label="Never Say About Competitors" value={agentConfig.never_say_about_competitors as string} />
+                  </div>
+                </div>
+
+                {/* Tone & Voice */}
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">Tone & Voice</h3>
+                  <p className="text-[#8B8F97] text-xs mb-4">
+                    How Skyler communicates on your behalf.
+                  </p>
+                  <div className="space-y-3">
+                    <ProfileField label="Formality" value={(agentConfig.formality ?? agentConfig.formality_level) as string} />
+                    <ProfileField label="Communication Approach" value={(agentConfig.communicationApproach ?? agentConfig.communication_approach) as string} />
+                    <ProfileTagField label="Phrases to Always Use" items={(agentConfig.phrasesToAlwaysUse ?? agentConfig.phrases_always_use) as string[] | undefined} color="#4ADE80" />
+                    <ProfileTagField label="Phrases to Never Use" items={(agentConfig.phrasesToNeverUse ?? agentConfig.phrases_never_use) as string[] | undefined} color="#F87171" />
+                  </div>
+                </div>
+
+                {/* Autonomy & Guardrails */}
+                <div>
+                  <h3 className="text-white font-semibold text-base mb-1">Autonomy & Guardrails</h3>
+                  <p className="text-[#8B8F97] text-xs mb-4">
+                    What Skyler can do without asking permission.
+                  </p>
+                  <div className="space-y-3">
+                    {(() => {
+                      const autonomy = (agentConfig.autonomy ?? {}) as Record<string, boolean>;
+                      const toggles = agentConfig.autonomyToggles as Record<string, boolean> | undefined;
+                      return (
+                        <div className="grid grid-cols-2 gap-3">
+                          <GuardrailItem label="Send Follow-ups" enabled={toggles?.sendFollowUps ?? autonomy.auto_send_followups ?? true} />
+                          <GuardrailItem label="Handle Objections" enabled={toggles?.handleObjections ?? autonomy.auto_handle_objections ?? true} />
+                          <GuardrailItem label="Book Demos" enabled={toggles?.bookMeetings ?? autonomy.auto_book_demos ?? false} />
+                          <GuardrailItem label="First Outreach" enabled={toggles?.firstOutreachApproval === false || autonomy.auto_send_first_outreach === true} />
+                        </div>
+                      );
+                    })()}
+                    {agentConfig.contact_hours ? (
+                      <ProfileField
+                        label="Contact Hours"
+                        value={`${(agentConfig.contact_hours as Record<string, string>).start ?? "08:00"} – ${(agentConfig.contact_hours as Record<string, string>).end ?? "18:00"}`}
+                      />
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Info box */}
+                <div className="bg-[#F2903D]/5 border border-[#F2903D]/20 rounded-xl p-4">
+                  <p className="text-[#F2903D] text-xs font-medium mb-1">Updating Skyler&apos;s Profile</p>
+                  <p className="text-[#8B8F97] text-xs leading-relaxed">
+                    These settings were configured during Skyler onboarding. To update them, you can edit the individual fields in the Sales Closer and Global Rules tabs above, or re-run onboarding from workspace settings.
+                  </p>
+                </div>
+              </>
+            ) : (
+              <div className="text-center py-12">
+                <p className="text-[#8B8F97] text-sm">Skyler onboarding has not been completed yet.</p>
+                <p className="text-[#8B8F97] text-xs mt-2">Complete the onboarding flow to configure Skyler&apos;s profile.</p>
+              </div>
+            )}
           </div>
         )}
       </div>
