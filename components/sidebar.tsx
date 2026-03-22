@@ -4,12 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Home,
   Brain,
   Bot,
   Plug,
-  Store,
-  Settings,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -19,12 +16,9 @@ import { signOut } from "@/lib/auth";
 import { WorkspaceSwitcher } from "./workspace-switcher";
 
 const navItems = [
-  { label: "Home", href: "/", icon: Home },
   { label: "CleverBrain", href: "/cleverbrain", icon: Brain },
   { label: "SKYLER", href: "/skyler", icon: Bot },
-  { label: "Integrations", href: "/integrations", icon: Plug },
-  { label: "Marketplace", href: "/marketplace", icon: Store },
-  { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Connectors", href: "/connectors", icon: Plug },
 ];
 
 export function Sidebar() {
@@ -54,10 +48,7 @@ export function Sidebar() {
         <ul className="space-y-1 px-2">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname.startsWith(item.href);
+            const isActive = pathname.startsWith(item.href);
 
             return (
               <li key={item.href}>

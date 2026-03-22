@@ -29,11 +29,11 @@ export async function GET(req: NextRequest) {
 
   if (error) {
     console.error("[calendar-callback] Google OAuth error:", error);
-    return NextResponse.redirect(`${origin}/integrations?calendar_error=${encodeURIComponent(error)}`);
+    return NextResponse.redirect(`${origin}/connectors?calendar_error=${encodeURIComponent(error)}`);
   }
 
   if (!code || !stateParam) {
-    return NextResponse.redirect(`${origin}/integrations?calendar_error=missing_code`);
+    return NextResponse.redirect(`${origin}/connectors?calendar_error=missing_code`);
   }
 
   // Decode state
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
     const state = JSON.parse(Buffer.from(stateParam, "base64url").toString());
     workspaceId = state.workspaceId;
   } catch {
-    return NextResponse.redirect(`${origin}/integrations?calendar_error=invalid_state`);
+    return NextResponse.redirect(`${origin}/connectors?calendar_error=invalid_state`);
   }
 
   const clientId = process.env.GOOGLE_CALENDAR_CLIENT_ID!;
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
     if (!tokenRes.ok) {
       const errBody = await tokenRes.text().catch(() => "unknown");
       console.error("[calendar-callback] Token exchange failed:", tokenRes.status, errBody);
-      return NextResponse.redirect(`${origin}/integrations?calendar_error=token_exchange_failed`);
+      return NextResponse.redirect(`${origin}/connectors?calendar_error=token_exchange_failed`);
     }
 
     const tokens = await tokenRes.json();
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
 
     if (!refreshToken) {
       console.error("[calendar-callback] No refresh_token in response. Token keys:", Object.keys(tokens));
-      return NextResponse.redirect(`${origin}/integrations?calendar_error=no_refresh_token`);
+      return NextResponse.redirect(`${origin}/connectors?calendar_error=no_refresh_token`);
     }
 
     console.log("[calendar-callback] Got refresh token, exchanging with Recall...");
@@ -179,9 +179,9 @@ export async function GET(req: NextRequest) {
       .eq("id", workspaceId);
 
     console.log(`[calendar-callback] Google Calendar connected for workspace ${workspaceId}`);
-    return NextResponse.redirect(`${origin}/integrations?calendar_connected=true`);
+    return NextResponse.redirect(`${origin}/connectors?calendar_connected=true`);
   } catch (err) {
     console.error("[calendar-callback] Error:", err instanceof Error ? err.message : err);
-    return NextResponse.redirect(`${origin}/integrations?calendar_error=internal`);
+    return NextResponse.redirect(`${origin}/connectors?calendar_error=internal`);
   }
 }

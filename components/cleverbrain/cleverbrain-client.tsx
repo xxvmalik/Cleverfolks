@@ -28,6 +28,7 @@ import Nango from "@nangohq/frontend";
 import type { ConnectUIEvent } from "@nangohq/frontend";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
+import { BusinessProfileView } from "./business-profile-view";
 import { renderMarkdown } from "@/components/shared/markdown-renderer";
 import {
   connectIntegrationAction,
@@ -548,6 +549,7 @@ export function ConnectorsView({
   workspaceId: string;
 }) {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<"profile" | "connectors" | "history">("connectors");
   const [selectedId, setSelectedId] = useState(INTEGRATIONS[0].id);
   const [dbIntegrations, setDbIntegrations] = useState<DbIntegration[]>([]);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
@@ -663,15 +665,33 @@ export function ConnectorsView({
 
         {/* Nav tabs — more spacing from avatar */}
         <nav className="px-3 space-y-1 mt-2">
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors">
+          <button
+            onClick={() => setActiveTab("profile")}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+              activeTab === "profile" ? "text-white bg-white/10" : "text-[#8B8F97] hover:text-white hover:bg-white/5"
+            )}
+          >
             <User className="w-4 h-4" />
-            Client Profile
+            Business Profile
           </button>
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-white bg-white/10">
+          <button
+            onClick={() => setActiveTab("connectors")}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+              activeTab === "connectors" ? "text-white bg-white/10" : "text-[#8B8F97] hover:text-white hover:bg-white/5"
+            )}
+          >
             <Link2 className="w-4 h-4" />
             Connectors
           </button>
-          <button className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors">
+          <button
+            onClick={() => setActiveTab("history")}
+            className={cn(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+              activeTab === "history" ? "text-white bg-white/10" : "text-[#8B8F97] hover:text-white hover:bg-white/5"
+            )}
+          >
             <FileText className="w-4 h-4" />
             Interaction History
           </button>
@@ -712,7 +732,7 @@ export function ConnectorsView({
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
-                  <Link href="/settings" className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors" onClick={() => setUserMenuOpen(false)}>
+                  <Link href="/connectors" className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors" onClick={() => setUserMenuOpen(false)}>
                     Settings
                   </Link>
                   <button onClick={onSignOut} className="w-full text-left px-4 py-2 text-sm text-[#F87171] hover:bg-white/5 transition-colors">
@@ -724,6 +744,20 @@ export function ConnectorsView({
           </div>
         </div>
 
+        {/* Tab content */}
+        {activeTab === "profile" ? (
+          <div className="flex-1 overflow-y-auto">
+            <BusinessProfileView workspaceId={workspaceId} companyName={companyName} />
+          </div>
+        ) : activeTab === "history" ? (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <FileText className="w-10 h-10 text-[#8B8F97] mx-auto mb-3" />
+              <p className="text-[#8B8F97] text-sm">Interaction History coming soon</p>
+            </div>
+          </div>
+        ) : (
+        <>
         {/* Heading */}
         <div className="px-8 pt-5 pb-4 flex-shrink-0">
           <h1 className="text-white font-bold text-xl">Integration Hub: {companyName || "Your Company"}</h1>
@@ -846,6 +880,8 @@ export function ConnectorsView({
             </div>
           </div>
         </div>
+        </>
+        )}
       </div>
     </div>
   );
@@ -900,7 +936,7 @@ function RightIconBar({
         </button>
 
         {/* Organization */}
-        <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">
+        <Link href="/connectors" title="Organization" className="hover:opacity-80 transition-opacity">
           <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Organization" width={36} height={36} />
         </Link>
       </div>
@@ -1456,7 +1492,7 @@ export function CleverBrainClient({
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
                 <div className="absolute right-0 top-full mt-2 w-48 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-1 z-50 shadow-xl">
                   <Link
-                    href="/settings"
+                    href="/connectors"
                     className="block px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
                     onClick={() => setUserMenuOpen(false)}
                   >

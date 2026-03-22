@@ -22,7 +22,7 @@ type Props = {
   connectedProviders: string[];
 };
 
-export function SkylerStep05Tools({ workspaceId, savedData, connectedProviders }: Props) {
+export function SkylerStep05Tools({ workspaceId, connectedProviders }: Props) {
   const router = useRouter();
   const [connected, setConnected] = useState<string[]>(connectedProviders);
   const [loading, setLoading] = useState(false);
@@ -34,14 +34,8 @@ export function SkylerStep05Tools({ workspaceId, savedData, connectedProviders }
     integrations: SKYLER_INTEGRATIONS.filter((i) => i.skylerCategory === cat.key),
   }));
 
-  function handleConnect(integrationId: string) {
-    // In a real flow, this would open Nango OAuth.
-    // For now, toggle connected state.
-    setConnected((prev) =>
-      prev.includes(integrationId)
-        ? prev.filter((id) => id !== integrationId)
-        : [...prev, integrationId]
-    );
+  function handleConnected(providerId: string) {
+    setConnected((prev) => prev.includes(providerId) ? prev : [...prev, providerId]);
   }
 
   async function handleContinue() {
@@ -105,9 +99,11 @@ export function SkylerStep05Tools({ workspaceId, savedData, connectedProviders }
                   name={integration.name}
                   description={integration.description}
                   icon={integration.icon}
+                  providerId={integration.nango_id}
                   isConnected={connected.includes(integration.id)}
                   isComingSoon={integration.status === "coming_soon"}
-                  onConnect={() => handleConnect(integration.id)}
+                  workspaceId={workspaceId}
+                  onConnected={() => handleConnected(integration.id)}
                   accentColor="#F2903D"
                 />
               ))}
@@ -117,7 +113,7 @@ export function SkylerStep05Tools({ workspaceId, savedData, connectedProviders }
       </div>
 
       <p className="text-xs text-[#8B8F97]">
-        You can connect additional tools later from Settings.
+        You can connect additional tools later from Connectors.
       </p>
 
       {/* Error */}

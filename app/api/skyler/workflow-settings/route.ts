@@ -165,9 +165,44 @@ export async function GET(req: NextRequest) {
 
   // Merge: defaults ← workspaces.settings.skyler_workflow ← agent_configurations.config
   const legacyWorkflow = (settings.skyler_workflow ?? {}) as Partial<SkylerWorkflowSettings>;
-  const agentCfg = (agentConfig?.config ?? {}) as Partial<SkylerWorkflowSettings>;
+  const rawCfg = (agentConfig?.config ?? {}) as Record<string, unknown>;
 
-  const merged = { ...DEFAULT_WORKFLOW_SETTINGS, ...legacyWorkflow, ...agentCfg };
+  // Normalize snake_case agent_config fields to camelCase workflow settings shape
+  const normalizedAgentCfg: Partial<SkylerWorkflowSettings> = {};
+  if (Object.keys(rawCfg).length > 0) {
+    if (rawCfg.primaryGoal ?? rawCfg.outreach_goal) normalizedAgentCfg.primaryGoal = (rawCfg.primaryGoal ?? rawCfg.outreach_goal) as string;
+    if (rawCfg.salesJourney ?? rawCfg.sales_journey) normalizedAgentCfg.salesJourney = (rawCfg.salesJourney ?? rawCfg.sales_journey) as string;
+    if (rawCfg.pricingStructure ?? rawCfg.pricing_structure) normalizedAgentCfg.pricingStructure = (rawCfg.pricingStructure ?? rawCfg.pricing_structure) as string;
+    if (rawCfg.averageSalesCycle ?? rawCfg.cycle_length) normalizedAgentCfg.averageSalesCycle = (rawCfg.averageSalesCycle ?? rawCfg.cycle_length) as string;
+    if (rawCfg.averageDealSize ?? rawCfg.average_deal_size) normalizedAgentCfg.averageDealSize = (rawCfg.averageDealSize ?? rawCfg.average_deal_size) as string;
+    if (rawCfg.formality ?? rawCfg.formality_level) normalizedAgentCfg.formality = (rawCfg.formality ?? rawCfg.formality_level) as string;
+    if (rawCfg.communicationApproach ?? rawCfg.communication_approach) normalizedAgentCfg.communicationApproach = (rawCfg.communicationApproach ?? rawCfg.communication_approach) as string;
+    if (rawCfg.phrasesToAlwaysUse ?? rawCfg.phrases_always_use) normalizedAgentCfg.phrasesToAlwaysUse = (rawCfg.phrasesToAlwaysUse ?? rawCfg.phrases_always_use) as string[];
+    if (rawCfg.phrasesToNeverUse ?? rawCfg.phrases_never_use) normalizedAgentCfg.phrasesToNeverUse = (rawCfg.phrasesToNeverUse ?? rawCfg.phrases_never_use) as string[];
+    // Autonomy toggles: prefer camelCase, fall back to snake_case autonomy object
+    if (rawCfg.autonomyToggles) {
+      normalizedAgentCfg.autonomyToggles = rawCfg.autonomyToggles as SkylerWorkflowSettings["autonomyToggles"];
+    } else if (rawCfg.autonomy) {
+      const a = rawCfg.autonomy as Record<string, boolean>;
+      normalizedAgentCfg.autonomyToggles = {
+        sendFollowUps: a.auto_send_followups ?? true,
+        handleObjections: a.auto_handle_objections ?? true,
+        bookMeetings: a.auto_book_demos ?? false,
+        firstOutreachApproval: !(a.auto_send_first_outreach ?? false),
+      };
+    }
+    // Pass through any camelCase fields that already match the expected shape
+    if (rawCfg.autonomyLevel) normalizedAgentCfg.autonomyLevel = rawCfg.autonomyLevel as SkylerWorkflowSettings["autonomyLevel"];
+    if (rawCfg.maxFollowUpAttempts) normalizedAgentCfg.maxFollowUpAttempts = rawCfg.maxFollowUpAttempts as number;
+    if (rawCfg.bookDemosUsing) normalizedAgentCfg.bookDemosUsing = rawCfg.bookDemosUsing as string;
+    if (rawCfg.knowledgeGapHandling) normalizedAgentCfg.knowledgeGapHandling = rawCfg.knowledgeGapHandling as SkylerWorkflowSettings["knowledgeGapHandling"];
+    if (rawCfg.scoringDimensions) normalizedAgentCfg.scoringDimensions = rawCfg.scoringDimensions as ScoringDimension[];
+    if (rawCfg.routingRules) normalizedAgentCfg.routingRules = rawCfg.routingRules as RoutingRule[];
+    if (rawCfg.notifications) normalizedAgentCfg.notifications = rawCfg.notifications as SkylerWorkflowSettings["notifications"];
+    if (rawCfg.escalationRules) normalizedAgentCfg.escalationRules = rawCfg.escalationRules as SkylerWorkflowSettings["escalationRules"];
+  }
+
+  const merged = { ...DEFAULT_WORKFLOW_SETTINGS, ...legacyWorkflow, ...normalizedAgentCfg };
 
   return NextResponse.json({
     settings: merged,

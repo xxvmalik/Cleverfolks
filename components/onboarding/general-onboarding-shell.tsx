@@ -26,9 +26,10 @@ type Props = {
   workspaceId: string;
   workspaceName: string;
   orgData: Record<string, unknown>;
+  connectedProviders?: string[];
 };
 
-export function GeneralOnboardingShell({ step, workspaceId, workspaceName, orgData }: Props) {
+export function GeneralOnboardingShell({ step, workspaceId, workspaceName, orgData, connectedProviders }: Props) {
   if (step === "phase1done") {
     return (
       <div className="min-h-screen bg-[#131619] flex items-center justify-center p-4">
@@ -49,7 +50,7 @@ export function GeneralOnboardingShell({ step, workspaceId, workspaceName, orgDa
       case 3: return <Step03Brand {...sharedProps} />;
       case 4: return <Step04Products {...sharedProps} />;
       case 5: return <Step05Team {...sharedProps} />;
-      case 6: return <Step06Connect {...sharedProps} />;
+      case 6: return <Step06Connect {...sharedProps} connectedProviders={connectedProviders} />;
       case 7: return <Step07Goals {...sharedProps} />;
       default: return <Step01Company {...sharedProps} />;
     }

@@ -30,7 +30,7 @@ export default function HireAIEmployeePage() {
           <Link href="/cleverbrain/hireaiemployee" title="AI Employees" className="opacity-100 ring-2 ring-[#3A89FF]/40 rounded-lg transition-opacity">
             <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
           </Link>
-          <Link href="/settings" title="Organization" className="hover:opacity-80 transition-opacity">
+          <Link href="/connectors" title="Organization" className="hover:opacity-80 transition-opacity">
             <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Organization" width={36} height={36} />
           </Link>
         </div>

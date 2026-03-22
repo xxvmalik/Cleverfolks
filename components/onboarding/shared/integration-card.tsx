@@ -1,26 +1,98 @@
 "use client";
-import { Check } from "lucide-react";
+import { useState } from "react";
+import { Check, Loader2 } from "lucide-react";
 import * as Icons from "lucide-react";
+import Nango from "@nangohq/frontend";
+import type { ConnectUIEvent } from "@nangohq/frontend";
+import { connectIntegrationAction } from "@/app/actions/integrations";
 
 type Props = {
   name: string;
   description: string;
   icon: string;
+  providerId: string;
   isConnected: boolean;
   isComingSoon: boolean;
-  onConnect: () => void;
+  workspaceId: string;
+  onConnected?: (providerId: string) => void;
   accentColor?: string;
 };
 
-export function IntegrationCard({ name, description, icon, isConnected, isComingSoon, onConnect, accentColor = "#5B3DC8" }: Props) {
+export function IntegrationCard({
+  name,
+  description,
+  icon,
+  providerId,
+  isConnected,
+  isComingSoon,
+  workspaceId,
+  onConnected,
+  accentColor = "#5B3DC8",
+}: Props) {
+  const [connected, setConnected] = useState(isConnected);
+  const [connecting, setConnecting] = useState(false);
+
   // Dynamic icon lookup - fallback to Plug
   const IconComponent = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[
     icon.charAt(0).toUpperCase() + icon.slice(1)
   ] ?? Icons.Plug;
 
+  async function handleConnect() {
+    // Google Calendar: direct OAuth to force refresh token
+    if (providerId === "google-calendar") {
+      window.location.href = `/api/skyler/calendar/authorize?workspaceId=${workspaceId}`;
+      return;
+    }
+
+    setConnecting(true);
+    try {
+      const tokenRes = await fetch("/api/nango-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId }),
+      });
+      if (!tokenRes.ok) throw new Error("Failed to create Nango session");
+      const { token } = (await tokenRes.json()) as { token: string };
+
+      await new Promise<void>((resolve, reject) => {
+        const nango = new Nango({ connectSessionToken: token });
+        const connectUI = nango.openConnectUI({
+          onEvent: async (event: ConnectUIEvent) => {
+            if (event.type === "connect") {
+              const { connectionId, providerConfigKey } = event.payload;
+              try {
+                const result = await connectIntegrationAction(workspaceId, providerConfigKey, connectionId);
+                if (result.error) { connectUI.close(); reject(new Error(result.error)); return; }
+                if (result.integrationId) {
+                  fetch("/api/sync", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ integrationId: result.integrationId }),
+                  }).catch(console.error);
+                }
+                connectUI.close();
+                setConnected(true);
+                onConnected?.(providerId);
+                resolve();
+              } catch (err) { connectUI.close(); reject(err); }
+            } else if (event.type === "error") {
+              connectUI.close();
+              reject(new Error(event.payload.errorMessage));
+            } else if (event.type === "close") { resolve(); }
+          },
+        });
+        connectUI.open();
+      });
+    } catch (err) {
+      console.error("Connect failed:", err);
+    } finally {
+      setConnecting(false);
+    }
+  }
+
   return (
     <div className={`flex items-center justify-between p-4 rounded-xl border transition-colors ${
-      isConnected ? "border-[#4ADE80]/30 bg-[#4ADE80]/5" : "border-[#2A2D35] bg-[#1C1F24]"
+      connected ? "border-[#4ADE80]/30 bg-[#4ADE80]/5" : "border-[#2A2D35] bg-[#1C1F24]"
     }`}>
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-lg bg-[#2A2D35] flex items-center justify-center">
@@ -33,18 +105,20 @@ export function IntegrationCard({ name, description, icon, isConnected, isComing
       </div>
       {isComingSoon ? (
         <span className="text-xs text-[#8B8F97] px-3 py-1.5 rounded-lg bg-[#2A2D35]">Coming Soon</span>
-      ) : isConnected ? (
+      ) : connected ? (
         <span className="inline-flex items-center gap-1 text-xs text-[#4ADE80] px-3 py-1.5 rounded-lg bg-[#4ADE80]/10">
           <Check className="w-3.5 h-3.5" /> Connected
         </span>
       ) : (
         <button
           type="button"
-          onClick={onConnect}
-          className="px-4 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
+          onClick={handleConnect}
+          disabled={connecting}
+          className="px-4 py-1.5 rounded-lg text-xs font-medium text-white transition-colors inline-flex items-center gap-1.5 disabled:opacity-60"
           style={{ backgroundColor: accentColor }}
         >
-          Connect
+          {connecting && <Loader2 className="w-3 h-3 animate-spin" />}
+          {connecting ? "Connecting..." : "Connect"}
         </button>
       )}
     </div>

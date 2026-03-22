@@ -43,6 +43,14 @@ export default async function OnboardingPage({ searchParams }: Props) {
 
   const orgData = (state?.org_data ?? {}) as Record<string, unknown>;
 
+  // Load connected integrations from DB
+  const { data: integrations } = await supabase
+    .from("integrations")
+    .select("provider")
+    .eq("workspace_id", ws.id)
+    .eq("status", "connected");
+  const connectedProviders = (integrations ?? []).map((i) => i.provider);
+
   // Resolve step (1-7 for general onboarding)
   const stepParam = params.step;
   let step: number | string;
@@ -60,6 +68,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
       workspaceId={ws.id}
       workspaceName={ws.name}
       orgData={orgData}
+      connectedProviders={connectedProviders}
     />
   );
 }

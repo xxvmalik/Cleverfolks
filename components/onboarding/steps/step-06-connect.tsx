@@ -16,22 +16,16 @@ type Props = {
   workspaceId: string;
   savedData?: Record<string, unknown>;
   allOrgData?: Record<string, unknown>;
+  connectedProviders?: string[];
 };
 
-export function Step06Connect({ workspaceId: _workspaceId, savedData }: Props) {
-  void _workspaceId; // will be used for Nango connect
+export function Step06Connect({ workspaceId, connectedProviders }: Props) {
   const router = useRouter();
-  const s = (savedData ?? {}) as Record<string, unknown>;
-
-  const [connected, setConnected] = useState<string[]>(
-    (s.connectedIntegrations as string[]) ?? []
-  );
+  const [connected, setConnected] = useState<string[]>(connectedProviders ?? []);
   const [loading, setLoading] = useState(false);
 
-  function toggleConnect(id: string) {
-    setConnected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+  function handleConnected(providerId: string) {
+    setConnected((prev) => prev.includes(providerId) ? prev : [...prev, providerId]);
   }
 
   const grouped = CATEGORY_ORDER.map((cat) => ({
@@ -41,8 +35,6 @@ export function Step06Connect({ workspaceId: _workspaceId, savedData }: Props) {
 
   async function handleContinue() {
     setLoading(true);
-    // No server save needed for integrations — Nango handles persistence.
-    // Just navigate forward.
     router.push("/onboarding?step=7");
   }
 
@@ -66,9 +58,11 @@ export function Step06Connect({ workspaceId: _workspaceId, savedData }: Props) {
                   name={integration.name}
                   description={integration.description}
                   icon={integration.icon}
+                  providerId={integration.nango_id}
                   isConnected={connected.includes(integration.id)}
                   isComingSoon={integration.status === "coming_soon"}
-                  onConnect={() => toggleConnect(integration.id)}
+                  workspaceId={workspaceId}
+                  onConnected={() => handleConnected(integration.id)}
                 />
               ))}
             </div>
@@ -78,13 +72,13 @@ export function Step06Connect({ workspaceId: _workspaceId, savedData }: Props) {
 
       {connected.length > 0 && (
         <p className="text-xs text-[#8B8F97]">
-          {connected.length} tool{connected.length !== 1 ? "s" : ""} selected
+          {connected.length} tool{connected.length !== 1 ? "s" : ""} connected
         </p>
       )}
 
       <p className="text-xs text-[#8B8F97]">
         Connect at least one tool so CleverBrain has data to work with. You can
-        always add more later from Settings.
+        always add more later from Connectors.
       </p>
 
       <StepNav
