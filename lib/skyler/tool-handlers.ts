@@ -689,7 +689,7 @@ async function handleDraftCorrectionEmail(
     const rawMemories = (memRows ?? []).map((m) => m.content as string);
     const memories = filterDealMemories(rawMemories);
 
-    const playbook = await buildSalesPlaybook(adminSupabase, workspaceId, memories, knowledgeProfile);
+    const playbook = await buildSalesPlaybook(adminSupabase, workspaceId, memories, knowledgeProfile, settings);
 
     // 5. Load sales voice
     const voice = await getSalesVoice(adminSupabase, workspaceId);

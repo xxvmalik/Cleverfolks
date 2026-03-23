@@ -34,13 +34,13 @@ export type SalesPlaybook = {
   built_at: string;
 };
 
-const PLAYBOOK_PROMPT = `You are building a structured sales playbook from two data sources:
+const PLAYBOOK_PROMPT = `You are building a structured sales playbook from up to three data sources:
 
-1. KNOWLEDGE PROFILE (PRIMARY — authoritative source for what this business does, its team, patterns, and topics)
-2. WORKSPACE MEMORIES (SUPPLEMENTARY — operational details, specific service descriptions, pricing, customer info)
+1. ONBOARDING DATA (GROUND TRUTH — the business owner entered this directly. ALWAYS trust this over any other source.)
+2. KNOWLEDGE PROFILE (SECONDARY — auto-detected from Slack/integrations, may be wrong or incomplete)
+3. WORKSPACE MEMORIES (SUPPLEMENTARY — operational details, specific service descriptions, pricing, customer info)
 
-The knowledge profile tells you WHAT the business does. The memories fill in specifics about services, pricing, and differentiators.
-If the knowledge profile and memories contradict each other, trust the knowledge profile.
+CRITICAL PRIORITY RULE: Onboarding data is ALWAYS correct. It was entered by the business owner. If the knowledge profile or memories contradict the onboarding data, ALWAYS use the onboarding data. The knowledge profile is AI-inferred and can be wrong.
 
 Extract and organise this information into a structured JSON sales playbook.
 
@@ -93,7 +93,8 @@ export async function buildSalesPlaybook(
   db: SupabaseClient,
   workspaceId: string,
   memories: string[],
-  knowledgeProfile?: Record<string, unknown> | null
+  knowledgeProfile?: Record<string, unknown> | null,
+  workspaceSettings?: Record<string, unknown> | null
 ): Promise<SalesPlaybook> {
   // Check for cached playbook (less than 30 days old)
   const cached = await getCachedPlaybook(db, workspaceId);
@@ -101,21 +102,63 @@ export async function buildSalesPlaybook(
 
   const hasMemories = memories && memories.length > 0;
   const hasProfile = knowledgeProfile && Object.keys(knowledgeProfile).length > 0;
+  const hasSettings = workspaceSettings && Object.keys(workspaceSettings).length > 0;
 
-  if (!hasMemories && !hasProfile) {
-    console.warn("[sales-playbook] No workspace memories or knowledge profile — returning empty playbook");
+  if (!hasMemories && !hasProfile && !hasSettings) {
+    console.warn("[sales-playbook] No workspace memories, knowledge profile, or settings — returning empty playbook");
     return emptyPlaybook();
   }
 
   // Filter out deal/pipeline data before building playbook
   const filteredMemories = hasMemories ? filterDealMemories(memories) : [];
-  console.log(`[sales-playbook] Sources: knowledge profile=${hasProfile ? "yes" : "no"}, memories=${filteredMemories.length}/${memories.length}`);
+  console.log(`[sales-playbook] Sources: settings=${hasSettings ? "yes" : "no"}, knowledge profile=${hasProfile ? "yes" : "no"}, memories=${filteredMemories.length}/${memories.length}`);
 
-  // Build the combined input: knowledge profile first (primary), then memories (supplementary)
+  // Build the combined input: onboarding data first (ground truth), then knowledge profile, then memories
   const inputParts: string[] = [];
 
+  // GROUND TRUTH: Business owner's own description from onboarding
+  if (hasSettings) {
+    const s = workspaceSettings as Record<string, unknown>;
+    const bp = (s.business_profile ?? {}) as Record<string, string>;
+    const products = (s.products ?? []) as Array<{ name?: string; description?: string; pricing_model?: string }>;
+    const brand = (s.brand ?? {}) as Record<string, unknown>;
+    const goals = (s.goals ?? {}) as Record<string, unknown>;
+    const skylerConfig = (s.skyler_workflow ?? {}) as Record<string, unknown>;
+
+    inputParts.push("=== ONBOARDING DATA (GROUND TRUTH — entered by the business owner, ALWAYS trust this) ===");
+
+    if (bp.company_name) inputParts.push(`Company Name: ${bp.company_name}`);
+    if (bp.company_description) inputParts.push(`Company Description: ${bp.company_description}`);
+    if (bp.industry) inputParts.push(`Industry: ${bp.industry}`);
+    if (bp.target_audience) inputParts.push(`Target Audience: ${bp.target_audience}`);
+    if (bp.differentiator) inputParts.push(`Key Differentiator: ${bp.differentiator}`);
+    if (bp.business_model) inputParts.push(`Business Model: ${bp.business_model}`);
+
+    if (products.length > 0) {
+      inputParts.push("Products & Services (these are the ACTUAL services this business sells):");
+      for (const p of products) {
+        const parts = [`- ${p.name ?? "Unnamed"}`];
+        if (p.description) parts.push(`: ${p.description}`);
+        if (p.pricing_model) parts.push(` (Pricing: ${p.pricing_model})`);
+        inputParts.push(parts.join(""));
+      }
+    }
+
+    if (brand.voice) inputParts.push(`Brand Voice: ${brand.voice as string}`);
+    if (skylerConfig.ideal_customer) inputParts.push(`Ideal Customer: ${skylerConfig.ideal_customer as string}`);
+    if (skylerConfig.primary_pain_point) inputParts.push(`Primary Pain Point We Solve: ${skylerConfig.primary_pain_point as string}`);
+    if (skylerConfig.primary_outcome) inputParts.push(`Primary Outcome We Deliver: ${skylerConfig.primary_outcome as string}`);
+    if (skylerConfig.pricing_structure) inputParts.push(`Pricing Structure: ${skylerConfig.pricing_structure as string}`);
+    if (skylerConfig.outreach_goal) inputParts.push(`Outreach Goal: ${skylerConfig.outreach_goal as string}`);
+
+    const focusAreas = (goals.focus_areas ?? []) as string[];
+    if (focusAreas.length > 0) inputParts.push(`Focus Areas: ${focusAreas.join(", ")}`);
+
+    inputParts.push("");
+  }
+
   if (hasProfile) {
-    inputParts.push("=== KNOWLEDGE PROFILE (PRIMARY SOURCE) ===");
+    inputParts.push("=== KNOWLEDGE PROFILE (SECONDARY — auto-detected, may be inaccurate) ===");
     const kp = knowledgeProfile!;
     if (kp.business_summary) {
       inputParts.push(`Business Summary: ${kp.business_summary as string}`);

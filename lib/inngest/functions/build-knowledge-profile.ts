@@ -79,7 +79,18 @@ function extractJSON(text: string): Record<string, unknown> | null {
 
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
-function buildAnalysisPrompt(teamData: TeamData, sampleData: SampleData): string {
+type OnboardingData = {
+  companyName?: string;
+  companyDescription?: string;
+  industry?: string;
+  targetAudience?: string;
+  differentiator?: string;
+  businessModel?: string;
+  products?: Array<{ name?: string; description?: string }>;
+  brandVoice?: string;
+};
+
+function buildAnalysisPrompt(teamData: TeamData, sampleData: SampleData, onboarding?: OnboardingData | null): string {
   const { activity, mentions, channels } = teamData;
   const { personSamples, channelSamples } = sampleData;
 
@@ -145,9 +156,34 @@ function buildAnalysisPrompt(teamData: TeamData, sampleData: SampleData): string
     })
     .join("\n\n");
 
-  return `You are building a company knowledge profile from Slack workspace data.
+  // Build onboarding ground truth section
+  let onboardingSection = "";
+  if (onboarding) {
+    const lines: string[] = [
+      "=== BUSINESS OWNER ONBOARDING DATA (GROUND TRUTH — always trust this over Slack inference) ===",
+    ];
+    if (onboarding.companyName) lines.push(`Company Name: ${onboarding.companyName}`);
+    if (onboarding.companyDescription) lines.push(`Description: ${onboarding.companyDescription}`);
+    if (onboarding.industry) lines.push(`Industry: ${onboarding.industry}`);
+    if (onboarding.targetAudience) lines.push(`Target Audience: ${onboarding.targetAudience}`);
+    if (onboarding.differentiator) lines.push(`Key Differentiator: ${onboarding.differentiator}`);
+    if (onboarding.businessModel) lines.push(`Business Model: ${onboarding.businessModel}`);
+    if (onboarding.brandVoice) lines.push(`Brand Voice: ${onboarding.brandVoice}`);
+    if (onboarding.products && onboarding.products.length > 0) {
+      lines.push("Products & Services (these are the ACTUAL services — do NOT override with Slack inference):");
+      for (const p of onboarding.products) {
+        lines.push(`  - ${p.name ?? "Unnamed"}${p.description ? `: ${p.description}` : ""}`);
+      }
+    }
+    lines.push("");
+    onboardingSection = lines.join("\n") + "\n";
+  }
 
-=== TEAM ACTIVITY (behavioral signals) ===
+  return `You are building a company knowledge profile from workspace data.
+
+CRITICAL: If onboarding data is provided below, it is the GROUND TRUTH entered by the business owner. Your business_summary and services MUST reflect the onboarding data accurately. Slack data supplements it but NEVER overrides it. Do NOT reinterpret or rename the owner's services.
+
+${onboardingSection}=== TEAM ACTIVITY (behavioral signals) ===
 ${activityLines || "  (no activity data)"}
 
 === MENTION COUNTS (@-tags across all messages) ===
@@ -320,18 +356,38 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         };
       });
 
-      // No data at all — save an empty profile and exit
+      // No Slack data — check if we have onboarding data before giving up
       if (teamData.activity.length === 0 && teamData.channels.length === 0) {
-        await step.run("save-empty-profile", async () => {
+        // Load onboarding data to check if we can still build a useful profile
+        const earlyOnboarding = await step.run("check-onboarding-data", async () => {
           const db = createAdminSupabaseClient();
-          await db.rpc("upsert_knowledge_profile", {
-            p_workspace_id: workspaceId,
-            p_profile: {},
-            p_status: "ready",
-          });
+          const { data: ws } = await db
+            .from("workspaces")
+            .select("settings")
+            .eq("id", workspaceId)
+            .single();
+          if (!ws?.settings) return null;
+          const s = ws.settings as Record<string, unknown>;
+          const bp = (s.business_profile ?? {}) as Record<string, string>;
+          const products = (s.products ?? []) as Array<{ name?: string; description?: string }>;
+          if (!bp.company_name && products.length === 0) return null;
+          return { companyName: bp.company_name, productCount: products.length };
         });
-        console.log("[knowledge-profile] No data found — empty profile saved");
-        return { status: "ready", members: 0, channels: 0 };
+
+        if (!earlyOnboarding) {
+          await step.run("save-empty-profile", async () => {
+            const db = createAdminSupabaseClient();
+            await db.rpc("upsert_knowledge_profile", {
+              p_workspace_id: workspaceId,
+              p_profile: {},
+              p_status: "ready",
+            });
+          });
+          console.log("[knowledge-profile] No Slack data and no onboarding data — empty profile saved");
+          return { status: "ready", members: 0, channels: 0 };
+        }
+
+        console.log(`[knowledge-profile] No Slack data but have onboarding (${earlyOnboarding.companyName}, ${earlyOnboarding.productCount} products) — proceeding with build`);
       }
 
       // ── Step 3: Bulk message sampling ─────────────────────────────────────
@@ -370,9 +426,35 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         return { personSamples, channelSamples };
       });
 
+      // ── Step 3b: Load onboarding data (ground truth for business identity) ──
+      const onboarding = await step.run("load-onboarding-data", async () => {
+        const db = createAdminSupabaseClient();
+        const { data: ws } = await db
+          .from("workspaces")
+          .select("settings")
+          .eq("id", workspaceId)
+          .single();
+        if (!ws?.settings) return null;
+        const s = ws.settings as Record<string, unknown>;
+        const bp = (s.business_profile ?? {}) as Record<string, string>;
+        const products = (s.products ?? []) as Array<{ name?: string; description?: string }>;
+        // Only return if there's meaningful data
+        if (!bp.company_name && products.length === 0) return null;
+        return {
+          companyName: bp.company_name ?? (s.company_name as string) ?? undefined,
+          companyDescription: bp.company_description ?? (s.description as string) ?? undefined,
+          industry: bp.industry ?? (s.industry as string) ?? undefined,
+          targetAudience: bp.target_audience ?? undefined,
+          differentiator: bp.differentiator ?? undefined,
+          businessModel: bp.business_model ?? undefined,
+          products: products.length > 0 ? products : undefined,
+          brandVoice: ((s.brand ?? {}) as Record<string, string>).voice ?? undefined,
+        } as OnboardingData;
+      });
+
       // ── Step 4: Single GPT-4o-mini call to analyze all data ─────────────
       const finalProfile = await step.run("analyze-with-gpt4o-mini", async () => {
-        const prompt = buildAnalysisPrompt(teamData, sampleData);
+        const prompt = buildAnalysisPrompt(teamData, sampleData, onboarding);
 
         console.log(`[knowledge-profile] Calling GPT-4o-mini for analysis (prompt length: ${prompt.length} chars)`);
 

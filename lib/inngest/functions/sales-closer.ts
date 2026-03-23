@@ -194,11 +194,23 @@ export const salesCloserWorkflow = inngest.createFunction(
       return profile;
     });
 
-    // Step 5: Build structured sales playbook from knowledge profile + memories
+    // Step 4b: Load workspace settings (onboarding data — ground truth for services)
+    const workspaceSettings = await step.run("load-workspace-settings", async () => {
+      console.log("[Sales Closer] Step 4b: Loading workspace settings (onboarding ground truth)...");
+      const db = createAdminSupabaseClient();
+      const { data: ws } = await db
+        .from("workspaces")
+        .select("settings")
+        .eq("id", workspaceId)
+        .single();
+      return (ws?.settings ?? null) as Record<string, unknown> | null;
+    });
+
+    // Step 5: Build structured sales playbook from onboarding + knowledge profile + memories
     const playbook = await step.run("build-sales-playbook", async () => {
       console.log("[Sales Closer] Step 5: Building sales playbook...");
       const db = createAdminSupabaseClient();
-      return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile);
+      return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile, workspaceSettings);
     });
 
     // Step 6: Research the company (with playbook for alignment)
