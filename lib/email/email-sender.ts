@@ -308,54 +308,71 @@ async function sendViaOutlook(params: {
     ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
     : {};
 
-  // Try draft→send first (gets us message ID for threading)
-  try {
-    const draftResponse = await nango.proxy({
-      method: "POST",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: "/v1.0/me/messages",
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-      data: {
-        subject: params.subject,
-        body: { contentType: "HTML", content: params.htmlBody },
-        toRecipients: [{ emailAddress: { address: params.to } }],
-        ...fromField,
-      },
-    });
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const draftId = (draftResponse as any)?.data?.id;
-    if (draftId) {
-      await nango.proxy({
+  // Draft→send is the PREFERRED path — it gives us a message ID needed for
+  // createReply threading on follow-ups.  sendMail is a last resort because it
+  // returns no ID and the Sent Items poll is unreliable (Exchange indexing lag).
+  //
+  // If the `from` field triggers 403 (missing Mail.Send.Shared), retry the draft
+  // create WITHOUT `from` so we stay on the draft→send path.
+  let draftId: string | null = null;
+  for (const useFrom of [true, false]) {
+    const extra = useFrom ? fromField : {};
+    try {
+      const draftResponse = await nango.proxy({
         method: "POST",
         baseUrlOverride: "https://graph.microsoft.com",
-        endpoint: `/v1.0/me/messages/${draftId}/send`,
+        endpoint: "/v1.0/me/messages",
         connectionId: params.connectionId,
         providerConfigKey: "outlook",
-        data: {},
+        data: {
+          subject: params.subject,
+          body: { contentType: "HTML", content: params.htmlBody },
+          toRecipients: [{ emailAddress: { address: params.to } }],
+          ...extra,
+        },
       });
-
-      console.log(`[email-sender] Outlook draft→send success (draft ID: ${draftId})`);
-
-      // Draft ID becomes stale after send — recover the real Sent Items ID for threading
-      const realSentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
-      const finalId = realSentId ?? draftId;
-      if (realSentId) {
-        console.log(`[email-sender] Recovered real Sent Items ID: ${realSentId}`);
-      } else {
-        console.warn(`[email-sender] Could not recover Sent Items ID — using draft ID (threading may break)`);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      draftId = (draftResponse as any)?.data?.id ?? null;
+      if (draftId) break; // got a draft — proceed to send
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (useFrom && Object.keys(fromField).length > 0 && msg.includes("403")) {
+        console.warn(`[email-sender] Draft create 403 with from field — retrying without`);
+        continue;
       }
-      return { messageId: finalId, outlookMessageId: finalId };
+      // Non-403 or already retried — fall through to sendMail
+      console.warn(`[email-sender] Draft create failed, falling back to sendMail:`, msg);
+      break;
     }
-  } catch (draftErr) {
-    console.warn(`[email-sender] Draft→send failed, falling back to sendMail:`, draftErr instanceof Error ? draftErr.message : draftErr);
   }
 
-  // Fallback: sendMail — only requires Mail.Send scope.
-  // Try with `from` display name first; if 403 (missing Mail.Send.Shared), retry without.
+  if (draftId) {
+    // Send the draft
+    await nango.proxy({
+      method: "POST",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: `/v1.0/me/messages/${draftId}/send`,
+      connectionId: params.connectionId,
+      providerConfigKey: "outlook",
+      data: {},
+    });
+
+    console.log(`[email-sender] Outlook draft→send success (draft ID: ${draftId})`);
+
+    // Draft ID becomes stale after send — recover the real Sent Items ID for threading
+    const realSentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
+    const finalId = realSentId ?? draftId;
+    if (realSentId) {
+      console.log(`[email-sender] Recovered real Sent Items ID: ${realSentId}`);
+    } else {
+      console.warn(`[email-sender] Could not recover Sent Items ID — using draft ID (threading may break)`);
+    }
+    return { messageId: finalId, outlookMessageId: finalId };
+  }
+
+  // Last resort: sendMail — only requires Mail.Send scope but gives NO message ID.
   for (const useFrom of [true, false]) {
-    const extraFields = useFrom ? fromField : {};
+    const extra = useFrom ? fromField : {};
     try {
       await nango.proxy({
         method: "POST",
@@ -368,29 +385,25 @@ async function sendViaOutlook(params: {
             subject: params.subject,
             body: { contentType: "HTML", content: params.htmlBody },
             toRecipients: [{ emailAddress: { address: params.to } }],
-            ...extraFields,
+            ...extra,
           },
         },
       });
-      if (!useFrom) console.log(`[email-sender] sendMail succeeded without from field (Mail.Send.Shared not available)`);
-      break; // success — exit loop
+      break;
     } catch (err) {
-      const status = (err as Record<string, unknown>)?.status ?? (err as { response?: { status?: number } })?.response?.status;
       const msg = err instanceof Error ? err.message : String(err);
-      if (useFrom && Object.keys(fromField).length > 0 && (status === 403 || msg.includes("403"))) {
-        console.warn(`[email-sender] sendMail 403 with from field — retrying without (Mail.Send.Shared not granted)`);
-        continue; // retry without from
+      if (useFrom && Object.keys(fromField).length > 0 && msg.includes("403")) {
+        console.warn(`[email-sender] sendMail 403 with from field — retrying without`);
+        continue;
       }
-      throw err; // real error — propagate
+      throw err;
     }
   }
 
-  // sendMail returns 202 with no body — we don't get a message ID
-  // Try to find it in Sent Items for threading
+  // sendMail returns 202 with no body — poll Sent Items with longer delay for Exchange indexing
   const sentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
   const messageId = sentId ?? `sendmail-${Date.now()}`;
-
-  console.log(`[email-sender] Outlook sendMail success${sentId ? `: ${sentId}` : " (no ID recovered)"}`);
+  console.log(`[email-sender] Outlook sendMail success${sentId ? `: ${sentId}` : " (no ID recovered — threading may break for follow-ups)"}`);
   return { messageId, outlookMessageId: sentId ?? "" };
 }
 
@@ -405,10 +418,12 @@ async function findSentMessageId(
   const filter = `subject eq '${safeSubject}'`;
   const qs = `$filter=${encodeURIComponent(filter)}&$top=1&$orderby=sentDateTime desc&$select=id`;
 
-  // Try immediately first, then retry once after 500ms if not found yet
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Poll Sent Items with increasing delays — Exchange indexing can take 1-3s.
+  // Attempts: 0ms, 1s, 2s (total ~3s max wait).
+  const delays = [0, 1000, 2000];
+  for (let attempt = 0; attempt < delays.length; attempt++) {
     try {
-      if (attempt === 1) await new Promise((r) => setTimeout(r, 500));
+      if (delays[attempt] > 0) await new Promise((r) => setTimeout(r, delays[attempt]));
 
       const response = await nango.proxy({
         method: "GET",
@@ -424,8 +439,8 @@ async function findSentMessageId(
         return messages[0].id;
       }
     } catch (err) {
-      if (attempt === 1) {
-        console.warn(`[email-sender] Could not recover sent message ID:`, err instanceof Error ? err.message : err);
+      if (attempt === delays.length - 1) {
+        console.warn(`[email-sender] Could not recover sent message ID after ${delays.length} attempts:`, err instanceof Error ? err.message : err);
       }
     }
   }
