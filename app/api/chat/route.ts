@@ -23,6 +23,7 @@ import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
 import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
 import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
+import * as Sentry from "@sentry/nextjs";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -511,6 +512,7 @@ export async function POST(request: NextRequest) {
         controller.close();
       } catch (err) {
         console.error("[chat] Pipeline error:", err);
+        Sentry.captureException(err, { tags: { route: "cleverbrain-chat" } });
         try {
           send({
             type: "error",

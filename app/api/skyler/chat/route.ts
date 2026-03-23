@@ -26,6 +26,7 @@ import { extractMemories } from "@/lib/cleverbrain/memory-extractor";
 import { embedChatHistory } from "@/lib/cleverbrain/chat-embedder";
 import { summarizeConversation } from "@/lib/cleverbrain/conversation-summary";
 import { sanitizeErrorForUser } from "@/lib/ai-error-handler";
+import * as Sentry from "@sentry/nextjs";
 import { classifyDirective } from "@/lib/skyler/directives/classify-directive";
 import { saveDirective, getActiveDirectives } from "@/lib/skyler/directives/directive-store";
 import { extractFacts } from "@/lib/skyler/memory/fact-extractor";
@@ -827,6 +828,7 @@ IMPORTANT: After you respond, the system will automatically resume the Sales Clo
         controller.close();
       } catch (err) {
         console.error("[skyler-chat] Pipeline error:", err);
+        Sentry.captureException(err, { tags: { route: "skyler-chat" } });
         try {
           send({ type: "error", error: sanitizeErrorForUser(err) });
         } catch { /* controller may already be closed */ }
