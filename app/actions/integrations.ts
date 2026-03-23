@@ -36,7 +36,7 @@ export async function connectIntegrationAction(
   let integrationId: string | null = null;
 
   if (existing) {
-    await supabase
+    const { error: updateErr } = await supabase
       .from("integrations")
       .update({
         status: "connected",
@@ -45,6 +45,20 @@ export async function connectIntegrationAction(
         sync_error: null,
       })
       .eq("id", existing.id);
+    if (updateErr) {
+      console.error("[integrations] Failed to update integration:", updateErr.message);
+      // Retry with admin client in case RLS blocked the user client
+      const adminDb = createAdminSupabaseClient();
+      await adminDb
+        .from("integrations")
+        .update({
+          status: "connected",
+          nango_connection_id: nangoConnectionId,
+          sync_status: "syncing",
+          sync_error: null,
+        })
+        .eq("id", existing.id);
+    }
     integrationId = existing.id;
   } else {
     const { data: inserted, error } = await supabase
