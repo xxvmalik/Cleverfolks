@@ -610,15 +610,19 @@ export function ConnectorsView({
       if (!tokenRes.ok) throw new Error("Failed to create Nango session");
       const { token } = (await tokenRes.json()) as { token: string };
 
+      let connectDone = false;
       await new Promise<void>((resolve, reject) => {
         const nango = new Nango({ connectSessionToken: token });
         const connectUI = nango.openConnectUI({
           onEvent: async (event: ConnectUIEvent) => {
             if (event.type === "connect") {
+              connectDone = true;
               const { connectionId, providerConfigKey } = event.payload;
+              // Close the Nango overlay immediately so the user isn't stuck on a blank screen
+              try { connectUI.close(); } catch { /* already closed */ }
               try {
                 const result = await connectIntegrationAction(workspaceId, providerConfigKey, connectionId);
-                if (result.error) { connectUI.close(); reject(new Error(result.error)); return; }
+                if (result.error) { reject(new Error(result.error)); return; }
                 if (result.integrationId) {
                   fetch("/api/sync", {
                     method: "POST",
@@ -626,19 +630,23 @@ export function ConnectorsView({
                     body: JSON.stringify({ integrationId: result.integrationId }),
                   }).catch(console.error);
                 }
-                connectUI.close();
-                // Refresh integration list
                 await fetchIntegrations();
                 resolve();
-              } catch (err) { connectUI.close(); reject(err); }
+              } catch (err) { reject(err); }
             } else if (event.type === "error") {
-              connectUI.close();
+              try { connectUI.close(); } catch { /* already closed */ }
               reject(new Error(event.payload.errorMessage));
-            } else if (event.type === "close") { resolve(); }
+            } else if (event.type === "close") {
+              // Only resolve on close if connect didn't already handle it
+              if (!connectDone) resolve();
+            }
           },
         });
         connectUI.open();
       });
+
+      // Force-remove any leftover Nango iframe/overlay from the DOM
+      document.querySelectorAll('iframe[id*="nango"], div[id*="nango"]').forEach((el) => el.remove());
     } catch (err) {
       console.error("Connect failed:", err);
     } finally {
