@@ -38,6 +38,7 @@ export async function proxy(request: NextRequest) {
     "/api/nango-webhook",  // Nango webhook calls (no user session)
     "/api/recall/webhook", // Recall.ai webhook calls (no user session)
     "/api/admin",          // Admin endpoints (auth via secret param)
+    "/api/sentry-test",    // Sentry verification endpoint
   ];
   const isPublic = publicPaths.some((p) => pathname.startsWith(p));
 
