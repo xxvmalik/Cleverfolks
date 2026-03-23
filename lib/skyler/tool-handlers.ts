@@ -926,7 +926,37 @@ async function handleSalesCloserTool(
       .single();
 
     if (existing) {
-      return { results: [], summary: `${contactEmail} is already in the sales pipeline at stage: ${existing.stage}` };
+      // Check if the lead has a pending draft — if not, the Inngest workflow may have
+      // failed silently. Re-trigger it so the user doesn't get stuck with no draft.
+      const { data: pendingActions } = await adminSupabase
+        .from("skyler_actions")
+        .select("id")
+        .eq("pipeline_id", existing.id)
+        .in("status", ["pending", "approved", "executed"])
+        .limit(1);
+
+      if (pendingActions && pendingActions.length > 0) {
+        return { results: [], summary: `${contactEmail} is already in the sales pipeline at stage: ${existing.stage}. There is already a pending or completed action for this lead.` };
+      }
+
+      // No actions exist — re-trigger the Sales Closer workflow
+      const { inngest: inn } = await import("@/lib/inngest/client");
+      await inn.send({
+        name: "skyler/lead.qualified.hot",
+        data: {
+          contactId: (input.contact_id as string) ?? contactEmail,
+          contactEmail,
+          contactName: (input.contact_name as string) ?? contactEmail,
+          companyName: (input.company_name as string) ?? null,
+          website: (input.website as string) ?? null,
+          userContext: (input.user_context as string) ?? null,
+          workspaceId,
+          leadScoreId: null,
+          pipelineId: existing.id,
+        },
+      });
+
+      return { results: [], summary: `${contactEmail} is already in the pipeline but had no draft. I've re-triggered the outreach workflow — a draft email will be ready for your approval shortly.` };
     }
 
     const website = (input.website as string) ?? null;
