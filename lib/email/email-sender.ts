@@ -301,6 +301,21 @@ async function sendViaOutlook(params: {
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
+  // Quick-verify the Nango connection is alive before attempting to send
+  try {
+    await nango.proxy({
+      method: "GET",
+      baseUrlOverride: "https://graph.microsoft.com",
+      endpoint: "/v1.0/me?$select=mail",
+      connectionId: params.connectionId,
+      providerConfigKey: "outlook",
+    });
+  } catch (verifyErr) {
+    const msg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+    console.error(`[email-sender] Outlook connection verification failed:`, msg);
+    throw new Error(`Outlook connection is broken or expired (${msg}). Please reconnect Outlook in Connectors.`);
+  }
+
   // Build the `from` field if we have a display name.
   // Graph API requires Mail.Send.Shared to set `from` — if the account lacks
   // that scope the call returns 403, so we try with it and fall back without.
@@ -336,12 +351,15 @@ async function sendViaOutlook(params: {
       if (draftId) break; // got a draft — proceed to send
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (useFrom && Object.keys(fromField).length > 0 && msg.includes("403")) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (err as any)?.response?.status ?? (err as any)?.status;
+      const is403 = status === 403 || msg.includes("403");
+      console.warn(`[email-sender] Draft create failed (useFrom=${useFrom}, status=${status}):`, msg);
+      if (useFrom && Object.keys(fromField).length > 0 && is403) {
         console.warn(`[email-sender] Draft create 403 with from field — retrying without`);
         continue;
       }
       // Non-403 or already retried — fall through to sendMail
-      console.warn(`[email-sender] Draft create failed, falling back to sendMail:`, msg);
       break;
     }
   }
@@ -392,9 +410,16 @@ async function sendViaOutlook(params: {
       break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (useFrom && Object.keys(fromField).length > 0 && msg.includes("403")) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const status = (err as any)?.response?.status ?? (err as any)?.status;
+      const is403 = status === 403 || msg.includes("403");
+      console.error(`[email-sender] sendMail failed (useFrom=${useFrom}, status=${status}):`, msg);
+      if (useFrom && Object.keys(fromField).length > 0 && is403) {
         console.warn(`[email-sender] sendMail 403 with from field — retrying without`);
         continue;
+      }
+      if (!useFrom && is403) {
+        throw new Error(`Outlook 403 on sendMail without from field — the OAuth token likely lacks Mail.Send scope. Please reconnect Outlook in Connectors and ensure mail permissions are granted.`);
       }
       throw err;
     }
