@@ -554,19 +554,38 @@ export function ConnectorsView({
   const [dbIntegrations, setDbIntegrations] = useState<DbIntegration[]>([]);
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
 
-  // Fetch integration statuses from DB
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
-        if (res.ok) {
-          const data = (await res.json()) as { integrations: DbIntegration[] };
-          setDbIntegrations(data.integrations ?? []);
-        }
-      } catch { /* ignore */ }
+  // Shared loader for integration statuses
+  const fetchIntegrations = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
+      if (res.ok) {
+        const data = (await res.json()) as { integrations: DbIntegration[] };
+        setDbIntegrations(data.integrations ?? []);
+      } else {
+        console.error("[connectors] Failed to fetch integrations:", res.status);
+      }
+    } catch (err) {
+      console.error("[connectors] Fetch integrations error:", err);
     }
-    void load();
   }, [workspaceId]);
+
+  // Fetch on mount + poll every 15s while connectors tab is active
+  useEffect(() => {
+    void fetchIntegrations();
+    const interval = setInterval(() => {
+      if (activeTab === "connectors") void fetchIntegrations();
+    }, 15_000);
+    return () => clearInterval(interval);
+  }, [fetchIntegrations, activeTab]);
+
+  // Re-fetch when tab becomes visible (e.g. after OAuth redirect in another tab)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void fetchIntegrations();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [fetchIntegrations]);
 
   const dbByProvider = Object.fromEntries(dbIntegrations.map((i) => [i.provider, i]));
   const selected = INTEGRATIONS.find((i) => i.id === selectedId) ?? INTEGRATIONS[0];
@@ -609,11 +628,7 @@ export function ConnectorsView({
                 }
                 connectUI.close();
                 // Refresh integration list
-                const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
-                if (res.ok) {
-                  const data = (await res.json()) as { integrations: DbIntegration[] };
-                  setDbIntegrations(data.integrations ?? []);
-                }
+                await fetchIntegrations();
                 resolve();
               } catch (err) { connectUI.close(); reject(err); }
             } else if (event.type === "error") {
@@ -629,17 +644,13 @@ export function ConnectorsView({
     } finally {
       setConnectingProvider(null);
     }
-  }, [workspaceId]);
+  }, [workspaceId, fetchIntegrations]);
 
   // Disconnect handler
   const handleDisconnect = useCallback(async (integrationDbId: string) => {
     await disconnectIntegrationAction(integrationDbId);
-    const res = await fetch(`/api/integrations?workspaceId=${encodeURIComponent(workspaceId)}`);
-    if (res.ok) {
-      const data = (await res.json()) as { integrations: DbIntegration[] };
-      setDbIntegrations(data.integrations ?? []);
-    }
-  }, [workspaceId]);
+    await fetchIntegrations();
+  }, [fetchIntegrations]);
 
   return (
     <div className="flex flex-1 min-w-0 overflow-hidden">
