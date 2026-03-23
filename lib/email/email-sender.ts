@@ -295,9 +295,16 @@ async function sendViaOutlook(params: {
   to: string;
   subject: string;
   htmlBody: string;
+  fromEmail?: string | null;
+  fromName?: string | null;
   connectionId: string;
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+
+  // Build the `from` field if we have a display name
+  const fromField = params.fromName && params.fromEmail
+    ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
+    : {};
 
   // Try draft→send first (gets us message ID for threading)
   try {
@@ -311,6 +318,7 @@ async function sendViaOutlook(params: {
         subject: params.subject,
         body: { contentType: "HTML", content: params.htmlBody },
         toRecipients: [{ emailAddress: { address: params.to } }],
+        ...fromField,
       },
     });
 
@@ -354,6 +362,7 @@ async function sendViaOutlook(params: {
         subject: params.subject,
         body: { contentType: "HTML", content: params.htmlBody },
         toRecipients: [{ emailAddress: { address: params.to } }],
+        ...fromField,
       },
     },
   });
@@ -496,6 +505,8 @@ async function tryCreateReply(params: {
   recipientEmail: string;
   subject: string;
   htmlBody: string;
+  fromEmail?: string | null;
+  fromName?: string | null;
   connectionId: string;
 }): Promise<{ messageId: string; outlookMessageId: string } | null> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
@@ -514,7 +525,10 @@ async function tryCreateReply(params: {
     const draftId = (draftResponse as any)?.data?.id;
     if (!draftId) return null;
 
-    // Update the draft with our content and correct recipient
+    // Update the draft with our content, correct recipient, and sender display name
+    const fromPatch = params.fromName && params.fromEmail
+      ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
+      : {};
     await nango.proxy({
       method: "PATCH",
       baseUrlOverride: "https://graph.microsoft.com",
@@ -524,6 +538,7 @@ async function tryCreateReply(params: {
       data: {
         body: { contentType: "HTML", content: params.htmlBody },
         toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
+        ...fromPatch,
       },
     });
 
@@ -562,6 +577,8 @@ async function sendMailFallback(params: {
   recipientEmail: string;
   subject: string;
   htmlBody: string;
+  fromEmail?: string | null;
+  fromName?: string | null;
   connectionId: string;
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
@@ -569,11 +586,16 @@ async function sendMailFallback(params: {
 
   console.log(`[email-sender] sendMail fallback — threading via Re: subject only`);
 
+  const fromField = params.fromName && params.fromEmail
+    ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
+    : {};
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const messagePayload: Record<string, any> = {
     subject: replySubject,
     body: { contentType: "HTML", content: params.htmlBody },
     toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
+    ...fromField,
   };
 
   await nango.proxy({
@@ -695,6 +717,8 @@ export async function executeEmailSend(
         recipientEmail: input.to as string,
         subject,
         htmlBody: htmlBodyWithPixel,
+        fromEmail,
+        fromName: (input.fromName as string | undefined) ?? null,
         connectionId: emailProvider.connectionId,
       };
 
@@ -736,6 +760,8 @@ export async function executeEmailSend(
         to: input.to as string,
         subject,
         htmlBody: htmlBodyWithPixel,
+        fromEmail,
+        fromName: (input.fromName as string | undefined) ?? null,
         connectionId: emailProvider.connectionId,
       });
       messageId = result.messageId;
