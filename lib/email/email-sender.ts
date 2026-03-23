@@ -354,9 +354,9 @@ async function sendViaOutlook(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const status = (err as any)?.response?.status ?? (err as any)?.status;
       const is403 = status === 403 || msg.includes("403");
-      console.warn(`[email-sender] Draft create failed (useFrom=${useFrom}, status=${status}):`, msg);
+      console.error(`[email-sender] Draft create failed (useFrom=${useFrom}, status=${status}):`, msg);
       if (useFrom && Object.keys(fromField).length > 0 && is403) {
-        console.warn(`[email-sender] Draft create 403 with from field — retrying without`);
+        console.error(`[email-sender] Draft create 403 with from field — retrying without`);
         continue;
       }
       // Non-403 or already retried — fall through to sendMail
@@ -415,7 +415,7 @@ async function sendViaOutlook(params: {
       const is403 = status === 403 || msg.includes("403");
       console.error(`[email-sender] sendMail failed (useFrom=${useFrom}, status=${status}):`, msg);
       if (useFrom && Object.keys(fromField).length > 0 && is403) {
-        console.warn(`[email-sender] sendMail 403 with from field — retrying without`);
+        console.error(`[email-sender] sendMail 403 with from field — retrying without`);
         continue;
       }
       if (!useFrom && is403) {
@@ -608,7 +608,7 @@ async function tryCreateReply(params: {
         const status = (patchErr as Record<string, unknown>)?.status ?? (patchErr as { response?: { status?: number } })?.response?.status;
         const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
         if (useFrom && Object.keys(fromPatch).length > 0 && (status === 403 || msg.includes("403"))) {
-          console.warn(`[email-sender] PATCH draft 403 with from field — retrying without`);
+          console.error(`[email-sender] PATCH draft 403 with from field — retrying without`);
           continue;
         }
         throw patchErr;
@@ -637,7 +637,7 @@ async function tryCreateReply(params: {
     }
     return { messageId: finalId, outlookMessageId: finalId };
   } catch (err) {
-    console.warn(`[email-sender] createReply on ${params.outlookMessageId} failed:`, err instanceof Error ? err.message : err);
+    console.error(`[email-sender] createReply on ${params.outlookMessageId} failed:`, err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -688,7 +688,7 @@ async function sendMailFallback(params: {
       const status = (err as Record<string, unknown>)?.status ?? (err as { response?: { status?: number } })?.response?.status;
       const msg = err instanceof Error ? err.message : String(err);
       if (useFrom && Object.keys(fromField).length > 0 && (status === 403 || msg.includes("403"))) {
-        console.warn(`[email-sender] sendMailFallback 403 with from field — retrying without`);
+        console.error(`[email-sender] sendMailFallback 403 with from field — retrying without`);
         continue;
       }
       throw err;
@@ -837,7 +837,7 @@ export async function executeEmailSend(
         messageId = replyResult.messageId;
         outlookMessageId = replyResult.outlookMessageId;
       } else {
-        console.warn(`[email-sender] Strategy 3: all createReply attempts failed — using sendMail fallback`);
+        console.error(`[email-sender] Strategy 3: all createReply attempts failed — using sendMail fallback`);
         const fallbackResult = await sendMailFallback(replyParams);
         messageId = fallbackResult.messageId;
         outlookMessageId = fallbackResult.outlookMessageId;
@@ -858,7 +858,7 @@ export async function executeEmailSend(
   } catch (sendErr) {
     // Mark as failed so the UI can show error state + retry button
     const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-    console.error(`[email-sender] executeEmailSend FAILED for action ${actionId}:`, errMsg);
+    console.error(`[email-sender] executeEmailSend FAILED for action ${actionId} | provider=${emailProvider.provider} | connectionId=${emailProvider.connectionId} | threadLen=${existingThread.length} | error:`, errMsg);
     await db
       .from("skyler_actions")
       .update({
