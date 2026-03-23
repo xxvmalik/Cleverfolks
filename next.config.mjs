@@ -4,8 +4,12 @@ import { withSentryConfig } from "@sentry/nextjs";
 const nextConfig = {};
 
 export default withSentryConfig(nextConfig, {
-  // Only upload source maps if SENTRY_AUTH_TOKEN is set
-  silent: true,
-  disableServerWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
-  disableClientWebpackPlugin: !process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  // Disable source map upload when no auth token (local dev)
+  sourcemaps: {
+    disable: !process.env.SENTRY_AUTH_TOKEN,
+  },
 });
