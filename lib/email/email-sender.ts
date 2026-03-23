@@ -47,6 +47,42 @@ export async function draftOutreachEmail(
   db: SupabaseClient,
   params: EmailDraftParams
 ): Promise<{ actionId: string }> {
+  // Auto-populate fromName from workspace owner profile + company name if not provided
+  let fromName = params.fromName ?? null;
+  if (!fromName) {
+    try {
+      const { data: membership } = await db
+        .from("workspace_memberships")
+        .select("user_id")
+        .eq("workspace_id", params.workspaceId)
+        .eq("role", "owner")
+        .maybeSingle();
+      if (membership?.user_id) {
+        const { data: profile } = await db
+          .from("profiles")
+          .select("full_name")
+          .eq("id", membership.user_id)
+          .maybeSingle();
+        const { data: ws } = await db
+          .from("workspaces")
+          .select("name, settings")
+          .eq("id", params.workspaceId)
+          .maybeSingle();
+        const companyName = (ws?.settings as Record<string, unknown>)?.business_profile
+          ? ((ws?.settings as Record<string, Record<string, string>>)?.business_profile?.company_name)
+          : ws?.name;
+        const ownerName = profile?.full_name;
+        if (ownerName && companyName) {
+          fromName = `${ownerName}, ${companyName}`;
+        } else if (ownerName) {
+          fromName = ownerName;
+        }
+      }
+    } catch {
+      // Non-critical — proceed without fromName
+    }
+  }
+
   const description = `Send outreach email to ${params.to}: "${params.subject}"`;
 
   const { data, error } = await db
@@ -61,7 +97,7 @@ export async function draftOutreachEmail(
         htmlBody: params.htmlBody,
         textBody: params.textBody,
         replyTo: params.replyTo ?? null,
-        fromName: params.fromName ?? null,
+        fromName,
         pipelineId: params.pipelineId,
       },
       description,
@@ -191,6 +227,7 @@ async function sendViaGmail(params: {
   subject: string;
   htmlBody: string;
   fromEmail: string;
+  fromName?: string | null;
   connectionId: string;
   inReplyTo?: string | null;
   references?: string[];
@@ -202,8 +239,11 @@ async function sendViaGmail(params: {
   const generatedMessageId = `<${randomUUID()}@${domain}>`;
 
   // Build RFC 2822 email with threading headers
+  const fromHeader = params.fromName
+    ? `From: ${params.fromName.replace(/["\r\n]/g, "")} <${params.fromEmail}>`
+    : `From: ${params.fromEmail}`;
   const headers: string[] = [
-    `From: ${params.fromEmail}`,
+    fromHeader,
     `To: ${params.to}`,
     `Subject: ${params.subject}`,
     `MIME-Version: 1.0`,
@@ -636,6 +676,7 @@ export async function executeEmailSend(
         subject,
         htmlBody: htmlBodyWithPixel,
         fromEmail,
+        fromName: (input.fromName as string | undefined) ?? null,
         connectionId: emailProvider.connectionId,
         inReplyTo: threading.inReplyTo,
         references: threading.references,

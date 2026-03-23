@@ -62,11 +62,34 @@ export function Step03Brand({ workspaceId, savedData }: Props) {
       setForm((p) => ({ ...p, [k]: e.target.value }));
   }
 
+  async function uploadFile(file: File, assetType: string): Promise<string | null> {
+    const fd = new FormData();
+    fd.append("workspaceId", workspaceId);
+    fd.append("assetType", assetType);
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/brand-assets/upload", { method: "POST", body: fd });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleContinue() {
     if (!form.brandVoice) { setError("Please select a brand voice"); return; }
     setLoading(true); setError(null);
-    // File uploads would be handled via Supabase Storage on completion;
-    // for now we save the text/selection data
+
+    // Upload files to Supabase Storage
+    const uploadPromises: Promise<string | null>[] = [];
+    if (primaryLogo.length > 0) uploadPromises.push(uploadFile(primaryLogo[0], "logo_primary"));
+    if (darkLogo.length > 0) uploadPromises.push(uploadFile(darkLogo[0], "logo_dark"));
+    for (const gf of guidelineFiles) uploadPromises.push(uploadFile(gf, "brand_doc"));
+
+    const uploadResults = await Promise.all(uploadPromises);
+    const uploadedIds = uploadResults.filter(Boolean) as string[];
+
     const result = await saveOnboardingStepAction({
       workspaceId,
       step: 3,
@@ -76,6 +99,7 @@ export function Step03Brand({ workspaceId, savedData }: Props) {
           hasLogo: primaryLogo.length > 0,
           hasDarkLogo: darkLogo.length > 0,
           guidelineFileCount: guidelineFiles.length,
+          uploadedAssetIds: uploadedIds,
         },
       },
     });

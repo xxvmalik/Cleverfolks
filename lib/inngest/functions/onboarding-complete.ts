@@ -214,7 +214,7 @@ export const onboardingComplete = inngest.createFunction(
     await step.run("process-brand-docs", async () => {
       const { data: pendingAssets } = await db
         .from("brand_assets")
-        .select("id, file_name, storage_path, mime_type")
+        .select("id, file_name, storage_path, mime_type, asset_type")
         .eq("workspace_id", workspaceId)
         .eq("processing_status", "pending");
 
@@ -227,22 +227,68 @@ export const onboardingComplete = inngest.createFunction(
       await db
         .from("brand_assets")
         .update({ processing_status: "processing" })
-        .in(
-          "id",
-          pendingAssets.map((a) => a.id)
-        );
+        .in("id", pendingAssets.map((a) => a.id));
 
-      // For now, just mark as completed. Full text extraction + embedding
-      // will be added when the document processing pipeline is built.
-      await db
-        .from("brand_assets")
-        .update({ processing_status: "completed" })
-        .in(
-          "id",
-          pendingAssets.map((a) => a.id)
-        );
+      const { extractText } = await import("@/lib/file-processor");
 
-      console.log(`[onboarding-complete] Processed ${pendingAssets.length} brand assets`);
+      for (const asset of pendingAssets) {
+        try {
+          // Download file from Supabase Storage
+          const { data: fileData, error: dlError } = await db.storage
+            .from("brand-assets")
+            .download(asset.storage_path);
+
+          if (dlError || !fileData) {
+            console.error(`[onboarding-complete] Download failed for ${asset.file_name}:`, dlError?.message);
+            await db.from("brand_assets").update({ processing_status: "failed" }).eq("id", asset.id);
+            continue;
+          }
+
+          // Extract text content
+          const buffer = Buffer.from(await fileData.arrayBuffer());
+          const text = await extractText(asset.file_name, asset.mime_type ?? "", buffer);
+
+          if (!text || text.trim().length < 10) {
+            console.log(`[onboarding-complete] No meaningful text extracted from ${asset.file_name}`);
+            await db.from("brand_assets").update({ processing_status: "completed" }).eq("id", asset.id);
+            continue;
+          }
+
+          // Chunk the text (~500 tokens per chunk)
+          const CHUNK_SIZE = 2000; // ~500 tokens
+          const OVERLAP = 200;
+          const chunks: string[] = [];
+          for (let i = 0; i < text.length; i += CHUNK_SIZE - OVERLAP) {
+            chunks.push(text.slice(i, i + CHUNK_SIZE));
+          }
+
+          // Store chunks in document_chunks for RAG
+          const chunkRows = chunks.map((chunk, idx) => ({
+            workspace_id: workspaceId,
+            source_type: "brand_document",
+            source_id: asset.id,
+            chunk_text: chunk,
+            chunk_index: idx,
+            metadata: {
+              file_name: asset.file_name,
+              asset_type: asset.asset_type,
+              brand_asset_id: asset.id,
+            },
+          }));
+
+          const { error: insertError } = await db.from("document_chunks").insert(chunkRows);
+          if (insertError) {
+            console.error(`[onboarding-complete] Chunk insert error for ${asset.file_name}:`, insertError.message);
+            await db.from("brand_assets").update({ processing_status: "failed" }).eq("id", asset.id);
+          } else {
+            await db.from("brand_assets").update({ processing_status: "completed" }).eq("id", asset.id);
+            console.log(`[onboarding-complete] Processed ${asset.file_name}: ${chunks.length} chunks`);
+          }
+        } catch (err) {
+          console.error(`[onboarding-complete] Error processing ${asset.file_name}:`, err);
+          await db.from("brand_assets").update({ processing_status: "failed" }).eq("id", asset.id);
+        }
+      }
     });
 
     return { success: true, workspaceId };

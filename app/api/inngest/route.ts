@@ -28,6 +28,8 @@ import { meetingLifecycleOrchestrator } from "@/lib/inngest/functions/meeting-li
 import { noShowReengagement } from "@/lib/inngest/functions/no-show-reengagement";
 // Onboarding completion background jobs
 import { onboardingComplete } from "@/lib/inngest/functions/onboarding-complete";
+// Phase 1: Knowledge profile auto-confirmation
+import { autoConfirmKnowledgeProfiles } from "@/lib/inngest/functions/auto-confirm-knowledge-profiles";
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
@@ -67,5 +69,7 @@ export const { GET, POST, PUT } = serve({
     noShowReengagement,
     // Onboarding
     onboardingComplete,
+    // Phase 1: Knowledge profile auto-confirmation
+    autoConfirmKnowledgeProfiles,
   ],
 });

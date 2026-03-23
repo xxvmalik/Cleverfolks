@@ -214,6 +214,29 @@ export function buildSkylerSystemPrompt(
     (skylerData.step8?.uniqueValueProp as string | undefined)?.trim();
   if (positioning) lines.push(`Positioning: ${positioning}`);
 
+  // ── Competitors ───────────────────────────────────────────────
+  const rawCompetitors = (settings.competitors ?? []) as Array<{
+    name?: string;
+    advantages?: string;
+    skyler_objection_responses?: string[];
+    skyler_never_say?: string[];
+  }>;
+  const competitorEntries = rawCompetitors.filter((c) => c.name?.trim());
+  if (competitorEntries.length > 0) {
+    lines.push("");
+    lines.push("COMPETITOR POSITIONING:");
+    for (const c of competitorEntries) {
+      lines.push(`- ${c.name}`);
+      if (c.advantages?.trim()) lines.push(`  Their advantage: ${c.advantages.trim()}`);
+      if (c.skyler_objection_responses && c.skyler_objection_responses.length > 0) {
+        lines.push(`  How to handle: ${c.skyler_objection_responses.join("; ")}`);
+      }
+      if (c.skyler_never_say && c.skyler_never_say.length > 0) {
+        lines.push(`  Never say: ${c.skyler_never_say.join(", ")}`);
+      }
+    }
+  }
+
   const companySection =
     lines.length > 0 ? `\nOUR COMPANY:\n${lines.join("\n")}\n` : "";
 

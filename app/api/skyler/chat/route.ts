@@ -156,11 +156,15 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // ── Parse body ────────────────────────────────────────────────────────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let body: { message?: string; workspaceId?: string; conversationId?: string; pipelineContext?: any; pageContext?: any };
+  // ── Rate limit ─────────────────────────────────────────────────────────
+  const { chatRateLimit, checkRateLimit, rateLimitResponse } = await import("@/lib/rate-limit");
+  const rl = await checkRateLimit(chatRateLimit, `skyler:${user.id}`);
+  if (rl.limited) return rateLimitResponse(rl.resetMs);
+
+  // ── Parse and validate body ──────────────────────────────────────────
+  let rawBody: unknown;
   try {
-    body = (await request.json()) as typeof body;
+    rawBody = await request.json();
   } catch {
     return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
       status: 400,
@@ -168,13 +172,16 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const { message, workspaceId, conversationId: inputConversationId, pipelineContext, pageContext } = body;
-  if (!message?.trim() || !workspaceId) {
+  const { skylerChatSchema } = await import("@/lib/validations/chat");
+  const parsed = skylerChatSchema.safeParse(rawBody);
+  if (!parsed.success) {
     return new Response(
-      JSON.stringify({ error: "message and workspaceId are required" }),
+      JSON.stringify({ error: "Invalid request", details: parsed.error.issues.map((i) => i.message) }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
+
+  const { message, workspaceId, conversationId: inputConversationId, pipelineContext, pageContext } = parsed.data;
 
   // ── Verify workspace membership ───────────────────────────────────────
   const { data: membership } = await authClient

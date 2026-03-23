@@ -329,6 +329,38 @@ export function buildAgentSystemPrompt(
     (skylerData.step8?.uniqueValueProp as string | undefined)?.trim();
   if (positioning) lines.push(`Positioning: ${positioning}`);
 
+  // ── Competitors ──────────────────────────────────────────────────────
+  const rawCompetitors = (settings.competitors ?? []) as Array<{
+    name?: string;
+    advantages?: string;
+  }>;
+  const competitorNames = rawCompetitors
+    .filter((c) => c.name?.trim())
+    .map((c) => c.name!);
+  if (competitorNames.length > 0)
+    lines.push(`Competitors: ${competitorNames.join(", ")}`);
+
+  // ── Brand & goals ──────────────────────────────────────────────────────
+  const bp = (settings.business_profile ?? {}) as Record<string, unknown>;
+  const team = (settings.team ?? {}) as Record<string, unknown>;
+  const teamSize = ((bp.team_size ?? team.size ?? (orgData.step5 as Record<string, unknown> | undefined)?.teamSize) as string | undefined)?.trim();
+  if (teamSize) lines.push(`Team size: ${teamSize}`);
+
+  const businessModel = ((bp.business_model ?? (orgData.step1 as Record<string, unknown> | undefined)?.businessModel) as string | undefined)?.trim();
+  if (businessModel) lines.push(`Business model: ${businessModel}`);
+
+  const brand = (settings.brand ?? {}) as Record<string, unknown>;
+  const brandVoice = ((brand.voice ?? (orgData.step3 as Record<string, unknown> | undefined)?.brandVoice) as string | undefined)?.trim();
+  if (brandVoice) lines.push(`Brand voice: ${brandVoice}`);
+
+  const goals = (settings.goals ?? {}) as Record<string, unknown>;
+  const step7 = (orgData.step7 ?? {}) as Record<string, unknown>;
+  const focusAreas = (goals.focus_areas ?? step7.focusAreas ?? []) as string[];
+  if (focusAreas.length > 0) lines.push(`Focus areas: ${focusAreas.join(", ")}`);
+
+  const bottleneck = ((goals.biggest_bottleneck ?? step7.biggestBottleneck) as string | undefined)?.trim();
+  if (bottleneck) lines.push(`Biggest bottleneck: ${bottleneck}`);
+
   const companySection =
     lines.length > 0 ? `\nCOMPANY CONTEXT:\n${lines.join("\n")}\n` : "";
 

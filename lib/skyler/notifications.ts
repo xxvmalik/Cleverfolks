@@ -189,8 +189,15 @@ function resolveSlackTargets(notifications: NotificationSettings): SlackTarget[]
       .filter((t) => t && t.id)
       .slice(0, 3);
   }
-  // Legacy format: single slackChannel string — can't resolve to ID, skip
-  // (Old display-name strings like "@Name" won't work with Slack API)
+  // Legacy format: single slackChannel string — try to use if it looks like a Slack ID
+  if (notifications.slackChannel?.trim()) {
+    const raw = notifications.slackChannel.trim();
+    // Slack IDs start with C (channel), D (DM), G (group), or U (user)
+    if (/^[CDGU][A-Z0-9]{8,}$/.test(raw)) {
+      return [{ id: raw, name: raw, type: "channel" }];
+    }
+    console.warn(`[notifications] Legacy slackChannel "${raw}" is not a valid Slack ID. Update notification settings to use the channel picker.`);
+  }
   return [];
 }
 

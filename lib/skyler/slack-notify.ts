@@ -101,7 +101,7 @@ export async function sendSlackNotification(
     // Fallback text for notifications / non-block-compatible clients
     const fallbackText = `${emoji} ${payload.title}`;
 
-    await nango.proxy({
+    const resp = await nango.proxy({
       method: "POST",
       baseUrlOverride: "https://slack.com",
       endpoint: "/api/chat.postMessage",
@@ -116,7 +116,15 @@ export async function sendSlackNotification(
       },
     });
 
-    console.log(`[slack-notify] Sent to ${channelOrUserId}: ${payload.title}`);
+    // Validate Slack API response
+    const slackData = (resp as { data?: Record<string, unknown> })?.data;
+    if (slackData && slackData.ok === false) {
+      const slackError = slackData.error as string | undefined;
+      console.error(`[slack-notify] Slack API error for ${channelOrUserId}: ${slackError ?? "unknown"} (event: ${payload.eventType})`);
+      return;
+    }
+
+    console.log(`[slack-notify] Delivered to ${channelOrUserId}: ${payload.title}`);
   } catch (err) {
     console.error(`[slack-notify] Failed to send to ${channelOrUserId}:`, err instanceof Error ? err.message : err);
   }
