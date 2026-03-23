@@ -283,6 +283,10 @@ export async function POST(
     return NextResponse.json({ ok: true, messageId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[approve] Email send failed for pipeline ${pipelineId}:`, msg);
+    if (err instanceof Error && err.stack) {
+      console.error(`[approve] Stack:`, err.stack);
+    }
     return NextResponse.json({ error: msg, retryable: true }, { status: 500 });
   }
 }

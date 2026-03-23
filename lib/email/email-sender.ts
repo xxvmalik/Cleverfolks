@@ -858,6 +858,7 @@ export async function executeEmailSend(
   } catch (sendErr) {
     // Mark as failed so the UI can show error state + retry button
     const errMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+    console.error(`[email-sender] executeEmailSend FAILED for action ${actionId}:`, errMsg);
     await db
       .from("skyler_actions")
       .update({
