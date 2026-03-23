@@ -301,7 +301,9 @@ async function sendViaOutlook(params: {
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // Build the `from` field if we have a display name
+  // Build the `from` field if we have a display name.
+  // Graph API requires Mail.Send.Shared to set `from` — if the account lacks
+  // that scope the call returns 403, so we try with it and fall back without.
   const fromField = params.fromName && params.fromEmail
     ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
     : {};
@@ -347,25 +349,41 @@ async function sendViaOutlook(params: {
       return { messageId: finalId, outlookMessageId: finalId };
     }
   } catch (draftErr) {
-    console.warn(`[email-sender] Draft→send failed (likely missing Mail.ReadWrite scope), falling back to sendMail:`, draftErr instanceof Error ? draftErr.message : draftErr);
+    console.warn(`[email-sender] Draft→send failed, falling back to sendMail:`, draftErr instanceof Error ? draftErr.message : draftErr);
   }
 
-  // Fallback: sendMail — only requires Mail.Send scope
-  await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/sendMail",
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: {
-      message: {
-        subject: params.subject,
-        body: { contentType: "HTML", content: params.htmlBody },
-        toRecipients: [{ emailAddress: { address: params.to } }],
-        ...fromField,
-      },
-    },
-  });
+  // Fallback: sendMail — only requires Mail.Send scope.
+  // Try with `from` display name first; if 403 (missing Mail.Send.Shared), retry without.
+  for (const useFrom of [true, false]) {
+    const extraFields = useFrom ? fromField : {};
+    try {
+      await nango.proxy({
+        method: "POST",
+        baseUrlOverride: "https://graph.microsoft.com",
+        endpoint: "/v1.0/me/sendMail",
+        connectionId: params.connectionId,
+        providerConfigKey: "outlook",
+        data: {
+          message: {
+            subject: params.subject,
+            body: { contentType: "HTML", content: params.htmlBody },
+            toRecipients: [{ emailAddress: { address: params.to } }],
+            ...extraFields,
+          },
+        },
+      });
+      if (!useFrom) console.log(`[email-sender] sendMail succeeded without from field (Mail.Send.Shared not available)`);
+      break; // success — exit loop
+    } catch (err) {
+      const status = (err as Record<string, unknown>)?.status ?? (err as { response?: { status?: number } })?.response?.status;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (useFrom && Object.keys(fromField).length > 0 && (status === 403 || msg.includes("403"))) {
+        console.warn(`[email-sender] sendMail 403 with from field — retrying without (Mail.Send.Shared not granted)`);
+        continue; // retry without from
+      }
+      throw err; // real error — propagate
+    }
+  }
 
   // sendMail returns 202 with no body — we don't get a message ID
   // Try to find it in Sent Items for threading
@@ -525,22 +543,37 @@ async function tryCreateReply(params: {
     const draftId = (draftResponse as any)?.data?.id;
     if (!draftId) return null;
 
-    // Update the draft with our content, correct recipient, and sender display name
+    // Update the draft with our content, correct recipient, and sender display name.
+    // Try with `from` first; if 403, retry without (Mail.Send.Shared not granted).
     const fromPatch = params.fromName && params.fromEmail
       ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
       : {};
-    await nango.proxy({
-      method: "PATCH",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages/${draftId}`,
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-      data: {
-        body: { contentType: "HTML", content: params.htmlBody },
-        toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
-        ...fromPatch,
-      },
-    });
+    for (const useFrom of [true, false]) {
+      const extraFields = useFrom ? fromPatch : {};
+      try {
+        await nango.proxy({
+          method: "PATCH",
+          baseUrlOverride: "https://graph.microsoft.com",
+          endpoint: `/v1.0/me/messages/${draftId}`,
+          connectionId: params.connectionId,
+          providerConfigKey: "outlook",
+          data: {
+            body: { contentType: "HTML", content: params.htmlBody },
+            toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
+            ...extraFields,
+          },
+        });
+        break; // success
+      } catch (patchErr) {
+        const status = (patchErr as Record<string, unknown>)?.status ?? (patchErr as { response?: { status?: number } })?.response?.status;
+        const msg = patchErr instanceof Error ? patchErr.message : String(patchErr);
+        if (useFrom && Object.keys(fromPatch).length > 0 && (status === 403 || msg.includes("403"))) {
+          console.warn(`[email-sender] PATCH draft 403 with from field — retrying without`);
+          continue;
+        }
+        throw patchErr;
+      }
+    }
 
     // Send the draft
     await nango.proxy({
@@ -590,22 +623,37 @@ async function sendMailFallback(params: {
     ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
     : {};
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messagePayload: Record<string, any> = {
-    subject: replySubject,
-    body: { contentType: "HTML", content: params.htmlBody },
-    toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
-    ...fromField,
-  };
+  // Try with `from` display name; if 403, retry without.
+  for (const useFrom of [true, false]) {
+    const extraFields = useFrom ? fromField : {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const messagePayload: Record<string, any> = {
+      subject: replySubject,
+      body: { contentType: "HTML", content: params.htmlBody },
+      toRecipients: [{ emailAddress: { address: params.recipientEmail } }],
+      ...extraFields,
+    };
 
-  await nango.proxy({
-    method: "POST",
-    baseUrlOverride: "https://graph.microsoft.com",
-    endpoint: "/v1.0/me/sendMail",
-    connectionId: params.connectionId,
-    providerConfigKey: "outlook",
-    data: { message: messagePayload },
-  });
+    try {
+      await nango.proxy({
+        method: "POST",
+        baseUrlOverride: "https://graph.microsoft.com",
+        endpoint: "/v1.0/me/sendMail",
+        connectionId: params.connectionId,
+        providerConfigKey: "outlook",
+        data: { message: messagePayload },
+      });
+      break; // success
+    } catch (err) {
+      const status = (err as Record<string, unknown>)?.status ?? (err as { response?: { status?: number } })?.response?.status;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (useFrom && Object.keys(fromField).length > 0 && (status === 403 || msg.includes("403"))) {
+        console.warn(`[email-sender] sendMailFallback 403 with from field — retrying without`);
+        continue;
+      }
+      throw err;
+    }
+  }
 
   const sentId = await findSentMessageId(nango, params.connectionId, replySubject, params.recipientEmail);
   const messageId = sentId ?? `sendmail-reply-${Date.now()}`;
