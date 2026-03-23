@@ -62,8 +62,6 @@ export function IntegrationCard({
             if (event.type === "connect") {
               connectDone = true;
               const { connectionId, providerConfigKey } = event.payload;
-              // Close overlay immediately so user isn't stuck on blank screen
-              try { connectUI.close(); } catch { /* already closed */ }
               try {
                 const result = await connectIntegrationAction(workspaceId, providerConfigKey, connectionId);
                 if (result.error) { reject(new Error(result.error)); return; }
@@ -79,7 +77,6 @@ export function IntegrationCard({
                 resolve();
               } catch (err) { reject(err); }
             } else if (event.type === "error") {
-              try { connectUI.close(); } catch { /* already closed */ }
               reject(new Error(event.payload.errorMessage));
             } else if (event.type === "close") {
               if (!connectDone) resolve();
@@ -88,11 +85,15 @@ export function IntegrationCard({
         });
         connectUI.open();
       });
-      // Force-remove any leftover Nango iframe/overlay from the DOM
-      document.querySelectorAll('iframe[id*="nango"], div[id*="nango"]').forEach((el) => el.remove());
     } catch (err) {
       console.error("Connect failed:", err);
     } finally {
+      // Always force-remove the Nango ConnectUI iframe and restore scroll
+      const leftover = document.getElementById("connect-ui");
+      if (leftover) {
+        leftover.remove();
+        document.body.style.overflow = "";
+      }
       setConnecting(false);
     }
   }
