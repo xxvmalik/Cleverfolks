@@ -301,18 +301,26 @@ async function sendViaOutlook(params: {
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // Quick-verify the Nango connection is alive before attempting to send
+  // Quick-verify the Nango connection is alive and has mail permissions
   try {
+    console.error(`[email-sender] sendViaOutlook: verifying connection ${params.connectionId}`);
     await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: "/v1.0/me?$select=mail",
+      endpoint: "/v1.0/me/mailFolders/SentItems?$select=id",
       connectionId: params.connectionId,
       providerConfigKey: "outlook",
     });
+    console.error(`[email-sender] sendViaOutlook: connection verified OK (has mail read access)`);
   } catch (verifyErr) {
     const msg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
-    console.error(`[email-sender] Outlook connection verification failed:`, msg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const status = (verifyErr as any)?.response?.status ?? (verifyErr as any)?.status;
+    const is403 = status === 403 || msg.includes("403");
+    console.error(`[email-sender] Outlook connection verification failed (status=${status}):`, msg);
+    if (is403) {
+      throw new Error(`Outlook OAuth token lacks email permissions. Go to your Nango dashboard → Outlook integration → add scopes: Mail.Send, Mail.ReadWrite. Then reconnect Outlook in Connectors.`);
+    }
     throw new Error(`Outlook connection is broken or expired (${msg}). Please reconnect Outlook in Connectors.`);
   }
 
