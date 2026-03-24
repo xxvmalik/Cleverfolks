@@ -191,3 +191,26 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ id: data!.id, status: "created" }, { status: 201 });
 }
+
+/** PATCH — Dismiss a pending request (set status = 'dismissed') */
+export async function PATCH(req: NextRequest) {
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { requestId } = await req.json();
+  if (!requestId) return NextResponse.json({ error: "requestId required" }, { status: 400 });
+
+  const db = createAdminSupabaseClient();
+  const { data, error } = await db
+    .from("skyler_requests")
+    .update({ status: "dismissed" })
+    .eq("id", requestId)
+    .select("id")
+    .maybeSingle();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (!data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
+
+  return NextResponse.json({ ok: true });
+}

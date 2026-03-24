@@ -258,9 +258,22 @@ export function SkylerWorkspace({
   };
 
   const handleDismissRequest = () => {
-    // Dismiss the first pending request from the selected record
-    // The request will disappear on next pipeline refresh
-    fetchPipelineData();
+    const req = selectedRecord?.pending_requests?.[0];
+    if (!req) return;
+    // Optimistically remove from local state
+    setPipelineRecords((prev) =>
+      prev.map((r) =>
+        r.id === selectedLeadId
+          ? { ...r, pending_requests: (r.pending_requests ?? []).filter((p: { id: string }) => p.id !== req.id) }
+          : r
+      )
+    );
+    // Persist dismissal to DB
+    fetch("/api/skyler/sales-pipeline", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: req.id }),
+    }).catch(() => {});
   };
 
   const handleAddDirective = async (text: string) => {
