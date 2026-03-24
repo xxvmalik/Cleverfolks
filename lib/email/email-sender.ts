@@ -83,6 +83,21 @@ export async function draftOutreachEmail(
     }
   }
 
+  // Dedup: skip if a pending draft already exists for this pipeline record
+  const { data: existing } = await db
+    .from("skyler_actions")
+    .select("id")
+    .eq("pipeline_id", params.pipelineId)
+    .eq("tool_name", "send_email")
+    .eq("status", "pending")
+    .limit(1)
+    .maybeSingle();
+
+  if (existing) {
+    console.log(`[email-sender] Pending draft already exists for pipeline ${params.pipelineId} — skipping duplicate (existing: ${existing.id})`);
+    return { actionId: existing.id };
+  }
+
   const description = `Send outreach email to ${params.to}: "${params.subject}"`;
 
   const { data, error } = await db

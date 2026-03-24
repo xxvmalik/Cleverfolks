@@ -115,11 +115,10 @@ export const reasoningPipeline = inngest.createFunction(
     { event: "skyler/reasoning.user-directive" },
     { event: "skyler/reasoning.user-response" },
     { event: "skyler/reasoning.lead-qualified" },
-    // Bridge events — also listen to existing pipeline events so both
-    // the old pipeline and the reasoning engine process them in parallel
-    { event: "skyler/lead.qualified.hot" },
-    { event: "skyler/pipeline.reply.received" },
-    // Stage 13: Meeting lifecycle events
+    // NOTE: skyler/lead.qualified.hot and skyler/pipeline.reply.received
+    // are NOT listed here — salesCloserWorkflow already handles those.
+    // Listening to them here caused duplicate drafts (2-3x per event).
+    // Stage 13: Meeting lifecycle events (only reasoning pipeline handles these)
     { event: "skyler/meeting.no-show" },
     { event: "skyler/meeting.cancelled" },
   ],
