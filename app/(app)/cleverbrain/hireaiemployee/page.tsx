@@ -6,10 +6,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarketplacePanel } from "@/components/cleverbrain/cleverbrain-client";
 import { useWorkspace } from "@/context/workspace-context";
+import { setActiveWorkspaceAction } from "@/app/actions/workspace";
 
 export default function HireAIEmployeePage() {
   const router = useRouter();
-  const { currentWorkspace, workspaces, setCurrentWorkspace } = useWorkspace();
+  const { currentWorkspace, workspaces } = useWorkspace();
   const [wsOverlayOpen, setWsOverlayOpen] = useState(false);
 
   const wsInitial = currentWorkspace?.name
@@ -77,10 +78,9 @@ export default function HireAIEmployeePage() {
                     .map((ws) => (
                       <button
                         key={ws.id}
-                        onClick={() => {
-                          setCurrentWorkspace(ws);
-                          setWsOverlayOpen(false);
-                          router.refresh();
+                        onClick={async () => {
+                          await setActiveWorkspaceAction(ws.id);
+                          window.location.href = "/";
                         }}
                         className="flex items-center gap-2 w-full px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
                       >

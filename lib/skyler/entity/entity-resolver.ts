@@ -325,17 +325,21 @@ export async function updateConversationEntity(
  */
 export async function loadConversationEntityState(
   db: SupabaseClient,
-  conversationId: string
+  conversationId: string,
+  workspaceId?: string
 ): Promise<{
   activeEntityId: string | null;
   activeEntityName: string | null;
   entityFocusStack: EntityFocusEntry[];
 } | null> {
-  const { data } = await db
+  let query = db
     .from("conversations")
     .select("active_entity_id, active_entity_name, entity_focus_stack")
-    .eq("id", conversationId)
-    .single();
+    .eq("id", conversationId);
+
+  if (workspaceId) query = query.eq("workspace_id", workspaceId);
+
+  const { data } = await query.single();
 
   if (!data) return null;
 

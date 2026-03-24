@@ -3,10 +3,10 @@
 import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ConnectorsView } from "@/components/cleverbrain/cleverbrain-client";
 import { signOut } from "@/lib/auth";
 import { useWorkspace } from "@/context/workspace-context";
+import { setActiveWorkspaceAction } from "@/app/actions/workspace";
 
 export function ConnectorsPageClient({
   workspaceId,
@@ -40,8 +40,7 @@ export function ConnectorsPageClient({
 }
 
 function ConnectorsRightIconBar() {
-  const { currentWorkspace, workspaces, setCurrentWorkspace } = useWorkspace();
-  const router = useRouter();
+  const { currentWorkspace, workspaces } = useWorkspace();
   const [wsOverlayOpen, setWsOverlayOpen] = useState(false);
 
   const wsInitial = currentWorkspace?.name
@@ -102,10 +101,9 @@ function ConnectorsRightIconBar() {
                   .map((ws) => (
                     <button
                       key={ws.id}
-                      onClick={() => {
-                        setCurrentWorkspace(ws);
-                        setWsOverlayOpen(false);
-                        router.refresh();
+                      onClick={async () => {
+                        await setActiveWorkspaceAction(ws.id);
+                        window.location.href = "/";
                       }}
                       className="flex items-center gap-2 w-full px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
                     >

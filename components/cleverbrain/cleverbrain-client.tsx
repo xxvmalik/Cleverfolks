@@ -29,6 +29,7 @@ import type { ConnectUIEvent } from "@nangohq/frontend";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
 import { useWorkspace } from "@/context/workspace-context";
+import { setActiveWorkspaceAction } from "@/app/actions/workspace";
 import { BusinessProfileView } from "./business-profile-view";
 import { renderMarkdown } from "@/components/shared/markdown-renderer";
 import {
@@ -917,8 +918,7 @@ function WorkspaceSwitcherOverlay({
   open: boolean;
   onClose: () => void;
 }) {
-  const { currentWorkspace, workspaces, setCurrentWorkspace } = useWorkspace();
-  const router = useRouter();
+  const { currentWorkspace, workspaces } = useWorkspace();
 
   if (!open || !currentWorkspace) return null;
 
@@ -952,10 +952,9 @@ function WorkspaceSwitcherOverlay({
               .map((ws) => (
                 <button
                   key={ws.id}
-                  onClick={() => {
-                    setCurrentWorkspace(ws);
-                    onClose();
-                    router.refresh();
+                  onClick={async () => {
+                    await setActiveWorkspaceAction(ws.id);
+                    window.location.href = "/";
                   }}
                   className="flex items-center gap-2 w-full px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
                 >

@@ -1,8 +1,52 @@
 "use server";
 
+import { cookies } from "next/headers";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { createWorkspace } from "@/lib/workspace";
+
+const ACTIVE_WORKSPACE_COOKIE = "active_workspace_id";
+
+/**
+ * Set the active workspace cookie. Used after workspace creation or switching.
+ * Validates the user is a member of the workspace before setting.
+ */
+export async function setActiveWorkspaceAction(
+  workspaceId: string
+): Promise<{ error?: string }> {
+  const supabase = await createServerSupabaseClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: "Not authenticated" };
+
+  // Verify membership
+  const { data: membership } = await supabase
+    .from("workspace_memberships")
+    .select("id")
+    .eq("workspace_id", workspaceId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (!membership) return { error: "Not a member of this workspace" };
+
+  const cookieStore = await cookies();
+  cookieStore.set(ACTIVE_WORKSPACE_COOKIE, workspaceId, {
+    path: "/",
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24 * 365, // 1 year
+  });
+
+  return {};
+}
+
+/**
+ * Read the active workspace ID from the cookie. Server-only.
+ */
+export async function getActiveWorkspaceId(): Promise<string | null> {
+  const cookieStore = await cookies();
+  return cookieStore.get(ACTIVE_WORKSPACE_COOKIE)?.value ?? null;
+}
 
 export async function createWorkspaceAction(
   name: string

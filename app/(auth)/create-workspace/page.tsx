@@ -1,13 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { generateSlug } from "@/lib/workspace";
-import { createWorkspaceAction } from "@/app/actions/workspace";
+import { createWorkspaceAction, setActiveWorkspaceAction } from "@/app/actions/workspace";
 
 export default function CreateWorkspacePage() {
-  const router = useRouter();
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +39,12 @@ export default function CreateWorkspacePage() {
       }
 
       console.log("[create-workspace] Created workspace:", result.workspaceId);
-      router.push("/");
+
+      // Set this new workspace as active via cookie
+      await setActiveWorkspaceAction(result.workspaceId);
+
+      // Hard redirect so the server layout picks up the cookie
+      window.location.href = "/";
     } catch (err: unknown) {
       const msg =
         err instanceof Error

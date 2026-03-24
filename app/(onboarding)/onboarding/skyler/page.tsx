@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { getUserWorkspaces } from "@/lib/workspace";
+import { getActiveWorkspaceId } from "@/app/actions/workspace";
 import { SkylerOnboardingShell } from "@/components/onboarding/skyler-onboarding-shell";
 
 type Props = {
@@ -20,13 +21,19 @@ export default async function SkylerOnboardingPage({ searchParams }: Props) {
   const { data: memberships } = await getUserWorkspaces(supabase, user.id);
   if (!memberships?.length) redirect("/create-workspace");
 
-  const ws = memberships[0].workspaces as unknown as {
-    id: string;
-    name: string;
-    slug: string;
-    onboarding_completed: boolean;
-    skyler_onboarding_completed: boolean;
-  };
+  // Find the active workspace from cookie, fallback to first
+  const activeWsId = await getActiveWorkspaceId();
+  const allWorkspaces = memberships
+    .filter((m) => m.workspaces)
+    .map((m) => m.workspaces as unknown as {
+      id: string;
+      name: string;
+      slug: string;
+      onboarding_completed: boolean;
+      skyler_onboarding_completed: boolean;
+    });
+
+  const ws = allWorkspaces.find((w) => w.id === activeWsId) ?? allWorkspaces[0];
 
   // General onboarding must be completed first
   if (!ws.onboarding_completed) redirect("/onboarding");

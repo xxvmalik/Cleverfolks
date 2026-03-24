@@ -283,7 +283,7 @@ export async function POST(request: NextRequest) {
   // Load conversation entity state if we have a conversation
   let conversationEntityState: Awaited<ReturnType<typeof loadConversationEntityState>> = null;
   if (inputConversationId) {
-    conversationEntityState = await loadConversationEntityState(db, inputConversationId);
+    conversationEntityState = await loadConversationEntityState(db, inputConversationId, workspaceId);
   }
 
   // Resolve the active entity deterministically
