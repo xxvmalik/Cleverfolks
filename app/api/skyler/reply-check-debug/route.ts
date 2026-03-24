@@ -4,6 +4,9 @@
  * Diagnostic endpoint — runs the reply check logic for the current user's
  * workspace and returns detailed results instead of just logging them.
  * Use this to verify the cron would detect replies if it were running.
+ *
+ * Mirrors the actual cron logic: no awaiting_reply filter, includes
+ * no_response and meeting_booked/demo_booked records, 24-hour time window.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -31,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   const diag: Record<string, unknown> = { workspaceId };
 
-  // 1. Check ALL pipeline records (including resolved) to show full status
+  // 1. Check ALL pipeline records to show full status
   const { data: allPipelines, error: pipelineErr } = await db
     .from("skyler_sales_pipeline")
     .select("id, contact_email, contact_name, company_name, stage, resolution, awaiting_reply, last_reply_at, last_email_sent_at, emails_sent, emails_replied, cadence_step")
@@ -42,13 +45,26 @@ export async function GET(req: NextRequest) {
   diag.pipelineError = pipelineErr?.message ?? null;
   diag.allPipelines = allPipelines ?? [];
 
-  const activePipelines = (allPipelines ?? []).filter((p) => !p.resolution);
-  diag.activePipelines = activePipelines.length;
-  diag.awaitingReply = activePipelines.filter((p) => p.awaiting_reply === true);
-  diag.awaitingReplyCount = (diag.awaitingReply as unknown[]).length;
+  // Match the actual cron logic: unresolved OR engaged/no_response (no awaiting_reply filter)
+  const unresolvedPipelines = (allPipelines ?? []).filter((p) => !p.resolution);
+  const engagedPipelines = (allPipelines ?? []).filter((p) =>
+    ["meeting_booked", "demo_booked", "no_response"].includes(p.resolution)
+  );
+  const checkablePipelines = [...unresolvedPipelines, ...engagedPipelines];
 
-  if ((diag.awaitingReply as unknown[]).length === 0) {
-    diag.issue = "No pipeline records with awaiting_reply=true — cron would skip this workspace";
+  diag.unresolvedCount = unresolvedPipelines.length;
+  diag.engagedCount = engagedPipelines.length;
+  diag.checkablePipelines = checkablePipelines.map((p) => ({
+    id: p.id,
+    contact_email: p.contact_email,
+    contact_name: p.contact_name,
+    resolution: p.resolution,
+    awaiting_reply: p.awaiting_reply,
+    stage: p.stage,
+  }));
+
+  if (checkablePipelines.length === 0) {
+    diag.issue = "No unresolved or engaged pipeline records — cron would skip this workspace";
     return NextResponse.json(diag);
   }
 
@@ -74,9 +90,10 @@ export async function GET(req: NextRequest) {
   diag.usingProvider = integration.provider;
   diag.usingConnectionId = integration.nango_connection_id;
 
-  // 3. Try Nango proxy call
-  const contactEmails = (diag.awaitingReply as Array<{ contact_email: string }>)
-    .map((p) => p.contact_email.toLowerCase());
+  // 3. Build contact list (matches actual cron — no awaiting_reply filter)
+  const contactEmails = [...new Set(
+    checkablePipelines.map((p) => (p.contact_email as string).toLowerCase())
+  )];
   diag.contactEmailsToCheck = contactEmails;
 
   if (!process.env.NANGO_SECRET_KEY) {
@@ -85,13 +102,14 @@ export async function GET(req: NextRequest) {
   }
 
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
+  const windowStart = Date.now() - 24 * 60 * 60 * 1000;
 
   try {
     if (integration.provider === "outlook") {
       const response = await nango.proxy({
         method: "GET",
         baseUrlOverride: "https://graph.microsoft.com",
-        endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,receivedDateTime`,
+        endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=30&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,receivedDateTime`,
         connectionId: integration.nango_connection_id,
         providerConfigKey: "outlook",
       });
@@ -101,12 +119,12 @@ export async function GET(req: NextRequest) {
       diag.nangoProxySuccess = true;
       diag.messagesReturned = messages?.length ?? 0;
 
-      const oneHourAgo = Date.now() - 60 * 60 * 1000;
       const recentMessages = (messages ?? []).filter((m: { receivedDateTime: string }) =>
-        new Date(m.receivedDateTime).getTime() > oneHourAgo
+        new Date(m.receivedDateTime).getTime() > windowStart
       );
-      diag.messagesInLastHour = recentMessages.length;
+      diag.messagesInLast24h = recentMessages.length;
       diag.queryEndpoint = "Inbox only (not all folders)";
+      diag.timeWindow = "24 hours";
 
       // Check which messages are from pipeline contacts
       const matches = (messages ?? [])
@@ -120,13 +138,13 @@ export async function GET(req: NextRequest) {
             receivedAt: m.receivedDateTime,
             preview: (m.bodyPreview ?? "").slice(0, 100),
             isContact: !isX500 && contactEmails.includes(rawSender),
-            isRecent: new Date(m.receivedDateTime ?? 0).getTime() > oneHourAgo,
+            isInWindow: new Date(m.receivedDateTime ?? 0).getTime() > windowStart,
           };
         })
         .slice(0, 15);
 
       diag.top15InboxMessages = matches;
-      diag.contactMatches = matches.filter((m: { isContact: boolean }) => m.isContact);
+      diag.contactMatches = matches.filter((m: { isContact: boolean; isInWindow: boolean }) => m.isContact && m.isInWindow);
     } else if (integration.provider === "google-mail") {
       const fromQuery = contactEmails.slice(0, 10).map((e) => `from:${e}`).join(" OR ");
       const query = `${fromQuery} newer_than:1d`;
@@ -151,7 +169,7 @@ export async function GET(req: NextRequest) {
     diag.issue = `Nango proxy call failed: ${diag.nangoProxyError}`;
   }
 
-  // 4. Check if Inngest cron should be registered
+  // 4. Check Inngest config
   diag.inngestEventKey = process.env.INNGEST_EVENT_KEY ? "set" : "MISSING";
   diag.inngestSigningKey = process.env.INNGEST_SIGNING_KEY ? "set" : "MISSING";
 

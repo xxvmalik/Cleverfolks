@@ -169,8 +169,10 @@ async function checkOutlookReplies(
 
   // Query INBOX only — /v1.0/me/messages returns Sent Items too, which fills
   // the top results with Skyler's own outreach and buries actual replies.
-  // Use a 1-hour window (was 10 min) so replies aren't missed if a cron cycle skips.
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  // Use a 24-hour window so replies aren't missed if cron cycles skip or
+  // contact wasn't in the check list during earlier cycles. The
+  // detectPipelineReply dedup (last_reply_at 5-min lock) prevents duplicates.
+  const windowStart = Date.now() - 24 * 60 * 60 * 1000;
 
   try {
     const response = await nango.proxy({
@@ -186,9 +188,9 @@ async function checkOutlookReplies(
     if (!messages || messages.length === 0) return 0;
 
     for (const msg of messages) {
-      // Client-side time filter: skip emails older than 1 hour
+      // Client-side time filter: skip emails older than 24 hours
       const receivedAt = new Date(msg.receivedDateTime).getTime();
-      if (receivedAt < oneHourAgo) continue;
+      if (receivedAt < windowStart) continue;
 
       // Extract sender, skipping X500/Exchange internal addresses
       const senderEmail = extractOutlookSender(msg);
