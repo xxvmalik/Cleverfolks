@@ -87,7 +87,7 @@ export async function GET(req: NextRequest) {
       const response = await nango.proxy({
         method: "GET",
         baseUrlOverride: "https://graph.microsoft.com",
-        endpoint: `/v1.0/me/messages?$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,receivedDateTime`,
+        endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,receivedDateTime`,
         connectionId: integration.nango_connection_id,
         providerConfigKey: "outlook",
       });
@@ -97,25 +97,31 @@ export async function GET(req: NextRequest) {
       diag.nangoProxySuccess = true;
       diag.messagesReturned = messages?.length ?? 0;
 
-      const tenMinAgo = Date.now() - 10 * 60 * 1000;
+      const oneHourAgo = Date.now() - 60 * 60 * 1000;
       const recentMessages = (messages ?? []).filter((m: { receivedDateTime: string }) =>
-        new Date(m.receivedDateTime).getTime() > tenMinAgo
+        new Date(m.receivedDateTime).getTime() > oneHourAgo
       );
-      diag.messagesInLast10Min = recentMessages.length;
+      diag.messagesInLastHour = recentMessages.length;
+      diag.queryEndpoint = "Inbox only (not all folders)";
 
       // Check which messages are from pipeline contacts
       const matches = (messages ?? [])
-        .map((m: { from?: { emailAddress?: { address?: string } }; subject?: string; receivedDateTime?: string; bodyPreview?: string }) => ({
-          sender: m.from?.emailAddress?.address?.toLowerCase(),
-          subject: m.subject,
-          receivedAt: m.receivedDateTime,
-          preview: (m.bodyPreview ?? "").slice(0, 100),
-          isContact: contactEmails.includes(m.from?.emailAddress?.address?.toLowerCase() ?? ""),
-          isRecent: new Date(m.receivedDateTime ?? 0).getTime() > tenMinAgo,
-        }))
-        .slice(0, 10); // Show top 10
+        .map((m: { from?: { emailAddress?: { address?: string } }; subject?: string; receivedDateTime?: string; bodyPreview?: string }) => {
+          const rawSender = m.from?.emailAddress?.address?.toLowerCase() ?? "";
+          const isX500 = rawSender.startsWith("/o=") || !rawSender.includes("@");
+          return {
+            sender: rawSender,
+            isX500,
+            subject: m.subject,
+            receivedAt: m.receivedDateTime,
+            preview: (m.bodyPreview ?? "").slice(0, 100),
+            isContact: !isX500 && contactEmails.includes(rawSender),
+            isRecent: new Date(m.receivedDateTime ?? 0).getTime() > oneHourAgo,
+          };
+        })
+        .slice(0, 15);
 
-      diag.top10Messages = matches;
+      diag.top15InboxMessages = matches;
       diag.contactMatches = matches.filter((m: { isContact: boolean }) => m.isContact);
     } else if (integration.provider === "google-mail") {
       const fromQuery = contactEmails.slice(0, 10).map((e) => `from:${e}`).join(" OR ");

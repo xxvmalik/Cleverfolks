@@ -122,6 +122,20 @@ async function checkWorkspaceReplies(workspaceId: string): Promise<number> {
 
 // ── Outlook check ───────────────────────────────────────────────────────────
 
+/**
+ * Extract a valid SMTP email from an Outlook message's `from` field.
+ * Microsoft Graph sometimes returns X500 addresses (/o=exchangelabs/...)
+ * instead of SMTP emails — skip those since we can't match them.
+ */
+function extractOutlookSender(msg: { from?: { emailAddress?: { address?: string } } }): string | null {
+  const raw = msg.from?.emailAddress?.address;
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  // X500/Exchange internal addresses start with /o= and don't contain @
+  if (lower.startsWith("/o=") || !lower.includes("@")) return null;
+  return lower;
+}
+
 async function checkOutlookReplies(
   nango: Nango,
   connectionId: string,
@@ -132,16 +146,16 @@ async function checkOutlookReplies(
 ): Promise<number> {
   let repliesFound = 0;
 
-  // Fetch top 20 recent emails and filter client-side.
-  // Note: $filter with receivedDateTime doesn't work reliably through Nango proxy,
-  // so we fetch recent messages without a date filter and check timestamps ourselves.
-  const tenMinAgo = Date.now() - 10 * 60 * 1000;
+  // Query INBOX only — /v1.0/me/messages returns Sent Items too, which fills
+  // the top results with Skyler's own outreach and buries actual replies.
+  // Use a 1-hour window (was 10 min) so replies aren't missed if a cron cycle skips.
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
 
   try {
     const response = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages?$top=20&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,body,receivedDateTime`,
+      endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=30&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,body,receivedDateTime`,
       connectionId,
       providerConfigKey: "outlook",
     });
@@ -151,11 +165,12 @@ async function checkOutlookReplies(
     if (!messages || messages.length === 0) return 0;
 
     for (const msg of messages) {
-      // Client-side time filter: skip emails older than 10 minutes
+      // Client-side time filter: skip emails older than 1 hour
       const receivedAt = new Date(msg.receivedDateTime).getTime();
-      if (receivedAt < tenMinAgo) continue;
+      if (receivedAt < oneHourAgo) continue;
 
-      const senderEmail = msg.from?.emailAddress?.address?.toLowerCase();
+      // Extract sender, skipping X500/Exchange internal addresses
+      const senderEmail = extractOutlookSender(msg);
       if (!senderEmail || !contactEmails.includes(senderEmail)) continue;
 
       // Skip calendar acceptance/decline notifications — not real replies
@@ -218,7 +233,8 @@ async function checkGmailReplies(
   try {
     for (const batch of batches) {
       const fromQuery = batch.map((e) => `from:${e}`).join(" OR ");
-      const query = `${fromQuery} newer_than:10m`;
+      // Gmail newer_than units: d=days, m=months (no minutes unit)
+      const query = `${fromQuery} newer_than:1d`;
 
       const searchResponse = await nango.proxy({
         method: "GET",
