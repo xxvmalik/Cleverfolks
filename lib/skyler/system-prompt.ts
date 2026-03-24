@@ -5,6 +5,7 @@ import {
   type KnowledgeProfileRow,
   formatKnowledgeProfile,
 } from "@/lib/cleverbrain/system-prompt";
+import { buildBusinessContext } from "@/lib/business-context";
 import { type SkylerWorkflowSettings, DEFAULT_WORKFLOW_SETTINGS } from "@/app/api/skyler/workflow-settings/route";
 import {
   type AgentMemory,
@@ -171,50 +172,20 @@ export function buildSkylerSystemPrompt(
   agentMemories?: AgentMemory[]
 ): string {
   const settings = workspace?.settings ?? {};
-  const orgData = onboarding?.org_data ?? {};
-  const skylerData = onboarding?.skyler_data ?? {};
 
   const companyName =
     (settings.company_name as string | undefined)?.trim() ||
-    (orgData.step1?.companyName as string | undefined)?.trim() ||
+    (onboarding?.org_data?.step1?.companyName as string | undefined)?.trim() ||
     workspace?.name?.trim() ||
     "your company";
 
-  const lines: string[] = [];
+  // Shared business context (Layer 1 — single source of truth)
+  const businessContextText = buildBusinessContext({
+    workspace, onboarding, knowledgeProfile, connectedIntegrations,
+  });
 
-  const description =
-    (settings.description as string | undefined)?.trim() ||
-    (skylerData.step8?.companyOverview as string | undefined)?.trim();
-  if (description) lines.push(`Description: ${description}`);
-
-  const industry =
-    (settings.industry as string | undefined)?.trim() ||
-    (orgData.step1?.industry as string | undefined)?.trim();
-  if (industry && industry !== "Other") lines.push(`Industry: ${industry}`);
-
-  const rawProducts = (orgData.step4?.products ?? []) as Array<{
-    name?: string;
-    description?: string;
-  }>;
-  const productLines = rawProducts
-    .filter((p) => p.name)
-    .map((p) =>
-      p.description?.trim() ? `${p.name}: ${p.description.trim()}` : p.name!
-    );
-  if (productLines.length > 0)
-    lines.push(`Products/services: ${productLines.join(", ")}`);
-
-  const targetAudience =
-    (orgData.step2?.targetAudience as string | undefined)?.trim() ||
-    (skylerData.step8?.idealCustomerProfile as string | undefined)?.trim();
-  if (targetAudience) lines.push(`Target customers: ${targetAudience}`);
-
-  const positioning =
-    (orgData.step2?.positioning as string | undefined)?.trim() ||
-    (skylerData.step8?.uniqueValueProp as string | undefined)?.trim();
-  if (positioning) lines.push(`Positioning: ${positioning}`);
-
-  // ── Competitors ───────────────────────────────────────────────
+  // Skyler-specific: detailed competitor positioning with objection handling
+  const competitorLines: string[] = [];
   const rawCompetitors = (settings.competitors ?? []) as Array<{
     name?: string;
     advantages?: string;
@@ -223,22 +194,22 @@ export function buildSkylerSystemPrompt(
   }>;
   const competitorEntries = rawCompetitors.filter((c) => c.name?.trim());
   if (competitorEntries.length > 0) {
-    lines.push("");
-    lines.push("COMPETITOR POSITIONING:");
+    competitorLines.push("COMPETITOR POSITIONING:");
     for (const c of competitorEntries) {
-      lines.push(`- ${c.name}`);
-      if (c.advantages?.trim()) lines.push(`  Their advantage: ${c.advantages.trim()}`);
+      competitorLines.push(`- ${c.name}`);
+      if (c.advantages?.trim()) competitorLines.push(`  Their advantage: ${c.advantages.trim()}`);
       if (c.skyler_objection_responses && c.skyler_objection_responses.length > 0) {
-        lines.push(`  How to handle: ${c.skyler_objection_responses.join("; ")}`);
+        competitorLines.push(`  How to handle: ${c.skyler_objection_responses.join("; ")}`);
       }
       if (c.skyler_never_say && c.skyler_never_say.length > 0) {
-        lines.push(`  Never say: ${c.skyler_never_say.join(", ")}`);
+        competitorLines.push(`  Never say: ${c.skyler_never_say.join(", ")}`);
       }
     }
   }
 
-  const companySection =
-    lines.length > 0 ? `\nOUR COMPANY:\n${lines.join("\n")}\n` : "";
+  const companySection = businessContextText
+    ? `\nOUR COMPANY:\n${businessContextText}${competitorLines.length > 0 ? "\n\n" + competitorLines.join("\n") : ""}\n`
+    : "";
 
   // ── Knowledge profile ─────────────────────────────────────────
   let intelligenceSection = "";

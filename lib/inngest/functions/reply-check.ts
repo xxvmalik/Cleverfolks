@@ -24,34 +24,33 @@ export const replyCheckScheduler = inngest.createFunction(
   },
   { cron: "*/5 * * * *" }, // Every 5 minutes
   async ({ step }) => {
-    // Step 1: Find workspaces with active pipeline records awaiting replies
+    // Step 1: Find workspaces with any pipeline records that could receive replies.
+    // Don't filter on awaiting_reply — the cadence sets it to false in several
+    // legitimate scenarios (pending approval, no_response) but the contact can
+    // still reply. The detectPipelineReply dedup (last_reply_at lock) prevents
+    // duplicate processing, so casting a wide net here is safe.
     const workspaces = await step.run("find-active-workspaces", async () => {
       const db = createAdminSupabaseClient();
 
-      // Get distinct workspace IDs that have active pipeline records.
-      // Include meeting_booked/demo_booked — these are engaged, not truly resolved.
+      // Unresolved leads (active outreach)
       const { data: unresolved } = await db
         .from("skyler_sales_pipeline")
         .select("workspace_id")
         .is("resolution", null)
-        .eq("awaiting_reply", true)
         .limit(100);
 
+      // Engaged/no_response leads — can still receive replies
       const { data: engaged } = await db
         .from("skyler_sales_pipeline")
         .select("workspace_id")
-        .in("resolution", ["meeting_booked", "demo_booked"])
-        .eq("awaiting_reply", true)
-        .limit(50);
+        .in("resolution", ["meeting_booked", "demo_booked", "no_response"])
+        .limit(100);
 
       const allRows = [...(unresolved ?? []), ...(engaged ?? [])];
-      const data = allRows;
-      const error = null;
-
-      if (error || !data) return [];
+      if (allRows.length === 0) return [];
 
       // Deduplicate workspace IDs
-      const unique = [...new Set(data.map((r) => r.workspace_id as string))];
+      const unique = [...new Set(allRows.map((r) => r.workspace_id as string))];
       console.log(`[reply-check] Found ${unique.length} workspaces with active pipelines`);
       return unique;
     });
@@ -89,23 +88,22 @@ async function checkWorkspaceReplies(workspaceId: string): Promise<number> {
 
   if (!integration?.nango_connection_id) return 0;
 
-  // Get active pipeline contacts for this workspace
-  // Include meeting_booked/demo_booked — still engaged leads
+  // Get ALL pipeline contacts that could reply — don't filter on awaiting_reply.
+  // The cadence sets awaiting_reply=false in several cases (pending approval,
+  // no_response) but the contact can still reply. detectPipelineReply handles dedup.
   const { data: unresolvedContacts } = await db
     .from("skyler_sales_pipeline")
     .select("contact_email")
     .eq("workspace_id", workspaceId)
     .is("resolution", null)
-    .eq("awaiting_reply", true)
-    .limit(50);
+    .limit(100);
 
   const { data: engagedContacts } = await db
     .from("skyler_sales_pipeline")
     .select("contact_email")
     .eq("workspace_id", workspaceId)
-    .in("resolution", ["meeting_booked", "demo_booked"])
-    .eq("awaiting_reply", true)
-    .limit(50);
+    .in("resolution", ["meeting_booked", "demo_booked", "no_response"])
+    .limit(100);
 
   const pipelines = [...(unresolvedContacts ?? []), ...(engagedContacts ?? [])];
 
