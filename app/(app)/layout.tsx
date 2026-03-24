@@ -2,7 +2,6 @@ import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { getUserWorkspaces } from "@/lib/workspace";
 import { WorkspaceProvider } from "@/context/workspace-context";
-import { Sidebar } from "@/components/sidebar";
 import type { Workspace } from "@/types";
 
 export default async function AppLayout({
@@ -54,10 +53,7 @@ export default async function AppLayout({
 
   return (
     <WorkspaceProvider workspaces={workspaces}>
-      <div className="flex h-screen overflow-hidden bg-[#131619]">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto bg-[#1C1F24]">{children}</main>
-      </div>
+      {children}
     </WorkspaceProvider>
   );
 }

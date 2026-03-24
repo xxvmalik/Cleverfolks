@@ -28,6 +28,7 @@ import Nango from "@nangohq/frontend";
 import type { ConnectUIEvent } from "@nangohq/frontend";
 import { cn } from "@/lib/utils";
 import { signOut } from "@/lib/auth";
+import { useWorkspace } from "@/context/workspace-context";
 import { BusinessProfileView } from "./business-profile-view";
 import { renderMarkdown } from "@/components/shared/markdown-renderer";
 import {
@@ -907,6 +908,82 @@ export function ConnectorsView({
   );
 }
 
+// ── Workspace Switcher Overlay ────────────────────────────────────────────────
+
+function WorkspaceSwitcherOverlay({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const { currentWorkspace, workspaces, setCurrentWorkspace } = useWorkspace();
+  const router = useRouter();
+
+  if (!open || !currentWorkspace) return null;
+
+  const initial = currentWorkspace.name
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="absolute right-[84px] bottom-4 w-64 bg-[#1E1E1E] border border-[#2A2D35] rounded-xl py-2 z-50 shadow-2xl">
+        {/* Current workspace header */}
+        <div className="px-4 py-2 border-b border-[#2A2D35]">
+          <p className="text-[#8B8F97] text-xs uppercase tracking-wider mb-1">Current workspace</p>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-[#3A89FF] flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+              {initial}
+            </div>
+            <span className="text-white text-sm font-medium truncate">{currentWorkspace.name}</span>
+          </div>
+        </div>
+
+        {/* Other workspaces */}
+        {workspaces.length > 1 && (
+          <div className="py-1 border-b border-[#2A2D35]">
+            {workspaces
+              .filter((ws) => ws.id !== currentWorkspace.id)
+              .map((ws) => (
+                <button
+                  key={ws.id}
+                  onClick={() => {
+                    setCurrentWorkspace(ws);
+                    onClose();
+                    router.refresh();
+                  }}
+                  className="flex items-center gap-2 w-full px-4 py-2 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
+                >
+                  <div className="w-6 h-6 rounded-md bg-[#3A89FF]/20 flex items-center justify-center text-[#3A89FF] text-xs font-bold flex-shrink-0">
+                    {ws.name.slice(0, 2).toUpperCase()}
+                  </div>
+                  <span className="truncate">{ws.name}</span>
+                </button>
+              ))}
+          </div>
+        )}
+
+        {/* Create new workspace */}
+        <Link
+          href="/create-workspace"
+          onClick={onClose}
+          className="flex items-center gap-2 w-full px-4 py-2.5 text-sm text-[#8B8F97] hover:text-white hover:bg-white/5 transition-colors"
+        >
+          <div className="w-6 h-6 rounded-md border border-dashed border-[#8B8F97]/40 flex items-center justify-center text-[#8B8F97] text-xs">
+            +
+          </div>
+          <span>Create new workspace</span>
+        </Link>
+      </div>
+    </>
+  );
+}
+
 // ── Right Icon Bar ────────────────────────────────────────────────────────────
 
 type ActiveView = "chat" | "connectors";
@@ -920,8 +997,22 @@ function RightIconBar({
   marketplaceOpen: boolean;
   onNavigate: (target: "chat" | "connectors" | "marketplace" | "skyler" | "settings") => void;
 }) {
+  const { currentWorkspace } = useWorkspace();
+  const [wsOverlayOpen, setWsOverlayOpen] = useState(false);
+
+  const wsInitial = currentWorkspace?.name
+    ?.split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 1) || "W";
+
   return (
-    <div className={cn("w-[76px] border-l border-[#2A2D35]/60 flex flex-col items-center justify-center flex-shrink-0", activeView === "connectors" ? "bg-[#001022]" : "bg-[#151515]")}>
+    <div className={cn("w-[76px] border-l border-[#2A2D35]/60 flex flex-col items-center justify-between flex-shrink-0 py-6 relative", activeView === "connectors" ? "bg-[#001022]" : "bg-[#151515]")}>
+      {/* Top spacer */}
+      <div />
+
+      {/* Navigation icons */}
       <div className="flex flex-col items-center gap-6 rounded-2xl border border-[#2A2D35]/60 px-3 py-5" style={{ background: "#1F1F1FCC" }}>
         {/* CleverBrain chat */}
         <button
@@ -955,11 +1046,22 @@ function RightIconBar({
           <Image src="/cleverbrain-chat-icons/hire-ai-employee-icon.png" alt="AI Employees" width={34} height={34} />
         </button>
 
-        {/* Settings */}
-        <Link href="/connectors" title="Settings" className="opacity-70 hover:opacity-100 transition-opacity">
+        {/* Settings / Organization */}
+        <Link href="/settings" title="Settings" className="opacity-70 hover:opacity-100 transition-opacity">
           <Image src="/cleverbrain-chat-icons/organization-icon.png" alt="Settings" width={36} height={36} />
         </Link>
       </div>
+
+      {/* Workspace switcher icon (bottom) */}
+      <button
+        onClick={() => setWsOverlayOpen((v) => !v)}
+        title={currentWorkspace?.name || "Workspace"}
+        className="w-10 h-10 rounded-full bg-[#3A89FF] flex items-center justify-center text-white text-sm font-bold hover:ring-2 hover:ring-[#3A89FF]/40 transition-all"
+      >
+        {wsInitial}
+      </button>
+
+      <WorkspaceSwitcherOverlay open={wsOverlayOpen} onClose={() => setWsOverlayOpen(false)} />
     </div>
   );
 }
