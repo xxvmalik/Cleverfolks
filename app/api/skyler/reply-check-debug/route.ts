@@ -31,16 +31,20 @@ export async function GET(req: NextRequest) {
 
   const diag: Record<string, unknown> = { workspaceId };
 
-  // 1. Check pipeline records awaiting reply
-  const { data: pipelines, error: pipelineErr } = await db
+  // 1. Check ALL pipeline records (including resolved) to show full status
+  const { data: allPipelines, error: pipelineErr } = await db
     .from("skyler_sales_pipeline")
-    .select("id, contact_email, stage, awaiting_reply, last_reply_at, last_email_sent_at")
+    .select("id, contact_email, contact_name, company_name, stage, resolution, awaiting_reply, last_reply_at, last_email_sent_at, emails_sent, emails_replied, cadence_step")
     .eq("workspace_id", workspaceId)
-    .is("resolution", null);
+    .order("updated_at", { ascending: false });
 
-  diag.totalPipelines = pipelines?.length ?? 0;
+  diag.totalPipelines = allPipelines?.length ?? 0;
   diag.pipelineError = pipelineErr?.message ?? null;
-  diag.awaitingReply = (pipelines ?? []).filter((p) => p.awaiting_reply === true);
+  diag.allPipelines = allPipelines ?? [];
+
+  const activePipelines = (allPipelines ?? []).filter((p) => !p.resolution);
+  diag.activePipelines = activePipelines.length;
+  diag.awaitingReply = activePipelines.filter((p) => p.awaiting_reply === true);
   diag.awaitingReplyCount = (diag.awaitingReply as unknown[]).length;
 
   if ((diag.awaitingReply as unknown[]).length === 0) {
