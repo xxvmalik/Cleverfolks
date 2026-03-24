@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { getUserWorkspaces } from "@/lib/workspace";
+import { resolveActiveWorkspace } from "@/lib/active-workspace";
 import { ConnectorsPageClient } from "./connectors-client";
 
 export const metadata = { title: "Connectors" };
@@ -17,11 +18,7 @@ export default async function ConnectorsPage() {
   const { data: memberships } = await getUserWorkspaces(supabase, user.id);
   if (!memberships || memberships.length === 0) redirect("/create-workspace");
 
-  const ws = memberships[0].workspaces as unknown as {
-    id: string;
-    name: string;
-    slug: string;
-  };
+  const ws = await resolveActiveWorkspace(memberships);
 
   const displayName =
     user.user_metadata?.full_name ??

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { getUserWorkspaces } from "@/lib/workspace";
+import { resolveActiveWorkspace } from "@/lib/active-workspace";
 import { SettingsClient } from "./settings-client";
 
 export default async function SettingsPage() {
@@ -11,10 +12,7 @@ export default async function SettingsPage() {
   const { data: memberships } = await getUserWorkspaces(supabase, user.id);
   if (!memberships?.length) redirect("/create-workspace");
 
-  const ws = memberships[0].workspaces as unknown as {
-    id: string;
-    name: string;
-  };
+  const ws = await resolveActiveWorkspace(memberships);
 
   // Load user profile
   const { data: profile } = await supabase
