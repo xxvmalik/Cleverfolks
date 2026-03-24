@@ -294,6 +294,23 @@ async function sendViaGmail(params: {
  * We attempt draft→send first (which gives us the message ID for threading),
  * but fall back to sendMail if it fails (e.g. 403 due to missing Mail.ReadWrite scope).
  */
+/** Extract the real error details from a Nango proxy / Axios error */
+function extractGraphError(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resp = (err as any)?.response;
+  if (resp) {
+    const status = resp.status ?? "?";
+    const body = resp.data;
+    const graphError = body?.error;
+    if (graphError) {
+      return `HTTP ${status}: ${graphError.code ?? "unknown"} — ${graphError.message ?? msg}`;
+    }
+    return `HTTP ${status}: ${typeof body === "string" ? body : JSON.stringify(body)?.slice(0, 500) ?? msg}`;
+  }
+  return msg;
+}
+
 async function sendViaOutlook(params: {
   to: string;
   subject: string;
@@ -320,7 +337,7 @@ async function sendViaOutlook(params: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const status = (verifyErr as any)?.response?.status ?? (verifyErr as any)?.status;
     const is403 = status === 403 || msg.includes("403");
-    console.error(`[email-sender] Outlook connection verification failed (status=${status}):`, msg);
+    console.error(`[email-sender] Outlook connection verification failed:`, extractGraphError(verifyErr));
     if (is403) {
       throw new Error(`Outlook OAuth token lacks email permissions. Go to your Nango dashboard → Outlook integration → add scopes: Mail.Send, Mail.ReadWrite. Then reconnect Outlook in Connectors.`);
     }
@@ -365,7 +382,7 @@ async function sendViaOutlook(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const status = (err as any)?.response?.status ?? (err as any)?.status;
       const is403 = status === 403 || msg.includes("403");
-      console.error(`[email-sender] Draft create failed (useFrom=${useFrom}, status=${status}):`, msg);
+      console.error(`[email-sender] Draft create failed (useFrom=${useFrom}):`, extractGraphError(err));
       if (useFrom && Object.keys(fromField).length > 0 && is403) {
         console.error(`[email-sender] Draft create 403 with from field — retrying without`);
         continue;
@@ -400,8 +417,7 @@ async function sendViaOutlook(params: {
       }
       return { messageId: finalId, outlookMessageId: finalId };
     } catch (sendDraftErr) {
-      const msg = sendDraftErr instanceof Error ? sendDraftErr.message : String(sendDraftErr);
-      console.error(`[email-sender] Draft send failed (403 = missing Mail.Send scope): ${msg} — falling through to sendMail`);
+      console.error(`[email-sender] Draft send failed: ${extractGraphError(sendDraftErr)} — falling through to sendMail`);
       // Delete the unsent draft to avoid clutter
       try {
         await nango.proxy({
@@ -440,7 +456,7 @@ async function sendViaOutlook(params: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const status = (err as any)?.response?.status ?? (err as any)?.status;
       const is403 = status === 403 || msg.includes("403");
-      console.error(`[email-sender] sendMail failed (useFrom=${useFrom}, status=${status}):`, msg);
+      console.error(`[email-sender] sendMail failed (useFrom=${useFrom}):`, extractGraphError(err));
       if (useFrom && Object.keys(fromField).length > 0 && is403) {
         console.error(`[email-sender] sendMail 403 with from field — retrying without`);
         continue;
