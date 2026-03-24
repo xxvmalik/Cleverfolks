@@ -321,117 +321,13 @@ async function sendViaOutlook(params: {
 }): Promise<{ messageId: string; outlookMessageId: string }> {
   const nango = new Nango({ secretKey: process.env.NANGO_SECRET_KEY! });
 
-  // Quick-verify the Nango connection is alive and has mail permissions
-  try {
-    console.error(`[email-sender] sendViaOutlook: verifying connection ${params.connectionId}`);
-    await nango.proxy({
-      method: "GET",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: "/v1.0/me/mailFolders/SentItems?$select=id",
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-    });
-    console.error(`[email-sender] sendViaOutlook: connection verified OK (has mail read access)`);
-  } catch (verifyErr) {
-    const msg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const status = (verifyErr as any)?.response?.status ?? (verifyErr as any)?.status;
-    const is403 = status === 403 || msg.includes("403");
-    console.error(`[email-sender] Outlook connection verification failed:`, extractGraphError(verifyErr));
-    if (is403) {
-      throw new Error(`Outlook OAuth token lacks email permissions. Go to your Nango dashboard → Outlook integration → add scopes: Mail.Send, Mail.ReadWrite. Then reconnect Outlook in Connectors.`);
-    }
-    throw new Error(`Outlook connection is broken or expired (${msg}). Please reconnect Outlook in Connectors.`);
-  }
-
-  // Build the `from` field if we have a display name.
-  // Graph API requires Mail.Send.Shared to set `from` — if the account lacks
-  // that scope the call returns 403, so we try with it and fall back without.
+  // Go straight to sendMail — single API call, most reliable.
+  // The `from` display name requires Mail.Send.Shared at the token level;
+  // if it 403s we retry once without it (Outlook will use the mailbox default name).
   const fromField = params.fromName && params.fromEmail
     ? { from: { emailAddress: { name: params.fromName.replace(/["\r\n]/g, ""), address: params.fromEmail } } }
     : {};
 
-  // Draft→send is the PREFERRED path — it gives us a message ID needed for
-  // createReply threading on follow-ups.  sendMail is a last resort because it
-  // returns no ID and the Sent Items poll is unreliable (Exchange indexing lag).
-  //
-  // If the `from` field triggers 403 (missing Mail.Send.Shared), retry the draft
-  // create WITHOUT `from` so we stay on the draft→send path.
-  let draftId: string | null = null;
-  for (const useFrom of [true, false]) {
-    const extra = useFrom ? fromField : {};
-    try {
-      const draftResponse = await nango.proxy({
-        method: "POST",
-        baseUrlOverride: "https://graph.microsoft.com",
-        endpoint: "/v1.0/me/messages",
-        connectionId: params.connectionId,
-        providerConfigKey: "outlook",
-        data: {
-          subject: params.subject,
-          body: { contentType: "HTML", content: params.htmlBody },
-          toRecipients: [{ emailAddress: { address: params.to } }],
-          ...extra,
-        },
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      draftId = (draftResponse as any)?.data?.id ?? null;
-      if (draftId) break; // got a draft — proceed to send
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const status = (err as any)?.response?.status ?? (err as any)?.status;
-      const is403 = status === 403 || msg.includes("403");
-      console.error(`[email-sender] Draft create failed (useFrom=${useFrom}):`, extractGraphError(err));
-      if (useFrom && Object.keys(fromField).length > 0 && is403) {
-        console.error(`[email-sender] Draft create 403 with from field — retrying without`);
-        continue;
-      }
-      // Non-403 or already retried — fall through to sendMail
-      break;
-    }
-  }
-
-  if (draftId) {
-    // Send the draft — requires Mail.Send scope
-    try {
-      console.error(`[email-sender] Sending draft ${draftId}...`);
-      await nango.proxy({
-        method: "POST",
-        baseUrlOverride: "https://graph.microsoft.com",
-        endpoint: `/v1.0/me/messages/${draftId}/send`,
-        connectionId: params.connectionId,
-        providerConfigKey: "outlook",
-        data: {},
-      });
-
-      console.error(`[email-sender] Outlook draft→send success (draft ID: ${draftId})`);
-
-      // Draft ID becomes stale after send — recover the real Sent Items ID for threading
-      const realSentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
-      const finalId = realSentId ?? draftId;
-      if (realSentId) {
-        console.error(`[email-sender] Recovered real Sent Items ID: ${realSentId}`);
-      } else {
-        console.error(`[email-sender] Could not recover Sent Items ID — using draft ID (threading may break)`);
-      }
-      return { messageId: finalId, outlookMessageId: finalId };
-    } catch (sendDraftErr) {
-      console.error(`[email-sender] Draft send failed: ${extractGraphError(sendDraftErr)} — falling through to sendMail`);
-      // Delete the unsent draft to avoid clutter
-      try {
-        await nango.proxy({
-          method: "DELETE",
-          baseUrlOverride: "https://graph.microsoft.com",
-          endpoint: `/v1.0/me/messages/${draftId}`,
-          connectionId: params.connectionId,
-          providerConfigKey: "outlook",
-        });
-      } catch { /* best effort */ }
-    }
-  }
-
-  // Last resort: sendMail — only requires Mail.Send scope but gives NO message ID.
   for (const useFrom of [true, false]) {
     const extra = useFrom ? fromField : {};
     try {
@@ -450,29 +346,27 @@ async function sendViaOutlook(params: {
           },
         },
       });
-      break;
+
+      console.error(`[email-sender] Outlook sendMail success (useFrom=${useFrom})`);
+
+      // sendMail returns 202 with no body — poll Sent Items for the message ID (needed for threading)
+      const sentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
+      const messageId = sentId ?? `sendmail-${Date.now()}`;
+      return { messageId, outlookMessageId: sentId ?? "" };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const status = (err as any)?.response?.status ?? (err as any)?.status;
-      const is403 = status === 403 || msg.includes("403");
+      const is403 = status === 403 || (err instanceof Error && err.message.includes("403"));
       console.error(`[email-sender] sendMail failed (useFrom=${useFrom}):`, extractGraphError(err));
       if (useFrom && Object.keys(fromField).length > 0 && is403) {
-        console.error(`[email-sender] sendMail 403 with from field — retrying without`);
-        continue;
-      }
-      if (!useFrom && is403) {
-        throw new Error(`Outlook 403 on sendMail without from field — the OAuth token likely lacks Mail.Send scope. Please reconnect Outlook in Connectors and ensure mail permissions are granted.`);
+        continue; // retry without from
       }
       throw err;
     }
   }
 
-  // sendMail returns 202 with no body — poll Sent Items with longer delay for Exchange indexing
-  const sentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
-  const messageId = sentId ?? `sendmail-${Date.now()}`;
-  console.log(`[email-sender] Outlook sendMail success${sentId ? `: ${sentId}` : " (no ID recovered — threading may break for follow-ups)"}`);
-  return { messageId, outlookMessageId: sentId ?? "" };
+  // Should never reach here, but just in case
+  throw new Error("Outlook sendMail failed after all attempts");
 }
 
 /** After sendMail, try to find the sent message ID for threading future replies. */
