@@ -204,7 +204,7 @@ export async function PATCH(req: NextRequest) {
   const db = createAdminSupabaseClient();
   const { data, error } = await db
     .from("skyler_requests")
-    .update({ status: "dismissed" })
+    .update({ status: "expired" })
     .eq("id", requestId)
     .select("id")
     .maybeSingle();
