@@ -899,8 +899,8 @@ async function handleSalesCloserTool(
     const sent = all.reduce((s, r) => s + ((r.emails_sent as number) ?? 0), 0);
     const opened = all.reduce((s, r) => s + ((r.emails_opened as number) ?? 0), 0);
     const replied = all.reduce((s, r) => s + ((r.emails_replied as number) ?? 0), 0);
-    const meetings = all.filter((r) => r.resolution === "meeting_booked").length;
-    const demos = all.filter((r) => r.resolution === "demo_booked").length;
+    const meetings = all.filter((r) => r.stage === "meeting_booked" || r.resolution === "meeting_booked").length;
+    const demos = all.filter((r) => r.stage === "demo_booked" || r.resolution === "demo_booked").length;
     const payments = all.filter((r) => r.resolution === "payment_secured").length;
     const won = all.filter((r) => r.stage === "closed_won").length;
 

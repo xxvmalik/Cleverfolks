@@ -3,7 +3,7 @@
  * Matches calendar event attendees against active pipeline contacts.
  *
  * When a meeting is found with a pipeline lead, atomically updates the
- * pipeline record: resolution → meeting_booked, stage → demo_booked.
+ * pipeline record: stage → meeting_booked (no resolution — lead stays active).
  *
  * Dedup: atomic WHERE resolution IS NULL + unique index on meeting_event_id.
  * Never throws — returns { detected: false } on any error.

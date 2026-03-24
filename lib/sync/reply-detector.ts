@@ -44,8 +44,9 @@ export async function detectPipelineReply(
 
     if (!senderEmail) return { is_reply: false };
 
-    // Check if this sender has an active pipeline record (unresolved OR no_response)
-    // no_response leads can be re-engaged when they reply
+    // Check if this sender has an active pipeline record.
+    // "Active" means: unresolved, OR resolved as meeting_booked/demo_booked (still engaged),
+    // OR resolved as no_response (can be re-engaged when they reply).
     const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at";
 
     const { data: active } = await db
@@ -59,18 +60,21 @@ export async function detectPipelineReply(
     let pipeline = active;
 
     if (!pipeline) {
-      // Check for no_response leads that can be re-engaged
-      const { data: dormant } = await db
+      // Check for meeting_booked/demo_booked leads (engaged, not truly resolved)
+      // and no_response leads (can be re-engaged)
+      const { data: engaged } = await db
         .from("skyler_sales_pipeline")
         .select(pipelineFields)
         .eq("workspace_id", workspaceId)
         .eq("contact_email", senderEmail)
-        .eq("resolution", "no_response")
+        .in("resolution", ["meeting_booked", "demo_booked", "no_response"])
+        .order("updated_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
-      if (dormant) {
-        pipeline = dormant;
-        console.log(`[reply-detector] Re-engaging no_response lead ${dormant.id} from ${senderEmail}`);
+      if (engaged) {
+        pipeline = engaged;
+        console.log(`[reply-detector] Found ${engaged.resolution} lead ${engaged.id} from ${senderEmail} — treating as active`);
       }
     }
 

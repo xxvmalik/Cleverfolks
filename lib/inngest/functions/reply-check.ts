@@ -28,13 +28,25 @@ export const replyCheckScheduler = inngest.createFunction(
     const workspaces = await step.run("find-active-workspaces", async () => {
       const db = createAdminSupabaseClient();
 
-      // Get distinct workspace IDs that have unresolved pipeline records
-      const { data, error } = await db
+      // Get distinct workspace IDs that have active pipeline records.
+      // Include meeting_booked/demo_booked — these are engaged, not truly resolved.
+      const { data: unresolved } = await db
         .from("skyler_sales_pipeline")
         .select("workspace_id")
         .is("resolution", null)
         .eq("awaiting_reply", true)
         .limit(100);
+
+      const { data: engaged } = await db
+        .from("skyler_sales_pipeline")
+        .select("workspace_id")
+        .in("resolution", ["meeting_booked", "demo_booked"])
+        .eq("awaiting_reply", true)
+        .limit(50);
+
+      const allRows = [...(unresolved ?? []), ...(engaged ?? [])];
+      const data = allRows;
+      const error = null;
 
       if (error || !data) return [];
 
@@ -78,13 +90,24 @@ async function checkWorkspaceReplies(workspaceId: string): Promise<number> {
   if (!integration?.nango_connection_id) return 0;
 
   // Get active pipeline contacts for this workspace
-  const { data: pipelines } = await db
+  // Include meeting_booked/demo_booked — still engaged leads
+  const { data: unresolvedContacts } = await db
     .from("skyler_sales_pipeline")
     .select("contact_email")
     .eq("workspace_id", workspaceId)
     .is("resolution", null)
     .eq("awaiting_reply", true)
     .limit(50);
+
+  const { data: engagedContacts } = await db
+    .from("skyler_sales_pipeline")
+    .select("contact_email")
+    .eq("workspace_id", workspaceId)
+    .in("resolution", ["meeting_booked", "demo_booked"])
+    .eq("awaiting_reply", true)
+    .limit(50);
+
+  const pipelines = [...(unresolvedContacts ?? []), ...(engagedContacts ?? [])];
 
   if (!pipelines || pipelines.length === 0) return 0;
 
