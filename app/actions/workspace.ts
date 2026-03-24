@@ -6,7 +6,7 @@ import { createWorkspace } from "@/lib/workspace";
 
 export async function createWorkspaceAction(
   name: string
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; workspaceId?: string }> {
   const supabase = await createServerSupabaseClient();
 
   const {
@@ -18,13 +18,53 @@ export async function createWorkspaceAction(
     return { error: "Not authenticated. Please sign in again." };
   }
 
-  const { error } = await createWorkspace(supabase, name);
+  const { data: workspaceId, error } = await createWorkspace(supabase, name);
 
   if (error) {
     return { error: error.message };
   }
 
-  return {};
+  if (!workspaceId) {
+    // RPC succeeded but returned no ID — workspace wasn't actually created
+    // Fall back to direct insert via admin client
+    console.error("[create-workspace] RPC returned no workspace ID — falling back to direct insert");
+    const admin = createAdminSupabaseClient();
+    const slug = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "").replace(/-+/g, "-");
+
+    const { data: inserted, error: insertErr } = await admin
+      .from("workspaces")
+      .insert({ name, slug })
+      .select("id")
+      .single();
+
+    if (insertErr || !inserted) {
+      return { error: insertErr?.message ?? "Failed to create workspace" };
+    }
+
+    // Create membership for the user
+    const { error: memberErr } = await admin
+      .from("workspace_memberships")
+      .insert({ workspace_id: inserted.id, user_id: user.id, role: "owner" });
+
+    if (memberErr) {
+      return { error: memberErr.message };
+    }
+
+    return { workspaceId: inserted.id };
+  }
+
+  // Verify the workspace actually exists
+  const { data: verified } = await supabase
+    .from("workspaces")
+    .select("id")
+    .eq("id", workspaceId)
+    .single();
+
+  if (!verified) {
+    return { error: "Workspace creation appeared to succeed but workspace not found. Please try again." };
+  }
+
+  return { workspaceId };
 }
 
 /**

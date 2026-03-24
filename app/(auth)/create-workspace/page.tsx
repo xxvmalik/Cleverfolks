@@ -36,6 +36,11 @@ export default function CreateWorkspacePage() {
         throw new Error(result.error);
       }
 
+      if (!result.workspaceId) {
+        throw new Error("Workspace was created but no ID was returned. Please refresh and try again.");
+      }
+
+      console.log("[create-workspace] Created workspace:", result.workspaceId);
       router.push("/");
     } catch (err: unknown) {
       const msg =
