@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:docs.recall.ai)",
+      "Bash(grep:*)",
+      "Bash(npm run:*)",
+      "Bash(npx next:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(wc:*)",
+      "Bash(npx tsc:*)",
+      "Bash(find /c/Users/admin/cleverfolksnew -name \"*skyler-step*\" -type f 2>/dev/null | head -20)",
+      "Bash(ls -la /c/Users/admin/cleverfolksnew/app/\\\\\\(app\\\\\\)/cleverbrain/)",
+      "Bash(ls -la /c/Users/admin/cleverfolksnew/app/\\\\\\(app\\\\\\)/workspace/)",
+      "Bash(ls -la /c/Users/admin/cleverfolksnew/app/\\\\\\(app\\\\\\)/connectors/)",
+      "Bash(cd /c/Users/admin/cleverfolksnew && rm -rf \"app/\\(app\\)/integrations\" \"app/\\(app\\)/settings\" \"app/\\(app\\)/workspace\")",
+      "Bash(cd /c/Users/admin/cleverfolksnew && rm -rf components/integrations)",
+      "Bash(find \"/c/Users/admin/cleverfolksnew\" -type f -name \"*email*\" 2>/dev/null | head -20)",
+      "Bash(while read f)",
+      "Bash(do if grep -q skyler $f)",
+      "Bash(then echo '=== $f ===')",
+      "Read(//c/Users/admin/cleverfolksnew/**)",
+      "Bash(fi)",
+      "Bash(done)"
+    ]
+  }
+}

@@ -600,12 +600,6 @@ export function ConnectorsView({
       return;
     }
 
-    // Outlook: direct OAuth with prompt=consent to ensure all scopes are granted
-    if (provider === "outlook") {
-      window.location.href = `/api/outlook/authorize?workspaceId=${workspaceId}`;
-      return;
-    }
-
     setConnectingProvider(provider);
     try {
       const tokenRes = await fetch("/api/nango-session", {
