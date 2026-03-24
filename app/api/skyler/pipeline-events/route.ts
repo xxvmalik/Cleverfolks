@@ -26,7 +26,11 @@ export async function GET(req: NextRequest) {
     .order("created_at", { ascending: true })
     .limit(100);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Table may not exist yet — return empty array instead of 500
+  if (error) {
+    console.warn("[pipeline-events] Query error (table may not exist):", error.message);
+    return NextResponse.json({ events: [] });
+  }
 
   return NextResponse.json({ events: data ?? [] });
 }
