@@ -123,22 +123,25 @@ async function getEmailProvider(
   workspaceId: string
 ): Promise<{ provider: EmailProvider; connectionId: string } | null> {
   // Check for connected Gmail or Outlook integration
-  const { data: integrations } = await db
+  const { data: integrations, error: intErr } = await db
     .from("integrations")
-    .select("provider, nango_connection_id")
+    .select("provider, nango_connection_id, status")
     .eq("workspace_id", workspaceId)
-    .eq("status", "connected")
     .in("provider", ["google-mail", "outlook"]);
 
-  if (!integrations || integrations.length === 0) return null;
+  console.error(`[email-sender] getEmailProvider: workspace=${workspaceId} found=${integrations?.length ?? 0} err=${intErr?.message ?? "none"} rows=${JSON.stringify(integrations)}`);
+
+  // Filter to connected only
+  const connected = (integrations ?? []).filter((i) => i.status === "connected");
+  if (connected.length === 0) return null;
 
   // Prefer Outlook, fall back to Gmail
-  const outlook = integrations.find((i) => i.provider === "outlook");
+  const outlook = connected.find((i) => i.provider === "outlook");
   if (outlook?.nango_connection_id) {
     return { provider: "outlook", connectionId: outlook.nango_connection_id };
   }
 
-  const gmail = integrations.find((i) => i.provider === "google-mail");
+  const gmail = connected.find((i) => i.provider === "google-mail");
   if (gmail?.nango_connection_id) {
     return { provider: "google-mail", connectionId: gmail.nango_connection_id };
   }
@@ -373,27 +376,43 @@ async function sendViaOutlook(params: {
   }
 
   if (draftId) {
-    // Send the draft
-    await nango.proxy({
-      method: "POST",
-      baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/messages/${draftId}/send`,
-      connectionId: params.connectionId,
-      providerConfigKey: "outlook",
-      data: {},
-    });
+    // Send the draft — requires Mail.Send scope
+    try {
+      console.error(`[email-sender] Sending draft ${draftId}...`);
+      await nango.proxy({
+        method: "POST",
+        baseUrlOverride: "https://graph.microsoft.com",
+        endpoint: `/v1.0/me/messages/${draftId}/send`,
+        connectionId: params.connectionId,
+        providerConfigKey: "outlook",
+        data: {},
+      });
 
-    console.log(`[email-sender] Outlook draft→send success (draft ID: ${draftId})`);
+      console.error(`[email-sender] Outlook draft→send success (draft ID: ${draftId})`);
 
-    // Draft ID becomes stale after send — recover the real Sent Items ID for threading
-    const realSentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
-    const finalId = realSentId ?? draftId;
-    if (realSentId) {
-      console.log(`[email-sender] Recovered real Sent Items ID: ${realSentId}`);
-    } else {
-      console.warn(`[email-sender] Could not recover Sent Items ID — using draft ID (threading may break)`);
+      // Draft ID becomes stale after send — recover the real Sent Items ID for threading
+      const realSentId = await findSentMessageId(nango, params.connectionId, params.subject, params.to);
+      const finalId = realSentId ?? draftId;
+      if (realSentId) {
+        console.error(`[email-sender] Recovered real Sent Items ID: ${realSentId}`);
+      } else {
+        console.error(`[email-sender] Could not recover Sent Items ID — using draft ID (threading may break)`);
+      }
+      return { messageId: finalId, outlookMessageId: finalId };
+    } catch (sendDraftErr) {
+      const msg = sendDraftErr instanceof Error ? sendDraftErr.message : String(sendDraftErr);
+      console.error(`[email-sender] Draft send failed (403 = missing Mail.Send scope): ${msg} — falling through to sendMail`);
+      // Delete the unsent draft to avoid clutter
+      try {
+        await nango.proxy({
+          method: "DELETE",
+          baseUrlOverride: "https://graph.microsoft.com",
+          endpoint: `/v1.0/me/messages/${draftId}`,
+          connectionId: params.connectionId,
+          providerConfigKey: "outlook",
+        });
+      } catch { /* best effort */ }
     }
-    return { messageId: finalId, outlookMessageId: finalId };
   }
 
   // Last resort: sendMail — only requires Mail.Send scope but gives NO message ID.
