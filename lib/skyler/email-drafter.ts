@@ -614,14 +614,41 @@ export async function draftEmail(params: {
 
   try {
     const parsed = parseAIJson<DraftedEmail>(text);
+    // Validate required fields exist and aren't AI reasoning artifacts
+    if (!parsed.textBody || !parsed.subject) {
+      throw new Error("Missing required fields in parsed email");
+    }
     console.log(`[email-drafter] Drafted: "${parsed.subject}" (${parsed.textBody.split(/\s+/).length} words)`);
     return parsed;
-  } catch {
-    console.warn("[email-drafter] Failed to parse JSON, using raw text as body");
-    return {
-      subject: `following up`,
-      textBody: text,
-      htmlBody: `<p>${text.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`,
-    };
+  } catch (parseErr) {
+    console.warn("[email-drafter] JSON parse failed, attempting to extract clean email from response");
+    console.warn("[email-drafter] Parse error:", parseErr instanceof Error ? parseErr.message : parseErr);
+    console.warn("[email-drafter] Raw response (first 500 chars):", text.slice(0, 500));
+
+    // Try to salvage: strip out any JSON blocks, code fences, and AI reasoning markers
+    let cleanedBody = text
+      // Remove ```json ... ``` blocks
+      .replace(/```(?:json)?\s*\n?[\s\S]*?\n?\s*```/g, "")
+      // Remove lines that look like AI reasoning (common patterns)
+      .replace(/^(?:Looking at|Let me|I (?:notice|see|think|should|need|will)|Based on|Here's|Analyzing).*$/gm, "")
+      // Remove JSON-like fragments
+      .replace(/\{[\s\S]*?"(?:subject|textBody|htmlBody)"[\s\S]*?\}/g, "")
+      // Clean up excess whitespace
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    // If cleanup left us with something reasonable, use it; otherwise retry with a simpler prompt
+    if (cleanedBody.length > 20 && cleanedBody.length < 2000) {
+      console.warn("[email-drafter] Using cleaned text as fallback body");
+      return {
+        subject: "following up",
+        textBody: cleanedBody,
+        htmlBody: `<p>${cleanedBody.replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`,
+      };
+    }
+
+    // Last resort: the response was too garbled. Throw so caller knows draft failed.
+    console.error("[email-drafter] Could not extract usable email from AI response — draft failed");
+    throw new Error("Email draft generation failed: AI response was not parseable as an email. Please try again.");
   }
 }

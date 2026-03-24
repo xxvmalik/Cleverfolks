@@ -119,14 +119,27 @@ async function executeDraftEmail(ctx: ExecutionContext): Promise<ExecutionResult
     return { success: false, action: "draft_email", error: "No email_content in decision" };
   }
 
+  // Sanitise email content — strip AI reasoning artifacts that sometimes leak in
+  let emailContent = params.email_content;
+  // Remove lines that look like AI reasoning prefixes (not part of an actual email)
+  emailContent = emailContent
+    .replace(/^(?:```(?:json)?|```)\s*$/gm, "") // code fences
+    .replace(/^(?:Looking at|Let me|I (?:notice|see|think|should|need|will)|Based on|Here's my|Analyzing|After reviewing).*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  let emailSubject = params.email_subject ?? "Follow-up";
+  // Strip quotes that AI sometimes wraps subjects in
+  emailSubject = emailSubject.replace(/^["']|["']$/g, "");
+
   // Store as pending action using existing mechanism (Approve/Reject UI)
   const { actionId } = await draftOutreachEmail(db, {
     workspaceId,
     pipelineId: pipeline.id,
     to: pipeline.contact_email,
-    subject: params.email_subject ?? "Follow-up",
-    htmlBody: params.email_content.replace(/\n/g, "<br>"),
-    textBody: params.email_content,
+    subject: emailSubject,
+    htmlBody: emailContent.replace(/\n/g, "<br>"),
+    textBody: emailContent,
   });
 
   // Notify

@@ -200,8 +200,10 @@ ${channelSampleLines || "  (no samples)"}
 
 Analyze this data and build a comprehensive company knowledge profile.
 
-BUSINESS ANALYSIS (critical):
-Analyse the operational data carefully to determine what this business SELLS. Look at order complaints, payment discussions, product references, pricing mentions, and customer conversations to identify the actual products and services. For example, if you see discussions about Instagram followers, TikTok likes, or social media orders, the business is likely an SMM panel selling social media marketing services.
+BUSINESS ANALYSIS:
+${onboarding?.products && onboarding.products.length > 0
+    ? `The business owner has already provided their products/services in the onboarding data above. Do NOT infer or override what the business sells — use the onboarding data exactly as provided for the "business_summary" and "services" fields. Focus your analysis on team roles, channels, workflows, and operational patterns.`
+    : `Analyse the operational data carefully to determine what this business SELLS. Look at order complaints, payment discussions, product references, pricing mentions, and customer conversations to identify the actual products and services. For example, if you see discussions about Instagram followers, TikTok likes, or social media orders, the business is likely an SMM panel selling social media marketing services.`}
 
 For each team member, assess their role based ONLY on BEHAVIORAL signals:
 - High directive_count + high @-mention count → likely a manager, lead, or decision-maker
@@ -262,9 +264,9 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
   },
   { event: "knowledge/profile.build" },
   async ({ event, step }) => {
-    const { workspaceId } = event.data as { workspaceId: string };
+    const { workspaceId, force } = event.data as { workspaceId: string; force?: boolean };
 
-    console.log(`[knowledge-profile] Starting build for workspace ${workspaceId}`);
+    console.log(`[knowledge-profile] Starting build for workspace ${workspaceId}${force ? " (forced)" : ""}`);
 
     try {
       // ── Guard: 24-hour cooldown (runs FIRST, before any expensive work) ──
@@ -280,7 +282,8 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
         const lastBuildTime = settings.last_profile_build_at as string | undefined;
         const lastProfileHash = settings.last_profile_hash as string | undefined;
 
-        // Quick content hash: chunk count + latest updated_at
+        // Quick content hash: chunk count + latest updated_at + onboarding data
+        // Includes onboarding so completing/updating onboarding forces a rebuild
         const { count } = await db
           .from("document_chunks")
           .select("*", { count: "exact", head: true })
@@ -293,21 +296,30 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
           .limit(1)
           .single();
 
+        // Hash onboarding fields so profile rebuilds when business data changes
+        const bp = (settings.business_profile ?? {}) as Record<string, string>;
+        const products = (settings.products ?? []) as Array<{ name?: string }>;
+        const onboardingFingerprint = `${bp.company_name ?? ""}-${bp.company_description ?? ""}-${bp.industry ?? ""}-${products.length}`;
+
         const quickHash = createHash("sha256")
-          .update(`${count ?? 0}-${latest?.updated_at ?? ""}`)
+          .update(`${count ?? 0}-${latest?.updated_at ?? ""}-${onboardingFingerprint}`)
           .digest("hex");
 
-        if (lastBuildTime) {
-          const hoursSince = (Date.now() - new Date(lastBuildTime).getTime()) / (1000 * 60 * 60);
-          if (hoursSince < 24) {
-            console.log(`[Knowledge Profile] Skipping rebuild — last build was ${hoursSince.toFixed(1)} hours ago`);
-            return { skip: true, reason: "cooldown", quickHash };
+        if (!force) {
+          if (lastBuildTime) {
+            const hoursSince = (Date.now() - new Date(lastBuildTime).getTime()) / (1000 * 60 * 60);
+            if (hoursSince < 24) {
+              console.log(`[Knowledge Profile] Skipping rebuild — last build was ${hoursSince.toFixed(1)} hours ago`);
+              return { skip: true, reason: "cooldown", quickHash };
+            }
           }
-        }
 
-        if (lastProfileHash === quickHash) {
-          console.log(`[Knowledge Profile] Skipping rebuild — data unchanged (hash: ${quickHash.slice(0, 8)}...)`);
-          return { skip: true, reason: "unchanged", quickHash };
+          if (lastProfileHash === quickHash) {
+            console.log(`[Knowledge Profile] Skipping rebuild — data unchanged (hash: ${quickHash.slice(0, 8)}...)`);
+            return { skip: true, reason: "unchanged", quickHash };
+          }
+        } else {
+          console.log(`[Knowledge Profile] Force rebuild requested — skipping cooldown and hash checks`);
         }
 
         console.log(`[Knowledge Profile] Guards passed — proceeding with build (hash: ${quickHash.slice(0, 8)}...)`);
@@ -484,11 +496,40 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
           return {} as Record<string, unknown>;
         }
 
+        // ── Enforce onboarding ground truth for business identity ──
+        // GPT can analyze team/channels/patterns, but business_summary and
+        // services come directly from what the owner entered in onboarding.
+        // This prevents GPT from hallucinating a different business.
+        if (onboarding) {
+          const hasProducts = onboarding.products && onboarding.products.length > 0;
+          const hasDescription = !!onboarding.companyDescription;
+
+          if (hasDescription || onboarding.companyName) {
+            const parts: string[] = [];
+            if (onboarding.companyName) parts.push(onboarding.companyName);
+            if (onboarding.companyDescription) {
+              parts.push(onboarding.companyDescription);
+            }
+            if (onboarding.industry) parts.push(`Industry: ${onboarding.industry}.`);
+            if (onboarding.targetAudience) parts.push(`Target audience: ${onboarding.targetAudience}.`);
+            parsed.business_summary = parts.join(". ");
+            console.log(`[knowledge-profile] Enforced business_summary from onboarding (not GPT inference)`);
+          }
+
+          if (hasProducts) {
+            parsed.services = onboarding.products!.map((p) => ({
+              name: p.name ?? "Unnamed",
+              description: p.description ?? "",
+            }));
+            console.log(`[knowledge-profile] Enforced ${onboarding.products!.length} services from onboarding (not GPT inference)`);
+          }
+        }
+
         const memberCount = (parsed.team_members as unknown[] | undefined)?.length ?? 0;
         const channelCount = (parsed.channels as unknown[] | undefined)?.length ?? 0;
         const serviceCount = (parsed.services as unknown[] | undefined)?.length ?? 0;
         const hasSummary = !!parsed.business_summary;
-        console.log(`[knowledge-profile] GPT-4o-mini returned: ${memberCount} members, ${channelCount} channels, ${serviceCount} services, summary=${hasSummary}`);
+        console.log(`[knowledge-profile] Final profile: ${memberCount} members, ${channelCount} channels, ${serviceCount} services, summary=${hasSummary}`);
         return parsed;
       });
 
@@ -538,6 +579,31 @@ export const buildKnowledgeProfileFunction = inngest.createFunction(
           console.log(
             `[knowledge-profile] Profile rebuilt and hash saved (${status}) — workspace ${workspaceId}`
           );
+
+          // ── Invalidate downstream caches that depend on the profile ──
+          // Company research on pipeline records was built against the OLD profile.
+          // Clear it so it re-researches with the corrected business context.
+          const { data: clearedResearch } = await db
+            .from("skyler_sales_pipeline")
+            .update({ company_research: null, research_updated_at: null })
+            .eq("workspace_id", workspaceId)
+            .not("company_research", "is", null)
+            .select("id");
+          if (clearedResearch && clearedResearch.length > 0) {
+            console.log(`[knowledge-profile] Cleared stale company_research on ${clearedResearch.length} pipeline records`);
+          }
+
+          // Clear cached sales playbook so it rebuilds from the new profile
+          const { data: clearedPlaybook } = await db
+            .from("workspace_memories")
+            .update({ superseded_by: "profile-rebuild-" + new Date().toISOString() })
+            .eq("workspace_id", workspaceId)
+            .eq("type", "sales_playbook")
+            .is("superseded_by", null)
+            .select("id");
+          if (clearedPlaybook && clearedPlaybook.length > 0) {
+            console.log(`[knowledge-profile] Invalidated ${clearedPlaybook.length} cached sales playbook(s)`);
+          }
         } else {
           console.warn("[knowledge-profile] Profile was empty — NOT saving hash/timestamp so rebuild can retry");
         }

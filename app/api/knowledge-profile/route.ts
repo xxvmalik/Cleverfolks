@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
 
   await inngest.send({
     name: "knowledge/profile.build",
-    data: { workspaceId },
+    data: { workspaceId, force: true },
   });
 
   return Response.json({ ok: true, message: "Knowledge profile build triggered" });
