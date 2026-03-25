@@ -93,13 +93,16 @@ export async function detectPipelineReply(
     // Content dedup: check if this reply already exists in the conversation thread.
     // The sync processor recreates chunks every cycle, so the same email will be
     // re-detected after the 5-minute atomic lock expires. Compare content to prevent duplicates.
+    // NOTE: The same email can arrive with different formatting (with/without headers),
+    // so we normalize by stripping email metadata before comparing.
     const existingThread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
     const replyContent = record.content.slice(0, 3000);
+    const normalizedReply = normalizeReplyContent(replyContent);
     const isDuplicate = existingThread.some(
       (entry) =>
         entry.role === "prospect" &&
         typeof entry.content === "string" &&
-        (entry.content as string).slice(0, 200) === replyContent.slice(0, 200)
+        isSameReply(entry.content as string, normalizedReply)
     );
     console.log(`[reply-detector] Content dedup: isDuplicate=${isDuplicate}, threadEntries=${existingThread.length}, prospectEntries=${existingThread.filter(e => e.role === "prospect").length}`);
 
@@ -224,4 +227,54 @@ export async function detectPipelineReply(
     );
     return { is_reply: false };
   }
+}
+
+// ── Content normalization helpers ────────────────────────────────────────────
+
+/** Email header patterns that vary between sync cycles */
+const HEADER_PATTERNS = [
+  /^From:\s*.+$/gm,
+  /^To:\s*.+$/gm,
+  /^Cc:\s*.+$/gm,
+  /^Subject:\s*.+$/gm,
+  /^Date:\s*.+$/gm,
+  /^Sent:\s*.+$/gm,
+  /^[\w-]+:\s*.+→.+$/gm,                            // "From: x → To: y" compact headers
+  /On\s+.{10,60}\s+wrote:\s*/gi,                     // "On Wed, Mar 25... wrote:"
+  /^-{2,}\s*(?:Original|Forwarded)\s+Message\s*-{2,}$/gm, // ---- Original Message ----
+  /^>{1,}\s*/gm,                                     // Quoted text markers
+];
+
+/**
+ * Strip email headers and metadata from reply content to get the actual reply body.
+ * This ensures the same email detected with/without headers still deduplicates.
+ */
+function normalizeReplyContent(content: string): string {
+  let normalized = content;
+  for (const pattern of HEADER_PATTERNS) {
+    normalized = normalized.replace(pattern, "");
+  }
+  // Collapse whitespace and trim
+  return normalized.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * Check if two reply contents are the same email.
+ * Normalizes both, then checks if one contains the other's core text.
+ */
+function isSameReply(existingContent: string, normalizedNewReply: string): boolean {
+  const normalizedExisting = normalizeReplyContent(existingContent);
+
+  // Direct match on first 150 normalized chars
+  if (normalizedExisting.slice(0, 150) === normalizedNewReply.slice(0, 150)) {
+    return true;
+  }
+
+  // Substring match: the core reply text (first 80 chars) appears in the other
+  const coreNew = normalizedNewReply.slice(0, 80);
+  const coreExisting = normalizedExisting.slice(0, 80);
+  if (coreNew.length > 15 && normalizedExisting.includes(coreNew)) return true;
+  if (coreExisting.length > 15 && normalizedNewReply.includes(coreExisting)) return true;
+
+  return false;
 }
