@@ -553,11 +553,17 @@ ${replyContent.slice(0, 2000)}`,
     const proactiveNote = await step.run("check-proactive-actions", async () => {
       const db = createAdminSupabaseClient();
       const contactName = pipeline.contact_name as string;
+      const currentStage = pipeline.stage as string;
+
+      // Skip meeting-related notes if pipeline is already in meeting_booked stage
+      // (avoids redundant "Want me to book?" notes on repeat processing)
+      const alreadyMeetingBooked = currentStage === "meeting_booked" || currentStage === "demo_booked";
 
       // Meeting signals: explicit accept OR meeting-related keywords
       if (
+        !alreadyMeetingBooked && (
         classification.intent === "meeting_accept" ||
-        /\b(tomorrow|let'?s chat|schedule|call me|let'?s meet|book a time|works for me|i'?m free)\b/i.test(replyContent)
+        /\b(tomorrow|let'?s chat|schedule|call me|let'?s meet|book a time|works for me|i'?m free)\b/i.test(replyContent))
       ) {
         // Check if calendar integration is connected
         const { data: connections } = await db
@@ -735,6 +741,14 @@ ${replyContent.slice(0, 2000)}`,
           .neq("stage", STAGES.MEETING_BOOKED)
           .select("id")
           .maybeSingle();
+
+        // Auto-resolve any stale "request_info" requests for this lead
+        // (e.g., "missing meeting link" from earlier processing before the meeting was booked)
+        await db
+          .from("skyler_requests")
+          .update({ status: "resolved" })
+          .eq("pipeline_id", pipelineId)
+          .eq("status", "pending");
 
         if (updated) {
           console.log(`[Pipeline Reply] Meeting accepted by ${contactEmail} — pipeline marked meeting_booked`);
