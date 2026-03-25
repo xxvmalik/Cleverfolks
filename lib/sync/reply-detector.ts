@@ -16,6 +16,48 @@ import { extractSenderFromText, extractSenderFromMetadata } from "./email-prefil
 import { stageOnReply } from "@/lib/skyler/pipeline-stages";
 import { logAgentActivity } from "@/lib/agent-activity";
 
+// ── Recipient extraction helpers ────────────────────────────────────────────
+
+/**
+ * Extract the "To" email address(es) from email metadata or content.
+ * Returns a lowercase array of recipient emails, or null if not found.
+ */
+function extractRecipients(
+  content: string,
+  metadata?: Record<string, unknown>
+): string[] | null {
+  const recipients: string[] = [];
+
+  // 1. From metadata (Outlook: toRecipients array, Gmail: to header)
+  if (metadata) {
+    // Outlook format: toRecipients: [{ emailAddress: { address: "..." } }]
+    const toRecipients = metadata.toRecipients ?? metadata.to_recipients;
+    if (Array.isArray(toRecipients)) {
+      for (const r of toRecipients) {
+        const addr =
+          (r as Record<string, unknown>)?.emailAddress &&
+          ((r as Record<string, unknown>).emailAddress as Record<string, unknown>)?.address;
+        if (typeof addr === "string") recipients.push(addr.toLowerCase());
+      }
+    }
+
+    // Simple "to" field (string or object)
+    const to = metadata.to;
+    if (typeof to === "string") {
+      const emails = to.match(/[^\s<>,;]+@[^\s<>,;]+/g);
+      if (emails) recipients.push(...emails.map((e) => e.toLowerCase()));
+    }
+  }
+
+  // 2. From content text: "To: email@..." or "→ To: email@..."
+  if (recipients.length === 0) {
+    const toMatch = content.match(/(?:→\s*)?To:\s*(?:[^<\n]*<)?([^\s>→|,\n]+@[^\s>→|,\n]+)/i);
+    if (toMatch) recipients.push(toMatch[1].toLowerCase().trim());
+  }
+
+  return recipients.length > 0 ? recipients : null;
+}
+
 export type ReplyDetectionResult = {
   is_reply: boolean;
   pipeline_id?: string;
@@ -53,7 +95,7 @@ export async function detectPipelineReply(
     // Check if this sender has an active pipeline record.
     // "Active" means: unresolved, OR resolved as meeting_booked/demo_booked (still engaged),
     // OR resolved as no_response (can be re-engaged when they reply).
-    const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at";
+    const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at, created_at";
 
     const { data: active } = await db
       .from("skyler_sales_pipeline")
@@ -90,6 +132,63 @@ export async function detectPipelineReply(
     }
 
     console.log(`[reply-detector] Found pipeline ${pipeline.id} (resolution: ${pipeline.resolution}, last_reply_at: ${pipeline.last_reply_at})`);
+
+    // ── Guard 1: Recipient check ──────────────────────────────────────────
+    // The email must be addressed TO the workspace owner, not to a third party.
+    // This prevents matching unrelated emails that happen to be FROM a lead's
+    // email address (e.g. the lead emailing their bank, which got synced).
+    const recipients = extractRecipients(record.content, record.metadata);
+    if (recipients) {
+      // Fetch workspace owner's email to verify this email was sent to us
+      const { data: ownerData } = await db
+        .from("workspace_memberships")
+        .select("profiles(email)")
+        .eq("workspace_id", workspaceId)
+        .eq("role", "owner")
+        .limit(1)
+        .single();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const prof = (ownerData as any)?.profiles;
+      const ownerEmail: string | null = (
+        Array.isArray(prof) ? prof[0]?.email : prof?.email
+      )?.toLowerCase() ?? null;
+
+      if (ownerEmail) {
+        const sentToOwner = recipients.some(
+          (r) => r === ownerEmail || r.includes(ownerEmail.split("@")[0])
+        );
+        if (!sentToOwner) {
+          console.log(
+            `[reply-detector] Skipping — email from ${senderEmail} was sent to [${recipients.join(", ")}], not to workspace owner (${ownerEmail})`
+          );
+          return { is_reply: false };
+        }
+      }
+    }
+    // If we can't extract recipients (no To header), continue — the email
+    // came through a path that already filtered to inbox (reply-check cron).
+
+    // ── Guard 2: Timing check ─────────────────────────────────────────────
+    // Only match emails received AFTER the pipeline record was created.
+    // This prevents old emails (synced from before the lead was added)
+    // from being falsely detected as replies.
+    const pipelineCreatedAt = pipeline.created_at as string | undefined;
+    const emailDate =
+      (record.metadata?.receivedDateTime as string) ??
+      (record.metadata?.date as string) ??
+      (record.metadata?.created_at as string);
+
+    if (pipelineCreatedAt && emailDate) {
+      const pipelineTime = new Date(pipelineCreatedAt).getTime();
+      const emailTime = new Date(emailDate).getTime();
+      if (emailTime < pipelineTime) {
+        console.log(
+          `[reply-detector] Skipping — email date (${emailDate}) is before pipeline creation (${pipelineCreatedAt})`
+        );
+        return { is_reply: false };
+      }
+    }
 
     // Content dedup: check if this reply already exists in the conversation thread.
     // The sync processor recreates chunks every cycle, so the same email will be

@@ -644,6 +644,27 @@ async function handleDraftCorrectionEmail(
       timestamp: string;
     }>;
 
+    // Auto-fetch rejection feedback from the most recent rejected draft if the
+    // caller didn't provide user_feedback. This ensures corrections given during
+    // rejection are always carried forward into redrafts.
+    let effectiveFeedback = userFeedback;
+    if (!effectiveFeedback) {
+      const { data: rejectedAction } = await adminSupabase
+        .from("skyler_actions")
+        .select("result")
+        .eq("pipeline_id", pipelineId)
+        .eq("status", "rejected")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const rejectionFeedback = (rejectedAction?.result as Record<string, unknown>)?.feedback as string | undefined;
+      if (rejectionFeedback) {
+        effectiveFeedback = `IMPORTANT — The user rejected the previous draft with this feedback: "${rejectionFeedback}". Incorporate this correction into the new draft.`;
+        console.log(`[draft_correction_email] Auto-loaded rejection feedback: ${rejectionFeedback.slice(0, 100)}`);
+      }
+    }
+
     // 2. Load sender identity (workspace owner)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: memberData } = await adminSupabase
@@ -740,7 +761,7 @@ async function handleDraftCorrectionEmail(
       senderName: senderName ?? undefined,
       senderCompany: senderCompany ?? undefined,
       replyIntent: thread.length > 0 ? "positive_interest" : undefined,
-      userFeedback: userFeedback || undefined,
+      userFeedback: effectiveFeedback || undefined,
     });
 
     // 8. Store as pending action for approval
