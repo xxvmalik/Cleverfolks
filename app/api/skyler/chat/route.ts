@@ -425,8 +425,11 @@ ${actions ? `Recent actions: ${actions}` : ""}
     }
 
     // Inject recent rejection feedback so Skyler knows about it
+    console.log(`[skyler-chat] Rejected drafts query for entity ${entityId}: found ${rejectedDrafts?.length ?? 0} rejected drafts`);
     if (rejectedDrafts && rejectedDrafts.length > 0) {
+      console.log(`[skyler-chat] Rejection result field:`, JSON.stringify(rejectedDrafts[0].result));
       const rejectionFeedback = (rejectedDrafts[0].result as Record<string, unknown>)?.feedback as string | undefined;
+      console.log(`[skyler-chat] Extracted feedback: ${rejectionFeedback ?? "NONE"}`);
       if (rejectionFeedback) {
         activeEntityBlock += `\n\n<recent_rejection>
 The user recently REJECTED a draft for this lead with the following feedback:
