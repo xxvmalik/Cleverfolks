@@ -185,16 +185,20 @@ async function checkOutlookReplies(
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const messages = (response as any)?.data?.value;
+    console.log(`[reply-check] Outlook returned ${messages?.length ?? 0} messages`);
     if (!messages || messages.length === 0) return 0;
 
     for (const msg of messages) {
       // Client-side time filter: skip emails older than 24 hours
       const receivedAt = new Date(msg.receivedDateTime).getTime();
-      if (receivedAt < windowStart) continue;
+      if (receivedAt < windowStart) {
+        continue;
+      }
 
       // Extract sender, skipping X500/Exchange internal addresses
       const senderEmail = extractOutlookSender(msg);
-      if (!senderEmail || !contactEmails.includes(senderEmail)) continue;
+      if (!senderEmail) continue;
+      if (!contactEmails.includes(senderEmail)) continue;
 
       // Skip calendar acceptance/decline notifications — not real replies
       const subject = (msg.subject ?? "") as string;
@@ -202,22 +206,30 @@ async function checkOutlookReplies(
         continue;
       }
 
+      console.log(`[reply-check] Processing email from ${senderEmail}: "${subject}"`);
+
       // Found a recent email from a pipeline contact — run reply detection
       const content = buildEmailContent(msg);
 
-      const result = await detectPipelineReply(db, workspaceId, {
-        content,
-        metadata: {
-          from: { emailAddress: { address: senderEmail } },
-          subject: msg.subject,
-          receivedDateTime: msg.receivedDateTime,
-          outlook_message_id: msg.id,
-        },
-      });
+      try {
+        const result = await detectPipelineReply(db, workspaceId, {
+          content,
+          metadata: {
+            from: { emailAddress: { address: senderEmail } },
+            subject: msg.subject,
+            receivedDateTime: msg.receivedDateTime,
+            outlook_message_id: msg.id,
+          },
+        });
 
-      if (result.is_reply) {
-        repliesFound++;
-        console.log(`[reply-check] New Outlook reply detected → pipeline ${result.pipeline_id}`);
+        console.log(`[reply-check] detectPipelineReply result for ${senderEmail}: is_reply=${result.is_reply}, pipeline=${result.pipeline_id ?? "none"}`);
+
+        if (result.is_reply) {
+          repliesFound++;
+          console.log(`[reply-check] New Outlook reply detected → pipeline ${result.pipeline_id}`);
+        }
+      } catch (detectErr) {
+        console.error(`[reply-check] detectPipelineReply threw for ${senderEmail}:`, detectErr instanceof Error ? detectErr.message : detectErr);
       }
     }
   } catch (err) {

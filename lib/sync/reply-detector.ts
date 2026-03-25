@@ -42,7 +42,12 @@ export async function detectPipelineReply(
       extractSenderFromMetadata(record.metadata) ??
       extractSenderFromText(record.content);
 
-    if (!senderEmail) return { is_reply: false };
+    if (!senderEmail) {
+      console.log(`[reply-detector] No sender email extracted`);
+      return { is_reply: false };
+    }
+
+    console.log(`[reply-detector] Checking sender: ${senderEmail} in workspace ${workspaceId.slice(0, 8)}`);
 
     // Check if this sender has an active pipeline record.
     // "Active" means: unresolved, OR resolved as meeting_booked/demo_booked (still engaged),
@@ -53,7 +58,7 @@ export async function detectPipelineReply(
       .from("skyler_sales_pipeline")
       .select(pipelineFields)
       .eq("workspace_id", workspaceId)
-      .eq("contact_email", senderEmail)
+      .ilike("contact_email", senderEmail)
       .is("resolution", null)
       .maybeSingle();
 
@@ -66,7 +71,7 @@ export async function detectPipelineReply(
         .from("skyler_sales_pipeline")
         .select(pipelineFields)
         .eq("workspace_id", workspaceId)
-        .eq("contact_email", senderEmail)
+        .ilike("contact_email", senderEmail)
         .in("resolution", ["meeting_booked", "demo_booked", "no_response"])
         .order("updated_at", { ascending: false })
         .limit(1)
@@ -78,7 +83,12 @@ export async function detectPipelineReply(
       }
     }
 
-    if (!pipeline) return { is_reply: false };
+    if (!pipeline) {
+      console.log(`[reply-detector] No pipeline found for ${senderEmail}`);
+      return { is_reply: false };
+    }
+
+    console.log(`[reply-detector] Found pipeline ${pipeline.id} (resolution: ${pipeline.resolution}, last_reply_at: ${pipeline.last_reply_at})`);
 
     // Content dedup: check if this reply already exists in the conversation thread.
     // The sync processor recreates chunks every cycle, so the same email will be
@@ -91,6 +101,8 @@ export async function detectPipelineReply(
         typeof entry.content === "string" &&
         (entry.content as string).slice(0, 200) === replyContent.slice(0, 200)
     );
+    console.log(`[reply-detector] Content dedup: isDuplicate=${isDuplicate}, threadEntries=${existingThread.length}, prospectEntries=${existingThread.filter(e => e.role === "prospect").length}`);
+
     if (isDuplicate) {
       console.log(
         `[reply-detector] Skipping duplicate reply from ${senderEmail} — content already in thread for pipeline ${pipeline.id}`
@@ -159,6 +171,8 @@ export async function detectPipelineReply(
     const { data: updated, error: updateErr } = await updateQuery
       .select("id")
       .maybeSingle();
+
+    console.log(`[reply-detector] Atomic update: last_reply_at=${pipeline.last_reply_at}, fiveMinAgo=${fiveMinAgo}, condition=${pipeline.last_reply_at ? "lt" : "is_null"}`);
 
     if (updateErr) {
       console.error(`[reply-detector] Update error: ${updateErr.message}`);
