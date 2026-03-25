@@ -28,14 +28,14 @@ export async function GET(req: NextRequest) {
   // Also check by tool_input.pipelineId (old format)
   const { data: allActionsByInput } = await db
     .from("skyler_actions")
-    .select("id, pipeline_id, tool_name, description, status, created_at")
+    .select("id, pipeline_id, tool_name, tool_input, description, status, created_at")
     .eq("tool_name", "send_email")
     .in("status", ["pending", "failed"])
     .limit(50);
 
-  const matchedByInput = (allActionsByInput ?? []).filter((a) => {
-    const input = a.tool_input as Record<string, unknown> | undefined;
-    return input?.pipelineId === pipelineId;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const matchedByInput = (allActionsByInput ?? []).filter((a: any) => {
+    return a.tool_input?.pipelineId === pipelineId;
   });
 
   // All notifications for this pipeline
