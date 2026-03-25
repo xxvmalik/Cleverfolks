@@ -766,8 +766,8 @@ ${replyContent.slice(0, 2000)}`,
         }
       });
 
-      // Meeting acceptance noted — no reply needed (it's a calendar accept, not a conversation)
-      return { status: "meeting_accept_noted", pipeline_id: pipelineId };
+      // Fall through to draft a reply — Skyler should confirm meeting details
+      // (specific time, calendar link, etc.) rather than leaving the prospect hanging.
     }
 
     // Step 5: Fetch business context for drafting
