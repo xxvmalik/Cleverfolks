@@ -742,9 +742,9 @@ export function SkylerClient({
     }
   }, [workspaceId]);
 
-  // Fetch Sales Closer data
-  const fetchSalesCloserData = useCallback(async () => {
-    setPipelineLoading(true);
+  // Fetch Sales Closer data (silent=true skips the loading spinner for background polls)
+  const fetchSalesCloserData = useCallback(async (silent = false) => {
+    if (!silent) setPipelineLoading(true);
     try {
       const [pipelineRes, perfRes] = await Promise.all([
         fetch(`/api/skyler/sales-pipeline?workspaceId=${workspaceId}`),
@@ -759,7 +759,7 @@ export function SkylerClient({
         setPerformanceMetrics(data.metrics ?? null);
       }
     } finally {
-      setPipelineLoading(false);
+      if (!silent) setPipelineLoading(false);
     }
   }, [workspaceId]);
 
@@ -781,11 +781,12 @@ export function SkylerClient({
     fetchConversations();
   }, [fetchDashboard, fetchConversations]);
 
-  // Fetch sales closer data when tab is active
+  // Fetch sales closer data when tab is active + poll every 15s for new drafts
   useEffect(() => {
-    if (activeTab === "sales-closer") {
-      fetchSalesCloserData();
-    }
+    if (activeTab !== "sales-closer") return;
+    fetchSalesCloserData();
+    const interval = setInterval(() => fetchSalesCloserData(true), 15000);
+    return () => clearInterval(interval);
   }, [activeTab, fetchSalesCloserData]);
 
   // Auto-scroll chat

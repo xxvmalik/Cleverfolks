@@ -94,8 +94,8 @@ export function SkylerWorkspace({
 
   // ── Data fetching ───────────────────────────────────────────────
 
-  const fetchPipelineData = useCallback(async () => {
-    setPipelineLoading(true);
+  const fetchPipelineData = useCallback(async (silent = false) => {
+    if (!silent) setPipelineLoading(true);
     try {
       const [pipelineRes, perfRes, dashRes] = await Promise.all([
         fetch(`/api/skyler/sales-pipeline?workspaceId=${workspaceId}`),
@@ -115,14 +115,16 @@ export function SkylerWorkspace({
         setSalesCloserEnabled(data.salesCloserEnabled ?? false);
       }
     } finally {
-      setPipelineLoading(false);
+      if (!silent) setPipelineLoading(false);
     }
   }, [workspaceId]);
 
-  // On mount
+  // On mount + poll every 15s for new drafts/actions
   useEffect(() => {
     fetchPipelineData();
     fetchConversationsRef();
+    const interval = setInterval(() => fetchPipelineData(true), 15000);
+    return () => clearInterval(interval);
   }, [fetchPipelineData, fetchConversationsRef]);
 
   // ── Lead selection side effects ─────────────────────────────────
