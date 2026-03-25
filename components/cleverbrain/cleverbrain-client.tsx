@@ -31,6 +31,7 @@ import { signOut } from "@/lib/auth";
 import { useWorkspace } from "@/context/workspace-context";
 import { setActiveWorkspaceAction } from "@/app/actions/workspace";
 import { BusinessProfileView } from "./business-profile-view";
+import { ActivityFeed } from "@/components/shared/activity-feed";
 import { renderMarkdown } from "@/components/shared/markdown-renderer";
 import {
   connectIntegrationAction,
@@ -772,10 +773,13 @@ export function ConnectorsView({
             <BusinessProfileView workspaceId={workspaceId} companyName={companyName} />
           </div>
         ) : activeTab === "history" ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <FileText className="w-10 h-10 text-[#8B8F97] mx-auto mb-3" />
-              <p className="text-[#8B8F97] text-sm">Interaction History coming soon</p>
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-8 pt-5 pb-4 flex-shrink-0">
+              <h1 className="text-white font-bold text-xl">Interaction History</h1>
+              <p className="text-[#8B8F97] text-sm mt-1">All agent activity across your workspace</p>
+            </div>
+            <div className="flex-1 overflow-y-auto">
+              <ActivityFeed workspaceId={workspaceId} limit={50} />
             </div>
           </div>
         ) : (

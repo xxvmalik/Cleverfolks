@@ -9,6 +9,7 @@ import {
   Zap,
   Target,
   Settings,
+  Activity,
   Star,
   MoreHorizontal,
   Pencil,
@@ -16,12 +17,13 @@ import {
 } from "lucide-react";
 import type { ConversationItem } from "./types";
 
-type WorkflowTab = "lead-qualification" | "sales-closer" | "workflows-settings";
+type WorkflowTab = "lead-qualification" | "sales-closer" | "workflows-settings" | "activity";
 
 const WORKFLOW_TABS: { id: WorkflowTab; label: string; icon: typeof Zap }[] = [
   { id: "lead-qualification", label: "Lead Qualification", icon: Zap },
   { id: "sales-closer", label: "Sales Closer", icon: Target },
   { id: "workflows-settings", label: "Workflows Settings", icon: Settings },
+  { id: "activity", label: "Skyler Activity", icon: Activity },
 ];
 
 export { type WorkflowTab };

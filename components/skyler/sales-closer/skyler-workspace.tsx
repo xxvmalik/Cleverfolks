@@ -13,6 +13,7 @@ import { ChatPanel } from "./chat/chat-panel";
 import { RightIconBar } from "./right-icon-bar";
 import { WorkflowSettings } from "@/components/skyler/workflow-settings";
 import { LeadQualificationView } from "@/components/skyler/lead-qualification-view";
+import { SkylerActivityView } from "@/components/skyler/skyler-activity-view";
 import { useSkylerChat } from "@/lib/skyler/use-skyler-chat";
 import type { ChatMessage } from "@/lib/skyler/use-skyler-chat";
 import { usePageContext } from "@/hooks/usePageContext";
@@ -561,6 +562,12 @@ export function SkylerWorkspace({
         {activeTab === "workflows-settings" && (
           <div className="flex-1 overflow-y-auto">
             <WorkflowSettings workspaceId={workspaceId} />
+          </div>
+        )}
+
+        {activeTab === "activity" && (
+          <div className="flex-1 overflow-y-auto">
+            <SkylerActivityView workspaceId={workspaceId} />
           </div>
         )}
       </div>
