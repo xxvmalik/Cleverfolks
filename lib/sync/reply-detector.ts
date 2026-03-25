@@ -121,7 +121,7 @@ export async function detectPipelineReply(
     // Check if this sender has an active pipeline record.
     // "Active" means: unresolved, OR resolved as meeting_booked/demo_booked (still engaged),
     // OR resolved as no_response (can be re-engaged when they reply).
-    const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at, created_at";
+    const pipelineFields = "id, contact_email, stage, resolution, awaiting_reply, emails_replied, conversation_thread, last_reply_at";
 
     const { data: active } = await db
       .from("skyler_sales_pipeline")
@@ -163,87 +163,21 @@ export async function detectPipelineReply(
     // The email must be addressed TO the workspace owner, not to a third party.
     // This prevents matching unrelated emails that happen to be FROM a lead's
     // email address (e.g. the lead emailing their bank, which got synced).
-    let recipientVerified = false;
     const recipients = extractRecipients(record.content, record.metadata);
-    console.log(`[reply-detector] Guard 1 — extracted recipients: ${recipients ? recipients.join(", ") : "NONE"}`);
+    console.log(`[reply-detector] Guard 1 — recipients: ${recipients ? recipients.join(", ") : "NONE"}, owner: ${ownerEmail}`);
     if (recipients && ownerEmail) {
       const sentToOwner = recipients.some(
         (r) => r === ownerEmail || r.includes(ownerEmail.split("@")[0])
       );
       if (!sentToOwner) {
-        console.log(
-          `[reply-detector] Skipping — email from ${senderEmail} was sent to [${recipients.join(", ")}], not to workspace owner (${ownerEmail})`
-        );
+        console.log(`[reply-detector] Skipping — sent to [${recipients.join(", ")}], not workspace owner`);
         return { is_reply: false };
       }
-      recipientVerified = true;
-      console.log(`[reply-detector] Guard 1 PASSED — email addressed to workspace owner`);
     }
 
-    // ── Guard 2: Timing check ─────────────────────────────────────────────
-    // Only match emails received AFTER the pipeline record was created.
-    // This prevents old emails (synced from before the lead was added)
-    // from being falsely detected as replies.
-    let timingVerified = false;
-    const pipelineCreatedAt = pipeline.created_at as string | undefined;
-    let emailDate =
-      (record.metadata?.receivedDateTime as string) ??
-      (record.metadata?.date as string) ??
-      (record.metadata?.created_at as string) ??
-      (record.metadata?.lastModifiedDateTime as string) ??
-      (record.metadata?.sentDateTime as string);
-
-    // Fallback: extract date from email content text (e.g. "Date: February 3, 2026")
-    if (!emailDate) {
-      const dateMatch = record.content.match(/\bDate:\s*([A-Za-z]+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i);
-      if (dateMatch) emailDate = dateMatch[1];
-    }
-    // Fallback: "Sent: Wednesday, March 19, 2026 3:30 PM" (Outlook format in content)
-    if (!emailDate) {
-      const sentMatch = record.content.match(/\bSent:\s*\w+,\s*([A-Za-z]+ \d{1,2},?\s*\d{4})/i);
-      if (sentMatch) emailDate = sentMatch[1];
-    }
-    // Fallback: "Received: 2026-03-25T10:30:00Z" or ISO dates in metadata
-    if (!emailDate) {
-      const isoMatch = record.content.match(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})/);
-      if (isoMatch) emailDate = isoMatch[1];
-    }
-
-    console.log(`[reply-detector] Guard 2 — pipelineCreatedAt: ${pipelineCreatedAt}, emailDate: ${emailDate}`);
-
-    if (pipelineCreatedAt && emailDate) {
-      const pipelineTime = new Date(pipelineCreatedAt).getTime();
-      const emailTime = new Date(emailDate).getTime();
-      if (isNaN(emailTime)) {
-        console.log(`[reply-detector] Could not parse email date: "${emailDate}"`);
-      } else if (emailTime < pipelineTime) {
-        console.log(
-          `[reply-detector] Skipping — email date (${emailDate}) is before pipeline creation (${pipelineCreatedAt})`
-        );
-        return { is_reply: false };
-      } else {
-        timingVerified = true;
-        console.log(`[reply-detector] Guard 2 PASSED — email date is after pipeline creation`);
-      }
-    }
-
-    // ── Guard 3: Require at least one positive verification ───────────────
-    // If neither the recipient check NOR the timing check could positively
-    // verify this is a real reply, skip it. The 5-min reply-check cron
-    // (which queries Inbox directly) will catch legitimate replies anyway.
-    // This prevents false positives from synced emails with missing metadata.
-    if (!recipientVerified && !timingVerified) {
-      console.log(
-        `[reply-detector] Skipping — neither recipient nor timing could be verified for ${senderEmail} → pipeline ${pipeline.id}. ` +
-        `recipients=${recipients ? recipients.join(",") : "none"}, ownerEmail=${ownerEmail ?? "unknown"}, emailDate=${emailDate ?? "unknown"}`
-      );
-      return { is_reply: false };
-    }
-
-    // ── Guard 4: Email ID dedup ─────────────────────────────────────────
+    // ── Guard 2: Email ID dedup ──────────────────────────────────────────
     // Every email has a unique provider ID (outlook_message_id / gmail_message_id).
-    // If we've already processed this exact email, skip it — even if the
-    // pipeline was deleted and re-created, or the cron runs again.
+    // Skip if already processed — survives pipeline deletion/re-creation.
     const emailMessageId =
       (record.metadata?.outlook_message_id as string) ??
       (record.metadata?.gmail_message_id as string) ??
