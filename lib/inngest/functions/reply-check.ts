@@ -178,7 +178,7 @@ async function checkOutlookReplies(
     const response = await nango.proxy({
       method: "GET",
       baseUrlOverride: "https://graph.microsoft.com",
-      endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=30&$orderby=receivedDateTime desc&$select=id,from,subject,bodyPreview,body,receivedDateTime`,
+      endpoint: `/v1.0/me/mailFolders/Inbox/messages?$top=30&$orderby=receivedDateTime desc&$select=id,from,toRecipients,subject,bodyPreview,body,receivedDateTime`,
       connectionId,
       providerConfigKey: "outlook",
     });
@@ -216,6 +216,7 @@ async function checkOutlookReplies(
           content,
           metadata: {
             from: { emailAddress: { address: senderEmail } },
+            toRecipients: msg.toRecipients ?? [],
             subject: msg.subject,
             receivedDateTime: msg.receivedDateTime,
             outlook_message_id: msg.id,
