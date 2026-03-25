@@ -433,7 +433,7 @@ ${actions ? `Recent actions: ${actions}` : ""}
         .from("skyler_actions")
         .select("result, created_at")
         .eq("status", "rejected")
-        .filter("tool_input->>pipelineId", "eq", entityId)
+        .eq("tool_input->>pipelineId", entityId)
         .order("created_at", { ascending: false })
         .limit(1);
       effectiveRejectedDrafts = fallbackDrafts;

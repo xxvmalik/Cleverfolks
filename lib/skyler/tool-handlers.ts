@@ -666,7 +666,7 @@ async function handleDraftCorrectionEmail(
           .from("skyler_actions")
           .select("result")
           .eq("status", "rejected")
-          .filter("tool_input->>pipelineId", "eq", pipelineId)
+          .eq("tool_input->>pipelineId", pipelineId)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -1154,23 +1154,28 @@ async function handleGetSkylerData(
       case "pending_actions": {
         let query = adminSupabase
           .from("skyler_actions")
-          .select("id, tool_name, description, status, created_at, pipeline_id")
+          .select("id, tool_name, description, status, result, created_at, pipeline_id, tool_input")
           .eq("workspace_id", workspaceId)
-          .eq("status", "pending")
           .order("created_at", { ascending: false })
           .limit(limit);
 
-        if (pipelineId) query = query.eq("pipeline_id", pipelineId);
+        // Filter by pipeline — try column first, fall back to JSONB
+        if (pipelineId) {
+          query = query.or(`pipeline_id.eq.${pipelineId},tool_input->>pipelineId.eq.${pipelineId}`);
+        }
 
         const { data, error } = await query;
         if (error) return { results: [], summary: `Error querying pending actions: ${error.message}` };
-        if (!data || data.length === 0) return { results: [], summary: "No pending actions awaiting approval." };
+        if (!data || data.length === 0) return { results: [], summary: "No actions found for this lead." };
 
-        const formatted = data.map((a) =>
-          `[${a.id.slice(0, 8)}] ${a.description} (created ${new Date(a.created_at).toLocaleDateString()})`
-        );
+        const formatted = data.map((a) => {
+          const feedback = a.status === "rejected" && (a.result as Record<string, unknown>)?.feedback
+            ? `\n  USER REJECTION FEEDBACK: "${(a.result as Record<string, unknown>).feedback}"`
+            : "";
+          return `[${a.id.slice(0, 8)}] ${a.status.toUpperCase()} — ${a.description} (${new Date(a.created_at).toLocaleDateString()})${feedback}`;
+        });
 
-        return { results: [], summary: `Pending actions (${data.length}):\n${formatted.join("\n")}` };
+        return { results: [], summary: `Actions for this lead (${data.length}):\n${formatted.join("\n")}` };
       }
 
       case "open_requests": {
@@ -1246,7 +1251,7 @@ async function handleGetSkylerData(
       case "decisions": {
         let query = adminSupabase
           .from("skyler_decisions")
-          .select("event_type, decision, guardrail_outcome, guardrail_reason, execution_result, created_at, pipeline_id")
+          .select("event_type, decision, guardrail_outcome, guardrail_reason, execution_result, rejection_reason, created_at, pipeline_id")
           .eq("workspace_id", workspaceId)
           .order("created_at", { ascending: false })
           .limit(limit);
@@ -1260,7 +1265,8 @@ async function handleGetSkylerData(
         const formatted = data.map((d) => {
           const dec = d.decision as Record<string, unknown>;
           const result = d.execution_result as Record<string, unknown>;
-          return `[${new Date(d.created_at).toLocaleString()}] ${dec.action_type} (${d.guardrail_outcome}) — ${dec.reasoning}\n  Result: ${result.success ? "OK" : "FAILED"} ${result.details ?? result.error ?? ""}`;
+          const rejection = d.rejection_reason ? `\n  USER REJECTION FEEDBACK: "${d.rejection_reason}"` : "";
+          return `[${new Date(d.created_at).toLocaleString()}] ${dec.action_type} (${d.guardrail_outcome}) — ${dec.reasoning}\n  Result: ${result.success ? "OK" : "FAILED"} ${result.details ?? result.error ?? ""}${rejection}`;
         });
 
         return { results: [], summary: `Decision log (${data.length}):\n${formatted.join("\n\n")}` };
