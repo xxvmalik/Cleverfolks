@@ -240,12 +240,54 @@ export async function detectPipelineReply(
       return { is_reply: false };
     }
 
+    // ── Guard 4: Email ID dedup ─────────────────────────────────────────
+    // Every email has a unique provider ID (outlook_message_id / gmail_message_id).
+    // If we've already processed this exact email, skip it — even if the
+    // pipeline was deleted and re-created, or the cron runs again.
+    const emailMessageId =
+      (record.metadata?.outlook_message_id as string) ??
+      (record.metadata?.gmail_message_id as string) ??
+      null;
+
+    const existingThread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+
+    if (emailMessageId) {
+      // Check 1: thread-level — this email ID already in current pipeline's thread
+      const inThread = existingThread.some(
+        (entry) => entry.email_message_id === emailMessageId
+      );
+      if (inThread) {
+        console.log(
+          `[reply-detector] Skipping — email ID ${emailMessageId.slice(0, 20)}... already in thread for pipeline ${pipeline.id}`
+        );
+        return { is_reply: false };
+      }
+
+      // Check 2: workspace-level — this email ID was processed before
+      // (survives pipeline deletion/re-creation)
+      const { data: priorActivity } = await db
+        .from("agent_activities")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .eq("agent_type", "skyler")
+        .eq("activity_type", "reply_detected")
+        .eq("metadata->>emailMessageId", emailMessageId)
+        .limit(1)
+        .maybeSingle();
+
+      if (priorActivity) {
+        console.log(
+          `[reply-detector] Skipping — email ID ${emailMessageId.slice(0, 20)}... already processed globally (activity ${priorActivity.id})`
+        );
+        return { is_reply: false };
+      }
+    }
+
     // Content dedup: check if this reply already exists in the conversation thread.
     // The sync processor recreates chunks every cycle, so the same email will be
     // re-detected after the 5-minute atomic lock expires. Compare content to prevent duplicates.
     // NOTE: The same email can arrive with different formatting (with/without headers),
     // so we normalize by stripping email metadata before comparing.
-    const existingThread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
     const replyContent = record.content.slice(0, 3000);
     const normalizedReply = normalizeReplyContent(replyContent);
     const isDuplicate = existingThread.some(
@@ -281,6 +323,7 @@ export async function detectPipelineReply(
       subject: lastSubject ? `re: ${lastSubject}` : undefined,
       timestamp: now,
       status: "received",
+      ...(emailMessageId ? { email_message_id: emailMessageId } : {}),
     });
 
     // Any resolved lead that replies is re-engaging — clear resolution so
@@ -372,7 +415,10 @@ export async function detectPipelineReply(
       activityType: "reply_detected",
       title: `Reply detected from ${senderEmail}`,
       description: `${senderEmail} replied to outreach — stage updated to ${newStage}`,
-      metadata: { emailsReplied: ((pipeline.emails_replied as number) ?? 0) + 1 },
+      metadata: {
+        emailsReplied: ((pipeline.emails_replied as number) ?? 0) + 1,
+        ...(emailMessageId ? { emailMessageId } : {}),
+      },
       relatedEntityId: pipeline.id,
       relatedEntityType: "pipeline",
     }).catch(() => {});
