@@ -425,11 +425,25 @@ ${actions ? `Recent actions: ${actions}` : ""}
     }
 
     // Inject recent rejection feedback so Skyler knows about it
-    console.log(`[skyler-chat] Rejected drafts query for entity ${entityId}: found ${rejectedDrafts?.length ?? 0} rejected drafts`);
-    if (rejectedDrafts && rejectedDrafts.length > 0) {
-      console.log(`[skyler-chat] Rejection result field:`, JSON.stringify(rejectedDrafts[0].result));
-      const rejectionFeedback = (rejectedDrafts[0].result as Record<string, unknown>)?.feedback as string | undefined;
-      console.log(`[skyler-chat] Extracted feedback: ${rejectionFeedback ?? "NONE"}`);
+    // NOTE: pipeline_id column is often null despite being set in insert — Supabase schema cache issue.
+    // Fall back to querying via tool_input JSONB if the column-based query returned nothing.
+    let effectiveRejectedDrafts = rejectedDrafts;
+    if (!effectiveRejectedDrafts || effectiveRejectedDrafts.length === 0) {
+      const { data: fallbackDrafts } = await db
+        .from("skyler_actions")
+        .select("result, created_at")
+        .eq("status", "rejected")
+        .filter("tool_input->>pipelineId", "eq", entityId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      effectiveRejectedDrafts = fallbackDrafts;
+      if (fallbackDrafts && fallbackDrafts.length > 0) {
+        console.log(`[skyler-chat] Found rejected draft via tool_input fallback for entity ${entityId}`);
+      }
+    }
+
+    if (effectiveRejectedDrafts && effectiveRejectedDrafts.length > 0) {
+      const rejectionFeedback = (effectiveRejectedDrafts[0].result as Record<string, unknown>)?.feedback as string | undefined;
       if (rejectionFeedback) {
         activeEntityBlock += `\n\n<recent_rejection>
 The user recently REJECTED a draft for this lead with the following feedback:

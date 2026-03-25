@@ -647,9 +647,11 @@ async function handleDraftCorrectionEmail(
     // Auto-fetch rejection feedback from the most recent rejected draft if the
     // caller didn't provide user_feedback. This ensures corrections given during
     // rejection are always carried forward into redrafts.
+    // NOTE: pipeline_id column is often null — fall back to tool_input JSONB.
     let effectiveFeedback = userFeedback;
     if (!effectiveFeedback) {
-      const { data: rejectedAction } = await adminSupabase
+      let rejectedAction = null;
+      const { data: byColumn } = await adminSupabase
         .from("skyler_actions")
         .select("result")
         .eq("pipeline_id", pipelineId)
@@ -657,6 +659,19 @@ async function handleDraftCorrectionEmail(
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
+      rejectedAction = byColumn;
+
+      if (!rejectedAction) {
+        const { data: byJsonb } = await adminSupabase
+          .from("skyler_actions")
+          .select("result")
+          .eq("status", "rejected")
+          .filter("tool_input->>pipelineId", "eq", pipelineId)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        rejectedAction = byJsonb;
+      }
 
       const rejectionFeedback = (rejectedAction?.result as Record<string, unknown>)?.feedback as string | undefined;
       if (rejectionFeedback) {
