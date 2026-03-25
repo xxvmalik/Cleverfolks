@@ -53,16 +53,28 @@ export async function GET(req: NextRequest) {
 
   // Also fetch pending actions for these pipeline records
   const pipelineIds = (data ?? []).map((p) => p.id);
+  const pipelineIdSet = new Set(pipelineIds);
   let pendingActions: Record<string, unknown>[] = [];
   if (pipelineIds.length > 0) {
-    const { data: actions } = await db
+    // Query by workspace + status, then match to pipelines via pipeline_id column
+    // OR tool_input.pipelineId (the column may not exist on older deployments)
+    const { data: actions, error: actionsErr } = await db
       .from("skyler_actions")
       .select("id, pipeline_id, description, tool_input, status, result, created_at")
       .eq("workspace_id", workspaceId)
       .in("status", ["pending", "failed"])
-      .in("pipeline_id", pipelineIds)
       .order("created_at", { ascending: false });
-    pendingActions = actions ?? [];
+
+    if (actionsErr) {
+      console.error("[sales-pipeline] actions query error:", actionsErr.message);
+    }
+
+    // Filter to only actions belonging to these pipeline records
+    pendingActions = (actions ?? []).filter((a) => {
+      const colId = a.pipeline_id as string | null;
+      const inputId = (a.tool_input as Record<string, unknown>)?.pipelineId as string | null;
+      return (colId && pipelineIdSet.has(colId)) || (inputId && pipelineIdSet.has(inputId));
+    });
   }
 
   // Fetch active directives for these pipeline records
