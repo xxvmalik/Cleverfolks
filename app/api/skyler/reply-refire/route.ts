@@ -11,7 +11,9 @@ import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { createAdminSupabaseClient } from "@/lib/supabase-admin";
 import { inngest } from "@/lib/inngest/client";
 
-export async function POST(req: NextRequest) {
+export { handler as GET, handler as POST };
+
+async function handler(req: NextRequest) {
   const supabase = await createServerSupabaseClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
