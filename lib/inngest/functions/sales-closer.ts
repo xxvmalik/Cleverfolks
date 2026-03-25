@@ -30,7 +30,7 @@ type ReplyClassification = { intent: ReplyIntent; reasoning: string };
 export const salesCloserWorkflow = inngest.createFunction(
   {
     id: "sales-closer-workflow",
-    retries: 1,
+    retries: 2,
   },
   { event: "skyler/lead.qualified.hot" },
   async ({ event, step }) => {
@@ -208,9 +208,14 @@ export const salesCloserWorkflow = inngest.createFunction(
 
     // Step 5: Build structured sales playbook from onboarding + knowledge profile + memories
     const playbook = await step.run("build-sales-playbook", async () => {
-      console.log("[Sales Closer] Step 5: Building sales playbook...");
-      const db = createAdminSupabaseClient();
-      return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile, workspaceSettings);
+      try {
+        console.log("[Sales Closer] Step 5: Building sales playbook...");
+        const db = createAdminSupabaseClient();
+        return await buildSalesPlaybook(db, workspaceId, memories, knowledgeProfile, workspaceSettings);
+      } catch (err) {
+        console.error(`[Sales Closer] build-sales-playbook failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
     });
 
     // Step 6: Research the company (with playbook for alignment)
@@ -219,20 +224,39 @@ export const salesCloserWorkflow = inngest.createFunction(
     const pipelineUserContext = (pipeline.user_context as string) ?? eventUserContext ?? undefined;
 
     const research = await step.run("research-company", async () => {
-      console.log("[Sales Closer] Step 6: Researching company...");
-      const db = createAdminSupabaseClient();
-      return await researchCompany({
-        companyName: pipeline.company_name || companyName,
-        companyWebsite: pipelineWebsite,
-        contactName: pipeline.contact_name || contactName,
-        contactEmail: pipeline.contact_email || contactEmail,
-        userContext: pipelineUserContext,
-        workspaceId: pipeline.workspace_id || workspaceId,
-        pipelineId: pipeline.id,
-        db,
-        businessContext: memories.join("\n"),
-        salesPlaybook: playbook,
-      });
+      try {
+        console.log("[Sales Closer] Step 6: Researching company...");
+        const db = createAdminSupabaseClient();
+        return await researchCompany({
+          companyName: pipeline.company_name || companyName,
+          companyWebsite: pipelineWebsite,
+          contactName: pipeline.contact_name || contactName,
+          contactEmail: pipeline.contact_email || contactEmail,
+          userContext: pipelineUserContext,
+          workspaceId: pipeline.workspace_id || workspaceId,
+          pipelineId: pipeline.id,
+          db,
+          businessContext: memories.join("\n"),
+          salesPlaybook: playbook,
+        });
+      } catch (err) {
+        console.error(`[Sales Closer] research-company failed:`, err instanceof Error ? err.message : err);
+        return {
+          summary: `${pipeline.company_name || companyName}`,
+          industry: "Unknown",
+          estimated_size: "Unknown",
+          trigger_event: "",
+          recent_news: [],
+          pain_points: [],
+          decision_makers: [],
+          talking_points: [],
+          service_alignment_points: [],
+          website_insights: "",
+          researched_at: new Date().toISOString(),
+          confidence: "low" as const,
+          confidence_reason: "Research failed — using minimal context",
+        };
+      }
     });
 
     // Low confidence check: pause and ask user instead of guessing
@@ -261,11 +285,16 @@ export const salesCloserWorkflow = inngest.createFunction(
 
     // Step 7: Learn sales voice (if not already learned)
     const voice = await step.run("learn-sales-voice", async () => {
-      console.log("[Sales Closer] Step 7: Learning sales voice...");
-      const db = createAdminSupabaseClient();
-      const existing = await getSalesVoice(db, workspaceId);
-      if (existing) return existing;
-      return await learnSalesVoice(db, workspaceId);
+      try {
+        console.log("[Sales Closer] Step 7: Learning sales voice...");
+        const db = createAdminSupabaseClient();
+        const existing = await getSalesVoice(db, workspaceId);
+        if (existing) return existing;
+        return await learnSalesVoice(db, workspaceId);
+      } catch (err) {
+        console.error(`[Sales Closer] learn-sales-voice failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
     });
 
     // Step 8: Load lead context from HubSpot (deal data, notes)
@@ -325,28 +354,38 @@ export const salesCloserWorkflow = inngest.createFunction(
     const draft = await step.run("draft-initial-email", async () => {
       console.log("[Sales Closer] Step 9: Drafting initial email...");
 
-      return await draftEmail({
-        workspaceId,
-        pipelineRecord: {
-          id: pipeline.id,
-          contact_name: pipeline.contact_name || contactName,
-          contact_email: pipeline.contact_email || contactEmail,
-          company_name: pipeline.company_name || companyName,
-          stage: STAGES.INITIAL_OUTREACH,
-          cadence_step: 0,
-          conversation_thread: [],
-        },
-        cadenceStep: 1,
-        companyResearch: research,
-        salesVoice: voice,
-        conversationThread: [],
-        workspaceMemories: memories,
-        salesPlaybook: playbook,
-        leadContext,
-        knowledgeProfile,
-        senderName: senderIdentity.senderName ?? undefined,
-        senderCompany: senderCompany ?? undefined,
-      });
+      try {
+        return await draftEmail({
+          workspaceId,
+          pipelineRecord: {
+            id: pipeline.id,
+            contact_name: pipeline.contact_name || contactName,
+            contact_email: pipeline.contact_email || contactEmail,
+            company_name: pipeline.company_name || companyName,
+            stage: STAGES.INITIAL_OUTREACH,
+            cadence_step: 0,
+            conversation_thread: [],
+          },
+          cadenceStep: 1,
+          companyResearch: research,
+          salesVoice: voice,
+          conversationThread: [],
+          workspaceMemories: memories,
+          salesPlaybook: playbook,
+          leadContext,
+          knowledgeProfile,
+          senderName: senderIdentity.senderName ?? undefined,
+          senderCompany: senderCompany ?? undefined,
+        });
+      } catch (err) {
+        console.error(`[Sales Closer] draftEmail failed:`, err instanceof Error ? err.stack : err);
+        const contactFirst = (pipeline.contact_name || contactName)?.split(/\s+/)[0] ?? "there";
+        return {
+          subject: `idea for ${(pipeline.company_name || companyName || "you").toLowerCase()}`,
+          textBody: `Hi ${contactFirst},\n\n[Draft failed to generate — please edit this email manually.]\n\nBest,\n${senderIdentity.senderName?.split(/\s+/)[0] ?? ""}`,
+          htmlBody: `<p>Hi ${contactFirst},</p><p>[Draft failed to generate — please edit this email manually.]</p><p>Best,<br>${senderIdentity.senderName?.split(/\s+/)[0] ?? ""}</p>`,
+        };
+      }
     });
 
     // Step 10: Store draft for approval
