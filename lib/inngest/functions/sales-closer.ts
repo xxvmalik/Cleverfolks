@@ -393,7 +393,7 @@ export const salesCloserWorkflow = inngest.createFunction(
 export const handlePipelineReply = inngest.createFunction(
   {
     id: "handle-pipeline-reply",
-    retries: 1,
+    retries: 2,
   },
   { event: "skyler/pipeline.reply.received" },
   async ({ event, step }) => {
@@ -771,76 +771,123 @@ ${replyContent.slice(0, 2000)}`,
     }
 
     // Step 5: Fetch business context for drafting
+    // All context steps are wrapped in try/catch — if any fails, we still draft
+    // with whatever context we have. A draft with less context is better than no draft.
     const memories = await step.run("fetch-reply-context", async () => {
-      const db = createAdminSupabaseClient();
-      const { data: memData } = await db
-        .from("workspace_memories")
-        .select("content")
-        .eq("workspace_id", workspaceId)
-        .is("superseded_by", null)
-        .order("times_reinforced", { ascending: false })
-        .limit(20);
-      const raw = (memData ?? []).map((m) => m.content as string);
-      return filterDealMemories(raw);
+      try {
+        const db = createAdminSupabaseClient();
+        const { data: memData } = await db
+          .from("workspace_memories")
+          .select("content")
+          .eq("workspace_id", workspaceId)
+          .is("superseded_by", null)
+          .order("times_reinforced", { ascending: false })
+          .limit(20);
+        const raw = (memData ?? []).map((m) => m.content as string);
+        return filterDealMemories(raw);
+      } catch (err) {
+        console.error(`[Pipeline Reply] fetch-reply-context failed:`, err instanceof Error ? err.message : err);
+        return [] as string[];
+      }
     });
 
     const replyKnowledgeProfile = await step.run("load-reply-knowledge-profile", async () => {
-      const db = createAdminSupabaseClient();
-      const { data } = await db
-        .from("knowledge_profiles")
-        .select("profile, status")
-        .eq("workspace_id", workspaceId)
-        .maybeSingle();
-      if (!data?.profile || !["ready", "pending_review"].includes(data.status ?? "")) return null;
-      return data.profile as Record<string, unknown>;
+      try {
+        const db = createAdminSupabaseClient();
+        const { data } = await db
+          .from("knowledge_profiles")
+          .select("profile, status")
+          .eq("workspace_id", workspaceId)
+          .maybeSingle();
+        if (!data?.profile || !["ready", "pending_review"].includes(data.status ?? "")) return null;
+        return data.profile as Record<string, unknown>;
+      } catch (err) {
+        console.error(`[Pipeline Reply] load-reply-knowledge-profile failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
     });
 
     const playbook = await step.run("build-reply-playbook", async () => {
-      const db = createAdminSupabaseClient();
-      return await buildSalesPlaybook(db, workspaceId, memories, replyKnowledgeProfile);
+      try {
+        const db = createAdminSupabaseClient();
+        return await buildSalesPlaybook(db, workspaceId, memories, replyKnowledgeProfile);
+      } catch (err) {
+        console.error(`[Pipeline Reply] build-reply-playbook failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
     });
 
     const research = await step.run("research-for-reply", async () => {
-      const db = createAdminSupabaseClient();
-      return await researchCompany({
-        companyName: pipeline.company_name as string,
-        companyWebsite: (pipeline.website as string) ?? undefined,
-        contactEmail: pipeline.contact_email as string,
-        contactName: pipeline.contact_name as string,
-        userContext: (pipeline.user_context as string) ?? undefined,
-        workspaceId,
-        pipelineId,
-        db,
-        businessContext: memories.join("\n"),
-        salesPlaybook: playbook,
-      });
+      try {
+        const db = createAdminSupabaseClient();
+        return await researchCompany({
+          companyName: pipeline.company_name as string,
+          companyWebsite: (pipeline.website as string) ?? undefined,
+          contactEmail: pipeline.contact_email as string,
+          contactName: pipeline.contact_name as string,
+          userContext: (pipeline.user_context as string) ?? undefined,
+          workspaceId,
+          pipelineId,
+          db,
+          businessContext: memories.join("\n"),
+          salesPlaybook: playbook,
+        });
+      } catch (err) {
+        console.error(`[Pipeline Reply] research-for-reply failed:`, err instanceof Error ? err.message : err);
+        // Return minimal research so draftEmail doesn't crash
+        return {
+          summary: `${pipeline.company_name ?? "Unknown company"}`,
+          industry: "Unknown",
+          estimated_size: "Unknown",
+          trigger_event: "",
+          recent_news: [],
+          pain_points: [],
+          decision_makers: [],
+          talking_points: [],
+          service_alignment_points: [],
+          website_insights: "",
+          researched_at: new Date().toISOString(),
+          confidence: "low" as const,
+          confidence_reason: "Research failed — using minimal context",
+        };
+      }
     });
 
     const voice = await step.run("learn-reply-voice", async () => {
-      const db = createAdminSupabaseClient();
-      const existing = await getSalesVoice(db, workspaceId);
-      if (existing) return existing;
-      return await learnSalesVoice(db, workspaceId);
+      try {
+        const db = createAdminSupabaseClient();
+        const existing = await getSalesVoice(db, workspaceId);
+        if (existing) return existing;
+        return await learnSalesVoice(db, workspaceId);
+      } catch (err) {
+        console.error(`[Pipeline Reply] learn-reply-voice failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
     });
 
     const replySender = await step.run("load-reply-sender", async () => {
-      const db = createAdminSupabaseClient();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: memberData } = await db
-        .from("workspace_memberships")
-        .select("profiles(full_name)")
-        .eq("workspace_id", workspaceId)
-        .eq("role", "owner")
-        .limit(1)
-        .single();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const prof = (memberData as any)?.profiles;
-      const name: string | null = Array.isArray(prof) ? prof[0]?.full_name : prof?.full_name ?? null;
+      try {
+        const db = createAdminSupabaseClient();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: memberData } = await db
+          .from("workspace_memberships")
+          .select("profiles(full_name)")
+          .eq("workspace_id", workspaceId)
+          .eq("role", "owner")
+          .limit(1)
+          .single();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const prof = (memberData as any)?.profiles;
+        const name: string | null = Array.isArray(prof) ? prof[0]?.full_name : prof?.full_name ?? null;
 
-      const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
-      const settings = (ws?.settings ?? {}) as Record<string, unknown>;
-      const company = (settings.company_name as string) ?? playbook?.company_name ?? null;
-      return { senderName: name, senderCompany: company };
+        const { data: ws } = await db.from("workspaces").select("settings").eq("id", workspaceId).single();
+        const settings = (ws?.settings ?? {}) as Record<string, unknown>;
+        const company = (settings.company_name as string) ?? playbook?.company_name ?? null;
+        return { senderName: name, senderCompany: company };
+      } catch (err) {
+        console.error(`[Pipeline Reply] load-reply-sender failed:`, err instanceof Error ? err.message : err);
+        return { senderName: null as string | null, senderCompany: null as string | null };
+      }
     });
 
     // Step 6: Draft intent-aware reply email
@@ -864,35 +911,48 @@ ${replyContent.slice(0, 2000)}`,
     const draft = await step.run("draft-reply-email", async () => {
       console.log(`[Pipeline Reply] Drafting ${classification.intent} reply for ${contactEmail}${replyMeetingContext ? " [with meeting context]" : ""}...`);
 
-      return await draftEmail({
-        workspaceId,
-        pipelineRecord: {
-          id: pipelineId,
-          contact_name: pipeline.contact_name as string,
-          contact_email: pipeline.contact_email as string,
-          company_name: pipeline.company_name as string,
-          stage: STAGES.REPLIED,
-          cadence_step: pipeline.cadence_step as number,
-          conversation_thread: thread,
-        },
-        cadenceStep: -1, // Reply mode
-        companyResearch: research,
-        salesVoice: voice,
-        conversationThread: thread,
-        workspaceMemories: memories,
-        salesPlaybook: playbook,
-        knowledgeProfile: replyKnowledgeProfile,
-        senderName: replySender.senderName ?? undefined,
-        senderCompany: replySender.senderCompany ?? undefined,
-        replyIntent: classification.intent,
-        meetingContext: replyMeetingContext,
-      });
+      try {
+        return await draftEmail({
+          workspaceId,
+          pipelineRecord: {
+            id: pipelineId,
+            contact_name: pipeline.contact_name as string,
+            contact_email: pipeline.contact_email as string,
+            company_name: pipeline.company_name as string,
+            stage: STAGES.REPLIED,
+            cadence_step: pipeline.cadence_step as number,
+            conversation_thread: thread,
+          },
+          cadenceStep: -1, // Reply mode
+          companyResearch: research,
+          salesVoice: voice,
+          conversationThread: thread,
+          workspaceMemories: memories,
+          salesPlaybook: playbook,
+          knowledgeProfile: replyKnowledgeProfile,
+          senderName: replySender.senderName ?? undefined,
+          senderCompany: replySender.senderCompany ?? undefined,
+          replyIntent: classification.intent,
+          meetingContext: replyMeetingContext,
+        });
+      } catch (err) {
+        console.error(`[Pipeline Reply] draftEmail failed:`, err instanceof Error ? err.stack : err);
+        // Fallback: create a minimal placeholder draft so the user can edit it manually
+        const contactFirst = (pipeline.contact_name as string)?.split(/\s+/)[0] ?? "Hi";
+        const lastSubject = getLastSubject(thread as Array<Record<string, unknown>>);
+        return {
+          subject: `re: ${lastSubject}`,
+          textBody: `Hi ${contactFirst},\n\nThanks for getting back to me. [Draft failed to generate — please edit this reply manually.]\n\nBest,\n${replySender.senderName?.split(/\s+/)[0] ?? ""}`,
+          htmlBody: `<p>Hi ${contactFirst},</p><p>Thanks for getting back to me. [Draft failed to generate — please edit this reply manually.]</p><p>Best,<br>${replySender.senderName?.split(/\s+/)[0] ?? ""}</p>`,
+        };
+      }
     });
 
     // Step 7: Store reply draft for approval
+    console.log(`[Pipeline Reply] Draft generated for ${contactEmail}: "${draft.subject}" — storing...`);
     const action = await step.run("store-reply-draft", async () => {
       const db = createAdminSupabaseClient();
-      return await draftOutreachEmail(db, {
+      const result = await draftOutreachEmail(db, {
         workspaceId,
         pipelineId,
         to: pipeline.contact_email as string,
@@ -900,6 +960,8 @@ ${replyContent.slice(0, 2000)}`,
         htmlBody: draft.htmlBody,
         textBody: draft.textBody,
       });
+      console.log(`[Pipeline Reply] Draft stored: actionId=${result.actionId}`);
+      return result;
     });
 
     // Notify: reply draft awaiting approval
@@ -920,18 +982,22 @@ ${replyContent.slice(0, 2000)}`,
       });
     });
 
-    // Step 8: Sync reply to HubSpot (fire-and-forget)
+    // Step 8: Sync reply to HubSpot (fire-and-forget — don't let this crash the function)
     await step.run("sync-reply-to-hubspot", async () => {
-      await syncReplyToHubSpot({
-        workspaceId,
-        pipelineId,
-        contactEmail,
-        contactName: pipeline.contact_name as string,
-        companyName: (pipeline.company_name as string) ?? undefined,
-        replyContent: replyContent.substring(0, 500),
-        intent: classification.intent,
-        hubspotDealId: (pipeline.hubspot_deal_id as string) ?? undefined,
-      });
+      try {
+        await syncReplyToHubSpot({
+          workspaceId,
+          pipelineId,
+          contactEmail,
+          contactName: pipeline.contact_name as string,
+          companyName: (pipeline.company_name as string) ?? undefined,
+          replyContent: replyContent.substring(0, 500),
+          intent: classification.intent,
+          hubspotDealId: (pipeline.hubspot_deal_id as string) ?? undefined,
+        });
+      } catch (err) {
+        console.error(`[Pipeline Reply] HubSpot sync failed (non-fatal):`, err instanceof Error ? err.message : err);
+      }
     });
 
     console.log(`[Pipeline Reply] ${classification.intent} reply draft stored for approval: ${action.actionId}`);
