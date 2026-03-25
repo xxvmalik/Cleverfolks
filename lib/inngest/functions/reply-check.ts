@@ -270,7 +270,8 @@ async function checkGmailReplies(
     for (const batch of batches) {
       const fromQuery = batch.map((e) => `from:${e}`).join(" OR ");
       // Gmail newer_than units: d=days, m=months (no minutes unit)
-      const query = `${fromQuery} newer_than:1d`;
+      // in:inbox restricts to Inbox only — prevents matching Sent Items
+      const query = `in:inbox (${fromQuery}) newer_than:1d`;
 
       const searchResponse = await nango.proxy({
         method: "GET",
