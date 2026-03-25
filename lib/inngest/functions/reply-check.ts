@@ -301,7 +301,7 @@ async function checkGmailReplies(
         const msgResponse = await nango.proxy({
           method: "GET",
           baseUrlOverride: "https://gmail.googleapis.com",
-          endpoint: `/gmail/v1/users/me/messages/${item.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+          endpoint: `/gmail/v1/users/me/messages/${item.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=To&metadataHeaders=Date`,
           connectionId,
           providerConfigKey: "google-mail",
         });
@@ -313,6 +313,8 @@ async function checkGmailReplies(
         const headers = (msg.payload?.headers ?? []) as Array<{ name: string; value: string }>;
         const fromHeader = headers.find((h) => h.name.toLowerCase() === "from")?.value ?? "";
         const subject = headers.find((h) => h.name.toLowerCase() === "subject")?.value ?? "";
+        const toHeader = headers.find((h) => h.name.toLowerCase() === "to")?.value ?? "";
+        const dateHeader = headers.find((h) => h.name.toLowerCase() === "date")?.value ?? "";
 
         // Extract email from "Name <email>" format
         const emailMatch = fromHeader.match(/<([^>]+)>/) ?? fromHeader.match(/([^\s]+@[^\s]+)/);
@@ -325,14 +327,22 @@ async function checkGmailReplies(
           continue;
         }
 
+        // Gmail internalDate is epoch ms — convert to ISO for timing guard
+        const internalDate = msg.internalDate
+          ? new Date(Number(msg.internalDate)).toISOString()
+          : undefined;
+
         // Fetch the snippet as content
-        const content = `From: ${fromHeader}\nSubject: ${subject}\n\n${msg.snippet ?? ""}`;
+        const content = `From: ${fromHeader}\nTo: ${toHeader}\nSubject: ${subject}\nDate: ${dateHeader}\n\n${msg.snippet ?? ""}`;
 
         const result = await detectPipelineReply(db, workspaceId, {
           content,
           metadata: {
             from: fromHeader,
+            to: toHeader,
             subject,
+            date: dateHeader,
+            receivedDateTime: internalDate ?? dateHeader,
             gmail_message_id: msg.id,
           },
         });
