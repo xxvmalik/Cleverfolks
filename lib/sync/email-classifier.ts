@@ -6,13 +6,15 @@
  *   Layer 2: Keyword referral filter (regex — zero cost)
  *   Layer 3: AI classification via Haiku (only ~10-20% of emails)
  *
- * Also runs reply detection (pure DB lookup, zero AI cost) for all emails.
+ * Reply detection is handled EXCLUSIVELY by the reply-check cron
+ * (lib/inngest/functions/reply-check.ts) which queries Inbox directly.
+ * The sync path must NOT run reply detection because it processes ALL
+ * synced emails (Sent Items, drafts, etc.) causing false positives.
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { shouldSkipEmail, hasReferralSignals } from "./email-prefilter";
 import { detectReferral } from "./referral-detector";
-import { detectPipelineReply } from "./reply-detector";
 
 export type EmailPipelineStats = {
   totalEmails: number;
@@ -69,16 +71,10 @@ export async function classifyNewEmails(
   }
 
   for (const record of emailRecords) {
-    // Reply detection runs FIRST on EVERY email — before any filtering.
-    // This is a pure DB lookup (zero AI cost) and must not be gated by
-    // prefilter/keyword filters because prospect replies are often very
-    // short ("I'm interested", "sure", "not now") and would be skipped
-    // by the too_short prefilter otherwise.
-    const replyResult = await detectPipelineReply(db, workspaceId, {
-      content: record.content,
-      metadata: record.metadata,
-    });
-    if (replyResult.is_reply) stats.repliesDetected++;
+    // NOTE: Reply detection removed from sync path. It caused false positives
+    // because Nango syncs ALL emails (Sent Items, drafts, etc.), not just Inbox.
+    // Replies are now detected exclusively by the reply-check cron which
+    // queries Inbox directly every 5 minutes. See reply-check.ts.
 
     // Layer 0: Skip already-processed documents (referral classification only)
     if (processedSet.has(record.documentId)) {
