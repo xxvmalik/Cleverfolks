@@ -12,12 +12,13 @@ import { learnSalesVoice, getSalesVoice } from "@/lib/skyler/voice-learner";
 import { draftEmail } from "@/lib/skyler/email-drafter";
 import type { LeadContext } from "@/lib/skyler/email-drafter";
 import { draftOutreachEmail } from "@/lib/email/email-sender";
-import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
+import { buildSalesPlaybook, formatPlaybookForPrompt } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { parseAIJson } from "@/lib/utils/parse-ai-json";
 import { syncReplyToHubSpot, syncResolutionToHubSpot } from "@/lib/hubspot/crm-sync";
 import { dispatchNotification } from "@/lib/skyler/notifications";
 import { checkAndEscalate } from "@/lib/skyler/escalation";
+import { validateDraftContent } from "@/lib/skyler/reasoning/output-validator";
 import { STAGES } from "@/lib/skyler/pipeline-stages";
 
 // Reply intent classification type
@@ -388,9 +389,68 @@ export const salesCloserWorkflow = inngest.createFunction(
       }
     });
 
+    // Step 9b: Validate draft — catch fabricated numbers/claims not in source context
+    const draftValidation = await step.run("validate-draft-content", async () => {
+      // Build source context from all verified data sources
+      const sourceParts: string[] = [];
+      if (playbook) sourceParts.push(formatPlaybookForPrompt(playbook));
+      if (memories.length > 0) sourceParts.push(memories.join("\n"));
+      if (knowledgeProfile) {
+        const kp = knowledgeProfile;
+        if (kp.business_summary) sourceParts.push(kp.business_summary as string);
+        if (kp.services) sourceParts.push(JSON.stringify(kp.services));
+        if (kp.business_patterns) sourceParts.push((kp.business_patterns as string[]).join("\n"));
+      }
+      const sourceContext = sourceParts.join("\n");
+      return validateDraftContent(draft.textBody, sourceContext);
+    });
+
+    // If validation failed, convert to info request instead of storing draft
+    if (draftValidation.hasPlaceholders) {
+      await step.run("create-info-request-for-draft", async () => {
+        const db = createAdminSupabaseClient();
+        console.log(`[Sales Closer] Draft failed validation: ${draftValidation.placeholders.join(", ")}`);
+
+        // Store as info request
+        await db.from("skyler_requests").insert({
+          workspace_id: workspaceId,
+          pipeline_id: pipeline.id,
+          request_description: draftValidation.missingDescription,
+          status: "pending",
+        });
+
+        // Set skyler_note on pipeline so the banner appears
+        await db.from("skyler_sales_pipeline").update({
+          skyler_note: {
+            type: "action_required",
+            message: draftValidation.missingDescription,
+            created_at: new Date().toISOString(),
+            resolved: false,
+          },
+          updated_at: new Date().toISOString(),
+        }).eq("id", pipeline.id);
+
+        // Notify user
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "info_requested",
+          pipelineId: pipeline.id,
+          title: `Skyler needs info: ${pipeline.contact_name || contactName}`,
+          body: draftValidation.missingDescription,
+          metadata: {
+            contactName: pipeline.contact_name || contactName,
+            contactEmail: pipeline.contact_email || contactEmail,
+            flaggedClaims: draftValidation.placeholders,
+          },
+        });
+      });
+
+      return { status: "info_requested", pipeline_id: pipeline.id, flagged: draftValidation.placeholders };
+    }
+
     // Step 10: Store draft for approval
     const action = await step.run("store-draft-for-approval", async () => {
-      console.log("[Sales Closer] Step 7: Storing draft for approval...");
+      console.log("[Sales Closer] Step 10: Storing draft for approval...");
       const db = createAdminSupabaseClient();
       return await draftOutreachEmail(db, {
         workspaceId,
@@ -1095,6 +1155,58 @@ ${replyContent.slice(0, 2000)}`,
         };
       }
     });
+
+    // Step 6b: Validate reply draft — catch fabricated numbers/claims
+    const replyValidation = await step.run("validate-reply-draft", async () => {
+      const sourceParts: string[] = [];
+      if (playbook) sourceParts.push(formatPlaybookForPrompt(playbook));
+      if (memories.length > 0) sourceParts.push(memories.join("\n"));
+      if (replyKnowledgeProfile) {
+        const kp = replyKnowledgeProfile;
+        if (kp.business_summary) sourceParts.push(kp.business_summary as string);
+        if (kp.services) sourceParts.push(JSON.stringify(kp.services));
+      }
+      return validateDraftContent(draft.textBody, sourceParts.join("\n"));
+    });
+
+    if (replyValidation.hasPlaceholders) {
+      await step.run("create-info-request-for-reply", async () => {
+        const db = createAdminSupabaseClient();
+        console.log(`[Pipeline Reply] Draft failed validation: ${replyValidation.placeholders.join(", ")}`);
+
+        await db.from("skyler_requests").insert({
+          workspace_id: workspaceId,
+          pipeline_id: pipelineId,
+          request_description: replyValidation.missingDescription,
+          status: "pending",
+        });
+
+        await db.from("skyler_sales_pipeline").update({
+          skyler_note: {
+            type: "action_required",
+            message: replyValidation.missingDescription,
+            created_at: new Date().toISOString(),
+            resolved: false,
+          },
+          updated_at: new Date().toISOString(),
+        }).eq("id", pipelineId);
+
+        await dispatchNotification(db, {
+          workspaceId,
+          eventType: "info_requested",
+          pipelineId,
+          title: `Skyler needs info: ${pipeline.contact_name}`,
+          body: replyValidation.missingDescription,
+          metadata: {
+            contactName: pipeline.contact_name,
+            contactEmail: pipeline.contact_email,
+            flaggedClaims: replyValidation.placeholders,
+          },
+        });
+      });
+
+      return { status: "info_requested", pipeline_id: pipelineId, flagged: replyValidation.placeholders };
+    }
 
     // Step 7: Store reply draft for approval
     console.log(`[Pipeline Reply] Draft generated for ${contactEmail}: "${draft.subject}" — storing...`);

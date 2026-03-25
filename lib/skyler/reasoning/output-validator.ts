@@ -5,7 +5,10 @@
  * markers, and generic stand-ins. If found, the draft is converted to a
  * request_info action instead of entering the approval queue.
  *
- * This is the last line of defence — if the AI slips a [bank details here]
+ * Layer 5a: Placeholder scan (brackets, TBD, etc.)
+ * Layer 5b: Unverified claims scan (prices, percentages, stats not in source context)
+ *
+ * This is the last line of defence — if the AI slips fabricated data
  * through Layers 1-4, this catches it.
  */
 
@@ -67,6 +70,18 @@ const BRACKET_EXCLUSIONS = [
   /^\[calendar\s*(?:link|url|invite)\]/i,            // Calendar invite links
   /^\[booking\s*(?:link|url)\]/i,                    // Booking links
 ];
+
+// ── Monetary / statistical claim patterns ────────────────────────────────────
+
+/** Currency amounts: $100, ₦15, €50, £200, $1,200,000, ₦15-25 */
+const CURRENCY_PATTERN = /[₦$€£]\s*[\d,]+(?:\s*[-–]\s*[₦$€£]?\s*[\d,]+)?(?:\s*(?:per|\/)\s*\w+)?/gi;
+
+/** Percentage claims: 40%, 40-60%, 2x, 5x */
+const PERCENTAGE_PATTERN = /\b\d+(?:\s*[-–]\s*\d+)?\s*%/g;
+const MULTIPLIER_PATTERN = /\b\d+(?:\.\d+)?\s*x\b/gi;
+
+/** Specific ROI / margin phrases with numbers */
+const STAT_PHRASES = /\b(?:roi|margin|profit|savings?|discount|revenue|growth)\s*(?:of|at|around|up to|over)?\s*\d/gi;
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
 
@@ -132,6 +147,109 @@ export function scanForPlaceholders(content: string): PlaceholderScanResult {
     placeholders: unique,
     missingDescription,
   };
+}
+
+// ── Unverified Claims Scanner ────────────────────────────────────────────────
+
+/**
+ * Scan an email draft for specific numerical claims (prices, percentages,
+ * statistics) that do NOT appear in the verified source context (playbook,
+ * knowledge profile, memories). If found, the claims are likely fabricated.
+ *
+ * @param emailContent  The drafted email text
+ * @param sourceContext  Combined text from playbook + knowledge profile + memories
+ */
+export function scanForUnverifiedClaims(
+  emailContent: string,
+  sourceContext: string
+): PlaceholderScanResult {
+  if (!emailContent || emailContent.trim().length === 0) {
+    return { hasPlaceholders: false, placeholders: [], missingDescription: "" };
+  }
+
+  // If there's no source context at all, any specific claim is suspect
+  const hasSource = sourceContext.trim().length > 0;
+  const sourceLower = sourceContext.toLowerCase();
+
+  const unverified: string[] = [];
+
+  // 1. Currency amounts
+  for (const match of emailContent.match(CURRENCY_PATTERN) ?? []) {
+    const normalized = match.replace(/\s+/g, "").toLowerCase();
+    // Check if this exact figure (or close variant) appears in source
+    if (!hasSource || !sourceLower.includes(normalized.replace(/\s+/g, ""))) {
+      // Also check if the raw number part appears in source
+      const numPart = match.replace(/[₦$€£,\s]/g, "");
+      if (!hasSource || !sourceLower.includes(numPart)) {
+        unverified.push(match.trim());
+      }
+    }
+  }
+
+  // 2. Percentage claims
+  for (const match of emailContent.match(PERCENTAGE_PATTERN) ?? []) {
+    const numPart = match.replace(/[%\s]/g, "");
+    if (!hasSource || !sourceLower.includes(numPart + "%")) {
+      // Also check for the number near "percent" in source
+      if (!hasSource || !sourceLower.includes(numPart)) {
+        unverified.push(match.trim());
+      }
+    }
+  }
+
+  // 3. Multiplier claims (2x, 5x, etc.) — only flag larger claims
+  for (const match of emailContent.match(MULTIPLIER_PATTERN) ?? []) {
+    const num = parseFloat(match);
+    if (num >= 2 && (!hasSource || !sourceLower.includes(match.toLowerCase()))) {
+      unverified.push(match.trim());
+    }
+  }
+
+  // 4. ROI/margin/profit phrases with numbers
+  for (const match of emailContent.match(STAT_PHRASES) ?? []) {
+    if (!hasSource || !sourceLower.includes(match.toLowerCase())) {
+      unverified.push(match.trim());
+    }
+  }
+
+  // Deduplicate
+  const unique = [...new Set(unverified)];
+
+  if (unique.length === 0) {
+    return { hasPlaceholders: false, placeholders: [], missingDescription: "" };
+  }
+
+  const claimList = unique.slice(0, 5).join(", ");
+  const missingDescription =
+    `I drafted the email but included specific figures (${claimList}) that I don't have verified data for. ` +
+    `Could you provide the actual numbers, or should I rewrite without specific pricing/stats?`;
+
+  return {
+    hasPlaceholders: true,
+    placeholders: unique,
+    missingDescription,
+  };
+}
+
+// ── Combined scanner ─────────────────────────────────────────────────────────
+
+/**
+ * Run both placeholder scan and unverified claims scan.
+ * Returns the first failure found (placeholders take priority).
+ */
+export function validateDraftContent(
+  emailContent: string,
+  sourceContext: string
+): PlaceholderScanResult {
+  // Layer 5a: placeholder markers
+  const placeholderResult = scanForPlaceholders(emailContent);
+  if (placeholderResult.hasPlaceholders) return placeholderResult;
+
+  // Layer 5b: unverified numerical claims
+  const claimsResult = scanForUnverifiedClaims(emailContent, sourceContext);
+  if (claimsResult.hasPlaceholders) return claimsResult;
+
+  return { hasPlaceholders: false, placeholders: [], missingDescription: "" };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

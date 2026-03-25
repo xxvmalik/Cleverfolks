@@ -255,7 +255,18 @@ export function SkylerWorkspace({
   };
 
   const handleReplyToRequest = (text: string) => {
-    setChatInput(text);
+    // Auto-tag the selected lead so Skyler has full context
+    if (selectedRecord) {
+      setTaggedLead({
+        id: selectedRecord.id,
+        name: selectedRecord.contact_name,
+        company: selectedRecord.company_name,
+        email: selectedRecord.contact_email,
+        stage: selectedRecord.stage,
+        healthScore: selectedRecord.health_score,
+      });
+    }
+    setChatInput(`Re: ${text}\n\n`);
     setChatOpen(true);
   };
 
