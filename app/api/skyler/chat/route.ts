@@ -356,7 +356,7 @@ ${actions ? `Recent actions: ${actions}` : ""}
     const entityId = resolvedEntity.entityId;
 
     // Load fresh entity data
-    const [{ data: entityPipeline }, entityDirectives, { data: entityMeetings }] = await Promise.all([
+    const [{ data: entityPipeline }, entityDirectives, { data: entityMeetings }, { data: rejectedDrafts }] = await Promise.all([
       db
         .from("skyler_sales_pipeline")
         .select("contact_email, contact_name, company_name, stage, emails_sent, emails_replied, emails_opened, conversation_thread, deal_value, meeting_outcome, meeting_transcript, updated_at")
@@ -369,6 +369,13 @@ ${actions ? `Recent actions: ${actions}` : ""}
         .eq("lead_id", entityId)
         .eq("processing_status", "complete")
         .order("meeting_date", { ascending: false })
+        .limit(1),
+      db
+        .from("skyler_actions")
+        .select("result, created_at")
+        .eq("pipeline_id", entityId)
+        .eq("status", "rejected")
+        .order("created_at", { ascending: false })
         .limit(1),
     ]);
 
@@ -415,6 +422,20 @@ ${actions ? `Recent actions: ${actions}` : ""}
         [],
         undefined
       );
+    }
+
+    // Inject recent rejection feedback so Skyler knows about it
+    if (rejectedDrafts && rejectedDrafts.length > 0) {
+      const rejectionFeedback = (rejectedDrafts[0].result as Record<string, unknown>)?.feedback as string | undefined;
+      if (rejectionFeedback) {
+        activeEntityBlock += `\n\n<recent_rejection>
+The user recently REJECTED a draft for this lead with the following feedback:
+"${rejectionFeedback}"
+
+You MUST incorporate this feedback when redrafting. Do NOT ask the user to repeat their rejection reason — you already have it above.
+When the user asks to "redraft", call draft_correction_email with pipeline_id="${entityId}" and user_feedback="${rejectionFeedback.replace(/"/g, '\\"')}".
+</recent_rejection>`;
+      }
     }
   }
 
