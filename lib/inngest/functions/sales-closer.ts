@@ -406,11 +406,13 @@ export const handlePipelineReply = inngest.createFunction(
     };
 
     // Step 1: Fetch pipeline record (reply-detector already updated it with the reply)
+    // Select only needed fields — select("*") can exceed Inngest step payload limits
+    // when conversation_thread is large (22+ entries × 3000 chars each).
     const pipeline = await step.run("fetch-pipeline", async () => {
       const db = createAdminSupabaseClient();
       const { data: current } = await db
         .from("skyler_sales_pipeline")
-        .select("*")
+        .select("id, workspace_id, contact_name, contact_email, company_name, stage, resolution, cadence_step, contact_title, website, user_context, hubspot_deal_id, conversation_thread, meeting_outcome, meeting_transcript")
         .eq("id", pipelineId)
         .single();
 
