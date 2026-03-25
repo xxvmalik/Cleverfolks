@@ -20,6 +20,7 @@ import { dispatchNotification } from "@/lib/skyler/notifications";
 import { checkAndEscalate } from "@/lib/skyler/escalation";
 import { validateDraftContent } from "@/lib/skyler/reasoning/output-validator";
 import { STAGES } from "@/lib/skyler/pipeline-stages";
+import { logAgentActivity } from "@/lib/agent-activity";
 
 // Reply intent classification type
 type ReplyIntent = "positive_interest" | "objection" | "meeting_accept" | "opt_out";
@@ -462,7 +463,7 @@ export const salesCloserWorkflow = inngest.createFunction(
       });
     });
 
-    // Notify: draft awaiting approval
+    // Notify: draft awaiting approval + log activity
     await step.run("notify-draft-awaiting-approval", async () => {
       const db = createAdminSupabaseClient();
       await dispatchNotification(db, {
@@ -477,6 +478,18 @@ export const salesCloserWorkflow = inngest.createFunction(
           companyName: pipeline.company_name || companyName,
           cadenceStep: 1,
         },
+      });
+
+      // Log to agent activity feed
+      await logAgentActivity(db, {
+        workspaceId,
+        agentType: "skyler",
+        activityType: "email_drafted",
+        title: `Drafted initial outreach for ${pipeline.contact_name || contactName}`,
+        description: `Email to ${pipeline.contact_email || contactEmail} at ${pipeline.company_name || companyName} — awaiting approval`,
+        metadata: { subject: draft.subject, cadenceStep: 1 },
+        relatedEntityId: pipeline.id,
+        relatedEntityType: "pipeline",
       });
     });
 
@@ -1224,7 +1237,7 @@ ${replyContent.slice(0, 2000)}`,
       return result;
     });
 
-    // Notify: reply draft awaiting approval
+    // Notify: reply draft awaiting approval + log activity
     await step.run("notify-reply-draft-ready", async () => {
       const db = createAdminSupabaseClient();
       await dispatchNotification(db, {
@@ -1239,6 +1252,18 @@ ${replyContent.slice(0, 2000)}`,
           companyName: pipeline.company_name,
           intent: classification.intent,
         },
+      });
+
+      // Log to agent activity feed
+      await logAgentActivity(db, {
+        workspaceId,
+        agentType: "skyler",
+        activityType: "email_drafted",
+        title: `Drafted reply for ${pipeline.contact_name} (${classification.intent})`,
+        description: `Response to ${classification.intent === "objection" ? "objection" : "reply"} from ${pipeline.contact_email} — awaiting approval`,
+        metadata: { intent: classification.intent, subject: draft.subject },
+        relatedEntityId: pipelineId,
+        relatedEntityType: "pipeline",
       });
     });
 

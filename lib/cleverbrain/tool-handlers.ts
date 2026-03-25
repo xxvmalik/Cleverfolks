@@ -731,6 +731,377 @@ export async function handleMapWebsite(
   }
 }
 
+// ── query_sales_pipeline ──────────────────────────────────────────────────────
+
+async function handleQuerySalesPipeline(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input, workspaceId, adminSupabase } = ctx;
+  const stage = input.stage as string | undefined;
+  const resolution = input.resolution as string | undefined;
+  const search = input.search as string | undefined;
+  const after = input.after as string | undefined;
+  const before = input.before as string | undefined;
+  const limit = Math.min(Number(input.limit ?? 20), 100);
+
+  let query = adminSupabase
+    .from("skyler_sales_pipeline")
+    .select(
+      "id, contact_name, contact_email, company_name, stage, resolution, " +
+      "lead_score, health_score, deal_value, emails_sent, emails_replied, " +
+      "awaiting_reply, cadence_step, last_email_sent_at, last_reply_at, " +
+      "created_at, updated_at"
+    )
+    .eq("workspace_id", workspaceId)
+    .order("updated_at", { ascending: false })
+    .limit(limit);
+
+  if (stage) query = query.eq("stage", stage);
+  if (resolution && resolution !== "null") {
+    query = query.eq("resolution", resolution);
+  }
+  if (search) {
+    query = query.or(
+      `contact_name.ilike.%${search}%,contact_email.ilike.%${search}%,company_name.ilike.%${search}%`
+    );
+  }
+  if (after) query = query.gte("created_at", after);
+  if (before) query = query.lte("created_at", before);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("[tool-handler] query_sales_pipeline error:", error.message);
+    return { results: [], summary: "Failed to query pipeline" };
+  }
+
+  const leads = (data ?? []) as unknown as Array<Record<string, unknown>>;
+  if (leads.length === 0) {
+    return { results: [], summary: "No leads found matching the criteria." };
+  }
+
+  const stageCounts: Record<string, number> = {};
+  let totalValue = 0;
+  for (const lead of leads) {
+    const s = (lead.stage as string) ?? "unknown";
+    stageCounts[s] = (stageCounts[s] ?? 0) + 1;
+    totalValue += Number(lead.deal_value ?? 0);
+  }
+
+  const stageBreakdown = Object.entries(stageCounts)
+    .map(([s, c]) => `${s}: ${c}`)
+    .join(", ");
+
+  const summary =
+    `Found ${leads.length} leads. Stages: ${stageBreakdown}. ` +
+    `Total pipeline value: ${totalValue > 0 ? totalValue.toLocaleString() : "not set"}.\n` +
+    leads
+      .map(
+        (l) =>
+          `- ${l.contact_name} (${l.contact_email}) at ${l.company_name ?? "—"} | ` +
+          `Stage: ${l.stage} | Score: ${l.lead_score ?? "—"} | Health: ${l.health_score ?? "—"} | ` +
+          `Value: ${l.deal_value ?? "—"} | Emails: ${l.emails_sent ?? 0} sent, ${l.emails_replied ?? 0} replied | ` +
+          `Last: ${l.updated_at ? new Date(l.updated_at as string).toLocaleDateString("en-GB") : "—"}`
+      )
+      .join("\n");
+
+  return { results: [], summary };
+}
+
+// ── get_lead_details ────────────────────────────────────────────────────────
+
+async function handleGetLeadDetails(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input, workspaceId, adminSupabase } = ctx;
+  const leadId = input.lead_id as string | undefined;
+  const contactEmail = input.contact_email as string | undefined;
+
+  if (!leadId && !contactEmail) {
+    return { results: [], summary: "Please provide either a lead_id or contact_email." };
+  }
+
+  let pipelineQuery = adminSupabase
+    .from("skyler_sales_pipeline")
+    .select("*")
+    .eq("workspace_id", workspaceId);
+
+  if (leadId) {
+    pipelineQuery = pipelineQuery.eq("id", leadId);
+  } else {
+    pipelineQuery = pipelineQuery.ilike("contact_email", contactEmail!);
+  }
+
+  const { data: pipeline } = await pipelineQuery.maybeSingle();
+
+  if (!pipeline) {
+    return { results: [], summary: `No lead found for ${leadId ?? contactEmail}.` };
+  }
+
+  const pid = pipeline.id as string;
+
+  // Fetch related data in parallel
+  const [eventsResult, decisionsResult, actionsResult] = await Promise.all([
+    adminSupabase
+      .from("pipeline_events")
+      .select("event_type, from_stage, to_stage, source, source_detail, payload, created_at")
+      .eq("lead_id", pid)
+      .order("created_at", { ascending: false })
+      .limit(15),
+    adminSupabase
+      .from("skyler_decisions")
+      .select("event_type, decision, guardrail_outcome, created_at")
+      .eq("pipeline_id", pid)
+      .order("created_at", { ascending: false })
+      .limit(10),
+    adminSupabase
+      .from("skyler_actions")
+      .select("tool_name, description, status, created_at")
+      .eq("workspace_id", workspaceId)
+      .or(`pipeline_id.eq.${pid},tool_input->>pipelineId.eq.${pid}`)
+      .order("created_at", { ascending: false })
+      .limit(10),
+  ]);
+
+  const events = eventsResult.data ?? [];
+  const decisions = decisionsResult.data ?? [];
+  const actions = actionsResult.data ?? [];
+
+  const thread = (pipeline.conversation_thread ?? []) as Array<Record<string, unknown>>;
+  const threadSummary = thread.length > 0
+    ? thread.slice(-6).map((e) =>
+        `[${e.role}] (${e.timestamp ? new Date(e.timestamp as string).toLocaleDateString("en-GB") : "—"}): ${(e.content as string ?? "").slice(0, 150)}${(e.content as string ?? "").length > 150 ? "..." : ""}`
+      ).join("\n")
+    : "No conversation yet.";
+
+  const eventsSummary = events.length > 0
+    ? events.slice(0, 8).map((e) =>
+        `${new Date(e.created_at as string).toLocaleDateString("en-GB")} — ${e.event_type}${e.from_stage ? ` (${e.from_stage} → ${e.to_stage})` : ""}${e.source_detail ? `: ${e.source_detail}` : ""}`
+      ).join("\n")
+    : "No events.";
+
+  const decisionsSummary = decisions.length > 0
+    ? decisions.slice(0, 5).map((d) => {
+        const dec = d.decision as Record<string, unknown>;
+        return `${new Date(d.created_at as string).toLocaleDateString("en-GB")} — ${dec.action_type} (${d.guardrail_outcome}): ${(dec.reasoning as string ?? "").slice(0, 100)}`;
+      }).join("\n")
+    : "No decisions.";
+
+  const skylerNote = pipeline.skyler_note as Record<string, unknown> | null;
+
+  const summary =
+    `## Lead: ${pipeline.contact_name} (${pipeline.contact_email})\n` +
+    `Company: ${pipeline.company_name ?? "—"}\n` +
+    `Stage: ${pipeline.stage} | Resolution: ${pipeline.resolution ?? "active"}\n` +
+    `Lead Score: ${pipeline.lead_score ?? "—"} | Health: ${pipeline.health_score ?? "—"} | Deal Value: ${pipeline.deal_value ?? "—"}\n` +
+    `Emails: ${pipeline.emails_sent ?? 0} sent, ${pipeline.emails_replied ?? 0} replied | Cadence Step: ${pipeline.cadence_step ?? 0}\n` +
+    `Awaiting Reply: ${pipeline.awaiting_reply ? "yes" : "no"} | Next Follow-up: ${pipeline.next_followup_at ? new Date(pipeline.next_followup_at as string).toLocaleDateString("en-GB") : "none"}\n` +
+    `Created: ${new Date(pipeline.created_at as string).toLocaleDateString("en-GB")} | Updated: ${new Date(pipeline.updated_at as string).toLocaleDateString("en-GB")}\n` +
+    (skylerNote && !(skylerNote.resolved) ? `\nSkyler Note: ${skylerNote.message}\n` : "") +
+    `\n### Recent Conversation (last ${Math.min(6, thread.length)} of ${thread.length})\n${threadSummary}\n` +
+    `\n### Activity Timeline (${events.length} events)\n${eventsSummary}\n` +
+    `\n### Skyler Decisions (${decisions.length} total)\n${decisionsSummary}\n` +
+    `\n### Actions (${actions.length} total)\n` +
+    (actions.length > 0
+      ? actions.slice(0, 5).map((a) =>
+          `${new Date(a.created_at as string).toLocaleDateString("en-GB")} — ${a.tool_name}: ${a.description ?? "—"} [${a.status}]`
+        ).join("\n")
+      : "No actions.");
+
+  return { results: [], summary };
+}
+
+// ── get_agent_activity ──────────────────────────────────────────────────────
+
+async function handleGetAgentActivity(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input, workspaceId, adminSupabase } = ctx;
+  const agentType = input.agent_type as string | undefined;
+  const activityType = input.activity_type as string | undefined;
+  const after = (input.after as string) ?? new Date(Date.now() - 7 * 86400000).toISOString();
+  const before = input.before as string | undefined;
+  const limit = Math.min(Number(input.limit ?? 30), 100);
+
+  let query = adminSupabase
+    .from("agent_activities")
+    .select("agent_type, activity_type, title, description, metadata, created_at")
+    .eq("workspace_id", workspaceId)
+    .gte("created_at", after)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (agentType) query = query.eq("agent_type", agentType);
+  if (activityType) query = query.eq("activity_type", activityType);
+  if (before) query = query.lte("created_at", before);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("[tool-handler] get_agent_activity error:", error.message);
+    return { results: [], summary: "Failed to query agent activity." };
+  }
+
+  const activities = data ?? [];
+
+  if (activities.length === 0) {
+    return { results: [], summary: "No agent activity found in the specified period." };
+  }
+
+  const grouped: Record<string, number> = {};
+  for (const a of activities) {
+    const t = a.activity_type as string;
+    grouped[t] = (grouped[t] ?? 0) + 1;
+  }
+
+  const groupedSummary = Object.entries(grouped)
+    .sort((a, b) => b[1] - a[1])
+    .map(([type, count]) => `${type.replace(/_/g, " ")}: ${count}`)
+    .join(", ");
+
+  const summary =
+    `${activities.length} activities in period. Breakdown: ${groupedSummary}.\n\nRecent activity:\n` +
+    activities.slice(0, 15).map((a) =>
+      `${new Date(a.created_at as string).toLocaleDateString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} — [${a.agent_type}] ${a.title}${a.description ? ` — ${(a.description as string).slice(0, 100)}` : ""}`
+    ).join("\n");
+
+  return { results: [], summary };
+}
+
+// ── pipeline_metrics ────────────────────────────────────────────────────────
+
+function getDateRange(period?: string, after?: string, before?: string): { start: string | null; end: string | null } {
+  if (after || before) return { start: after ?? null, end: before ?? null };
+
+  const now = new Date();
+  switch (period) {
+    case "this_week": {
+      const day = now.getDay();
+      const monday = new Date(now);
+      monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+      monday.setHours(0, 0, 0, 0);
+      return { start: monday.toISOString(), end: now.toISOString() };
+    }
+    case "this_month": {
+      const start = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { start: start.toISOString(), end: now.toISOString() };
+    }
+    case "this_quarter": {
+      const qMonth = Math.floor(now.getMonth() / 3) * 3;
+      const start = new Date(now.getFullYear(), qMonth, 1);
+      return { start: start.toISOString(), end: now.toISOString() };
+    }
+    case "last_month": {
+      const start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59);
+      return { start: start.toISOString(), end: end.toISOString() };
+    }
+    case "last_quarter": {
+      const curQ = Math.floor(now.getMonth() / 3);
+      const start = new Date(now.getFullYear(), (curQ - 1) * 3, 1);
+      const end = new Date(now.getFullYear(), curQ * 3, 0, 23, 59, 59);
+      return { start: start.toISOString(), end: end.toISOString() };
+    }
+    default:
+      return { start: null, end: null };
+  }
+}
+
+async function handlePipelineMetrics(
+  ctx: ToolContext
+): Promise<ToolHandlerResult> {
+  const { input, workspaceId, adminSupabase } = ctx;
+  const period = input.period as string | undefined;
+  const { start, end } = getDateRange(period, input.after as string, input.before as string);
+
+  let query = adminSupabase
+    .from("skyler_sales_pipeline")
+    .select(
+      "id, stage, resolution, deal_value, emails_sent, emails_replied, " +
+      "emails_opened, health_score, created_at, updated_at, resolved_at"
+    )
+    .eq("workspace_id", workspaceId);
+
+  if (start) query = query.gte("created_at", start);
+  if (end) query = query.lte("created_at", end);
+
+  const { data, error } = await query;
+
+  if (error) {
+    console.error("[tool-handler] pipeline_metrics error:", error.message);
+    return { results: [], summary: "Failed to query pipeline metrics." };
+  }
+
+  const leads = (data ?? []) as unknown as Array<Record<string, unknown>>;
+
+  if (leads.length === 0) {
+    return { results: [], summary: "No pipeline data found for the specified period." };
+  }
+
+  const totalLeads = leads.length;
+  const stageCounts: Record<string, number> = {};
+  let totalValue = 0;
+  let leadsWithValue = 0;
+  let totalEmailsSent = 0;
+  let totalEmailsReplied = 0;
+  let totalEmailsOpened = 0;
+  let closedWon = 0;
+  let closedLost = 0;
+  let meetingsBooked = 0;
+  let demosBooked = 0;
+
+  for (const lead of leads) {
+    const s = (lead.stage as string) ?? "unknown";
+    stageCounts[s] = (stageCounts[s] ?? 0) + 1;
+
+    const val = Number(lead.deal_value ?? 0);
+    if (val > 0) { totalValue += val; leadsWithValue++; }
+
+    totalEmailsSent += Number(lead.emails_sent ?? 0);
+    totalEmailsReplied += Number(lead.emails_replied ?? 0);
+    totalEmailsOpened += Number(lead.emails_opened ?? 0);
+
+    const res = lead.resolution as string | null;
+    if (res === "won" || s === "closed_won") closedWon++;
+    if (res === "lost" || res === "disqualified" || s === "disqualified") closedLost++;
+    if (res === "meeting_booked" || s === "demo_booked") meetingsBooked++;
+    if (res === "demo_booked") demosBooked++;
+  }
+
+  const avgDealSize = leadsWithValue > 0 ? Math.round(totalValue / leadsWithValue) : 0;
+  const replyRate = totalEmailsSent > 0 ? Math.round((totalEmailsReplied / totalEmailsSent) * 100) : 0;
+  const openRate = totalEmailsSent > 0 ? Math.round((totalEmailsOpened / totalEmailsSent) * 100) : 0;
+  const winRate = (closedWon + closedLost) > 0 ? Math.round((closedWon / (closedWon + closedLost)) * 100) : 0;
+
+  const stageBreakdown = Object.entries(stageCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([s, c]) => `${s.replace(/_/g, " ")}: ${c}`)
+    .join("\n  ");
+
+  const periodLabel = period ? period.replace(/_/g, " ") : (start ? `${start.slice(0, 10)} to ${(end ?? "now").slice(0, 10)}` : "all time");
+
+  const summary =
+    `## Pipeline Metrics (${periodLabel})\n\n` +
+    `**Overview:**\n` +
+    `- Total leads: ${totalLeads}\n` +
+    `- Total pipeline value: ${totalValue > 0 ? totalValue.toLocaleString() : "not tracked"}\n` +
+    `- Average deal size: ${avgDealSize > 0 ? avgDealSize.toLocaleString() : "not tracked"}\n\n` +
+    `**By Stage:**\n  ${stageBreakdown}\n\n` +
+    `**Email Performance:**\n` +
+    `- Emails sent: ${totalEmailsSent}\n` +
+    `- Open rate: ${openRate}%\n` +
+    `- Reply rate: ${replyRate}%\n` +
+    `- Total replies: ${totalEmailsReplied}\n\n` +
+    `**Outcomes:**\n` +
+    `- Deals won: ${closedWon}\n` +
+    `- Deals lost/disqualified: ${closedLost}\n` +
+    `- Win rate: ${winRate}%\n` +
+    `- Meetings booked: ${meetingsBooked}\n` +
+    `- Demos booked: ${demosBooked}`;
+
+  return { results: [], summary };
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────────────
 
 const HANDLERS: Record<
@@ -744,6 +1115,10 @@ const HANDLERS: Record<
   search_web: handleSearchWeb,
   browse_website: handleBrowseWebsite,
   map_website: handleMapWebsite,
+  query_sales_pipeline: handleQuerySalesPipeline,
+  get_lead_details: handleGetLeadDetails,
+  get_agent_activity: handleGetAgentActivity,
+  pipeline_metrics: handlePipelineMetrics,
 };
 
 export async function executeToolCall(

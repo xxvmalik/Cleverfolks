@@ -185,6 +185,15 @@ function generateActivityLabel(
     }
     case "send_email":
       return "Preparing email draft...";
+    // ── CleverBrain pipeline visibility tools ──
+    case "query_sales_pipeline":
+      return "Checking your sales pipeline...";
+    case "get_lead_details":
+      return "Looking up lead details...";
+    case "get_agent_activity":
+      return "Checking agent activity...";
+    case "pipeline_metrics":
+      return "Calculating pipeline metrics...";
     default:
       return ACTIVITY_FALLBACK;
   }

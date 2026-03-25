@@ -9,6 +9,7 @@ import { Nango } from "@nangohq/node";
 import { randomUUID } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateTrackingPixel } from "@/lib/skyler/open-tracking";
+import { logAgentActivity } from "@/lib/agent-activity";
 
 export type EmailDraftParams = {
   workspaceId: string;
@@ -891,5 +892,18 @@ export async function executeEmailSend(
     .eq("id", pipelineId);
 
   console.log(`[email-sender] Email sent via ${emailProvider.provider}: ${messageId} (step ${currentStep})`);
+
+  // Log to agent activity feed (fire-and-forget)
+  logAgentActivity(db, {
+    workspaceId,
+    agentType: "skyler",
+    activityType: "email_sent",
+    title: `Email sent to ${input.to as string}`,
+    description: `Subject: "${subject}" — sent via ${emailProvider.provider} (step ${currentStep})`,
+    metadata: { provider: emailProvider.provider, cadenceStep: currentStep, messageId },
+    relatedEntityId: pipelineId,
+    relatedEntityType: "pipeline",
+  }).catch(() => {});
+
   return { messageId };
 }

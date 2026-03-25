@@ -14,6 +14,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { inngest } from "@/lib/inngest/client";
 import { extractSenderFromText, extractSenderFromMetadata } from "./email-prefilter";
 import { stageOnReply } from "@/lib/skyler/pipeline-stages";
+import { logAgentActivity } from "@/lib/agent-activity";
 
 export type ReplyDetectionResult = {
   is_reply: boolean;
@@ -214,6 +215,18 @@ export async function detectPipelineReply(
     } catch (inngestErr) {
       console.error("[reply-detector] Inngest event failed:", inngestErr);
     }
+
+    // Log to agent activity feed
+    logAgentActivity(db, {
+      workspaceId,
+      agentType: "skyler",
+      activityType: "reply_detected",
+      title: `Reply detected from ${senderEmail}`,
+      description: `${senderEmail} replied to outreach — stage updated to ${newStage}`,
+      metadata: { emailsReplied: ((pipeline.emails_replied as number) ?? 0) + 1 },
+      relatedEntityId: pipeline.id,
+      relatedEntityType: "pipeline",
+    }).catch(() => {});
 
     return {
       is_reply: true,

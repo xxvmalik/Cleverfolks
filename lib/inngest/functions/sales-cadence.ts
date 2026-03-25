@@ -20,6 +20,7 @@ import { draftOutreachEmail } from "@/lib/email/email-sender";
 import { buildSalesPlaybook } from "@/lib/skyler/sales-playbook";
 import { filterDealMemories } from "@/lib/skyler/filter-deal-memories";
 import { dispatchNotification } from "@/lib/skyler/notifications";
+import { logAgentActivity } from "@/lib/agent-activity";
 
 // ── Cadence Scheduler (cron) ─────────────────────────────────────────────────
 // Runs every hour. Finds pipeline records due for follow-up and dispatches events.
@@ -422,6 +423,18 @@ export const salesCadenceFollowUp = inngest.createFunction(
           companyName: pipeline.company_name ?? companyName,
           cadenceStep: nextStep,
         },
+      });
+
+      // Log to agent activity feed
+      await logAgentActivity(db, {
+        workspaceId,
+        agentType: "skyler",
+        activityType: "email_drafted",
+        title: `Drafted follow-up ${nextStep} for ${pipeline.contact_name ?? contactName}`,
+        description: `Follow-up email to ${pipeline.contact_email ?? contactEmail} — step ${nextStep} of cadence`,
+        metadata: { cadenceStep: nextStep },
+        relatedEntityId: pipelineId,
+        relatedEntityType: "pipeline",
       });
     });
 

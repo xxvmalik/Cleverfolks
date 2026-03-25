@@ -222,4 +222,131 @@ export const CLEVERBRAIN_TOOLS: Anthropic.Tool[] = [
       required: ["url"],
     },
   },
+  // ── Skyler Pipeline + Agent Visibility Tools ──────────────────────────────
+  {
+    name: "query_sales_pipeline",
+    description:
+      "Query Skyler's sales pipeline to see lead cards. Use when the user asks about their pipeline, sales leads, deals, " +
+      "prospects, or outreach status. Returns lead cards with stage, health score, contact info, deal value, and last activity. " +
+      "Supports filtering by stage, resolution status, search query, and date range. " +
+      "Examples: 'how many leads do I have?', 'show me engaged leads', 'what deals are in negotiation?', 'any new leads this week?'",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        stage: {
+          type: "string",
+          description:
+            "Filter by pipeline stage. Options: initial_outreach, follow_up_1, follow_up_2, follow_up_3, replied, negotiation, demo_booked, payment_secured, closed_won, stalled, disqualified. Omit to see all stages.",
+        },
+        resolution: {
+          type: "string",
+          description:
+            "Filter by resolution. Options: meeting_booked, demo_booked, payment_secured, disqualified, no_response. Use 'null' or omit for unresolved (active) leads.",
+        },
+        search: {
+          type: "string",
+          description:
+            "Search by contact name, email, or company name. Case-insensitive partial match.",
+        },
+        after: {
+          type: "string",
+          description: "ISO 8601 date string. Only return leads created after this date.",
+        },
+        before: {
+          type: "string",
+          description: "ISO 8601 date string. Only return leads created before this date.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum leads to return. Default 20, max 100.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_lead_details",
+    description:
+      "Get full details on a specific lead including activity timeline, email history, decisions made by Skyler, and pending actions. " +
+      "Use when the user asks about a specific lead, contact, or deal. Provide either the lead ID or contact email. " +
+      "Examples: 'tell me about the Acme deal', 'what's happening with john@example.com?', 'show me details on lead X'",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        lead_id: {
+          type: "string",
+          description: "The pipeline record UUID. Use this if you have it from a previous query_sales_pipeline call.",
+        },
+        contact_email: {
+          type: "string",
+          description: "The contact's email address. Use this if the user mentions an email or you need to look up by email.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_agent_activity",
+    description:
+      "See what Skyler (or other AI agents) have been doing. Returns a summary of agent actions grouped by type. " +
+      "Use when the user asks: 'what has Skyler done?', 'any agent activity?', 'what's been happening?', 'Skyler's recent actions'. " +
+      "Can filter by agent, activity type, and date range.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        agent_type: {
+          type: "string",
+          description: "Filter by agent. Options: 'skyler', 'cleverbrain'. Omit for all agents.",
+        },
+        activity_type: {
+          type: "string",
+          description:
+            "Filter by activity type. Options: email_drafted, email_sent, lead_scored, lead_created, meeting_booked, " +
+            "deal_stage_changed, deal_closed_won, deal_closed_lost, escalation_raised, reply_detected, followup_scheduled, " +
+            "info_requested, research_completed, note_created, crm_synced, meeting_no_show, reengagement_started. Omit for all types.",
+        },
+        after: {
+          type: "string",
+          description: "ISO 8601 date string. Only return activity after this date. Default: last 7 days.",
+        },
+        before: {
+          type: "string",
+          description: "ISO 8601 date string. Only return activity before this date.",
+        },
+        limit: {
+          type: "number",
+          description: "Maximum activities to return. Default 30, max 100.",
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "pipeline_metrics",
+    description:
+      "Get aggregated sales pipeline metrics: total leads by stage, total pipeline value, conversion rates, average deal size, " +
+      "win/loss rates, and activity counts. Use for performance questions: 'how's the pipeline?', 'what's our conversion rate?', " +
+      "'how many deals did we close this month?', 'pipeline value?', 'sales performance'. " +
+      "Supports time period comparisons.",
+    input_schema: {
+      type: "object" as const,
+      properties: {
+        period: {
+          type: "string",
+          description:
+            "Predefined period: 'this_week', 'this_month', 'this_quarter', 'last_month', 'last_quarter', 'all_time'. " +
+            "Alternatively use after/before for custom ranges. Default: 'all_time'.",
+        },
+        after: {
+          type: "string",
+          description: "ISO 8601 date string. Start of custom period. Overrides 'period' if both are set.",
+        },
+        before: {
+          type: "string",
+          description: "ISO 8601 date string. End of custom period.",
+        },
+      },
+      required: [],
+    },
+  },
 ];

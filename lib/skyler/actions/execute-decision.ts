@@ -17,6 +17,7 @@ import { dispatchNotification } from "@/lib/skyler/notifications";
 import { inngest } from "@/lib/inngest/client";
 import { STAGES } from "@/lib/skyler/pipeline-stages";
 import { validateAndLog, isValidTransition, getValidNextStages } from "@/lib/skyler/pipeline/state-machine";
+import { logAgentActivity } from "@/lib/agent-activity";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -538,6 +539,40 @@ async function logDecision(ctx: ExecutionContext, result: ExecutionResult): Prom
   // Fire-and-forget CRM logging for every successful decision
   if (result.success) {
     emitCRMLog(ctx, result).catch(() => {});
+  }
+
+  // Fire-and-forget agent activity logging
+  if (result.success) {
+    const activityMap: Record<string, { type: string; title: string }> = {
+      draft_email: { type: "email_drafted", title: `Drafted email for ${ctx.pipeline.contact_name}` },
+      update_stage: { type: "deal_stage_changed", title: `Stage updated: ${ctx.pipeline.stage} → ${ctx.decision.parameters.new_stage}` },
+      schedule_followup: { type: "followup_scheduled", title: `Follow-up scheduled for ${ctx.pipeline.contact_name}` },
+      create_note: { type: "note_created", title: `Note added for ${ctx.pipeline.contact_name}` },
+      close_won: { type: "deal_closed_won", title: `Deal won: ${ctx.pipeline.contact_name} at ${ctx.pipeline.company_name}` },
+      close_lost: { type: "deal_closed_lost", title: `Deal lost: ${ctx.pipeline.contact_name} at ${ctx.pipeline.company_name}` },
+      book_meeting: { type: "meeting_booked", title: `Meeting booking triggered for ${ctx.pipeline.contact_name}` },
+      escalate: { type: "escalation_raised", title: `Escalated: ${ctx.pipeline.contact_name}` },
+      request_info: { type: "info_requested", title: `Info requested for ${ctx.pipeline.contact_name}` },
+    };
+
+    const activity = activityMap[ctx.decision.action_type];
+    if (activity) {
+      logAgentActivity(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        agentType: "skyler",
+        activityType: activity.type as Parameters<typeof logAgentActivity>[1]["activityType"],
+        title: activity.title,
+        description: ctx.decision.reasoning,
+        metadata: {
+          contactEmail: ctx.pipeline.contact_email,
+          companyName: ctx.pipeline.company_name,
+          confidence: ctx.decision.confidence_score,
+          guardrailOutcome: ctx.guardrail.outcome,
+        },
+        relatedEntityId: ctx.pipeline.id,
+        relatedEntityType: "pipeline",
+      }).catch(() => {});
+    }
   }
 
   try {
