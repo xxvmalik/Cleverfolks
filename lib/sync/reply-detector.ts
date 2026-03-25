@@ -138,6 +138,7 @@ export async function detectPipelineReply(
     // This prevents matching unrelated emails that happen to be FROM a lead's
     // email address (e.g. the lead emailing their bank, which got synced).
     const recipients = extractRecipients(record.content, record.metadata);
+    console.log(`[reply-detector] Guard 1 — extracted recipients: ${recipients ? recipients.join(", ") : "NONE"}`);
     if (recipients) {
       // Fetch workspace owner's email to verify this email was sent to us
       const { data: ownerData } = await db
@@ -174,15 +175,25 @@ export async function detectPipelineReply(
     // This prevents old emails (synced from before the lead was added)
     // from being falsely detected as replies.
     const pipelineCreatedAt = pipeline.created_at as string | undefined;
-    const emailDate =
+    let emailDate =
       (record.metadata?.receivedDateTime as string) ??
       (record.metadata?.date as string) ??
       (record.metadata?.created_at as string);
 
+    // Fallback: extract date from email content text (e.g. "Date: February 3, 2026")
+    if (!emailDate) {
+      const dateMatch = record.content.match(/\bDate:\s*([A-Za-z]+ \d{1,2},?\s*\d{4}|\d{4}-\d{2}-\d{2})/i);
+      if (dateMatch) emailDate = dateMatch[1];
+    }
+
+    console.log(`[reply-detector] Guard 2 — pipelineCreatedAt: ${pipelineCreatedAt}, emailDate: ${emailDate}`);
+
     if (pipelineCreatedAt && emailDate) {
       const pipelineTime = new Date(pipelineCreatedAt).getTime();
       const emailTime = new Date(emailDate).getTime();
-      if (emailTime < pipelineTime) {
+      if (isNaN(emailTime)) {
+        console.log(`[reply-detector] Could not parse email date: "${emailDate}"`);
+      } else if (emailTime < pipelineTime) {
         console.log(
           `[reply-detector] Skipping — email date (${emailDate}) is before pipeline creation (${pipelineCreatedAt})`
         );
