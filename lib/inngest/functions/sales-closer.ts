@@ -742,14 +742,6 @@ ${replyContent.slice(0, 2000)}`,
           .select("id")
           .maybeSingle();
 
-        // Auto-resolve any stale "request_info" requests for this lead
-        // (e.g., "missing meeting link" from earlier processing before the meeting was booked)
-        await db
-          .from("skyler_requests")
-          .update({ status: "resolved" })
-          .eq("pipeline_id", pipelineId)
-          .eq("status", "pending");
-
         if (updated) {
           console.log(`[Pipeline Reply] Meeting accepted by ${contactEmail} — pipeline marked meeting_booked`);
 
@@ -906,6 +898,77 @@ ${replyContent.slice(0, 2000)}`,
       }
     });
 
+    // Step 5b: Look up meeting link from calendar_events for this lead
+    // If the lead has an upcoming (or recent) calendar event, fetch the meeting URL
+    // so the AI can include it in the reply instead of using a placeholder.
+    const meetingLink = await step.run("fetch-meeting-link", async () => {
+      try {
+        const db = createAdminSupabaseClient();
+        const now = new Date().toISOString();
+
+        // First check: upcoming meetings linked to this lead
+        const { data: upcoming } = await db
+          .from("calendar_events")
+          .select("id, title, start_time, end_time, meeting_url, meeting_provider")
+          .eq("lead_id", pipelineId)
+          .gte("start_time", now)
+          .neq("status", "cancelled")
+          .order("start_time", { ascending: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (upcoming?.meeting_url) {
+          console.log(`[Pipeline Reply] Found meeting link for ${contactEmail}: ${upcoming.meeting_url} (${upcoming.meeting_provider})`);
+          return {
+            url: upcoming.meeting_url as string,
+            provider: (upcoming.meeting_provider as string) ?? null,
+            title: (upcoming.title as string) ?? null,
+            startTime: upcoming.start_time as string,
+            endTime: upcoming.end_time as string,
+          };
+        }
+
+        // Fallback: check by attendee email (meeting not yet linked to pipeline)
+        const { data: unlinked } = await db
+          .from("calendar_events")
+          .select("id, title, start_time, end_time, meeting_url, meeting_provider, attendees")
+          .eq("workspace_id", workspaceId)
+          .is("lead_id", null)
+          .gte("start_time", now)
+          .neq("status", "cancelled")
+          .order("start_time", { ascending: true })
+          .limit(20);
+
+        const emailLower = (pipeline.contact_email as string).toLowerCase();
+        const matched = (unlinked ?? []).find((event) => {
+          const attendees = (event.attendees ?? []) as Array<{ email?: string }>;
+          return attendees.some((a) => a.email?.toLowerCase() === emailLower);
+        });
+
+        if (matched?.meeting_url) {
+          console.log(`[Pipeline Reply] Found meeting link via attendee match: ${matched.meeting_url}`);
+          // Link this event to the pipeline for future lookups
+          await db
+            .from("calendar_events")
+            .update({ lead_id: pipelineId })
+            .eq("id", matched.id);
+          return {
+            url: matched.meeting_url as string,
+            provider: (matched.meeting_provider as string) ?? null,
+            title: (matched.title as string) ?? null,
+            startTime: matched.start_time as string,
+            endTime: matched.end_time as string,
+          };
+        }
+
+        console.log(`[Pipeline Reply] No meeting link found for ${contactEmail}`);
+        return null;
+      } catch (err) {
+        console.error(`[Pipeline Reply] fetch-meeting-link failed:`, err instanceof Error ? err.message : err);
+        return null;
+      }
+    });
+
     // Step 6: Draft intent-aware reply email
     const thread = (pipeline.conversation_thread ?? []) as Array<{
       role: string;
@@ -914,15 +977,45 @@ ${replyContent.slice(0, 2000)}`,
       timestamp: string;
     }>;
 
-    // Build meeting context if this lead had a meeting
+    // Build meeting context — combine prior meeting outcome with calendar event data
     const replyMeetingOutcome = pipeline.meeting_outcome as Record<string, unknown> | null;
-    const replyMeetingContext = replyMeetingOutcome ? {
+    type ReplyMeetingCtx = {
+      transcript?: string;
+      outcome?: string;
+      reasoning?: string;
+      keyPoints?: string[];
+      followUpDate?: string;
+      meetingUrl?: string;
+      meetingProvider?: string;
+    };
+    let replyMeetingContext: ReplyMeetingCtx | null = replyMeetingOutcome ? {
       transcript: (pipeline.meeting_transcript as string) ?? undefined,
       outcome: replyMeetingOutcome.outcome as string | undefined,
       reasoning: replyMeetingOutcome.reasoning as string | undefined,
       keyPoints: replyMeetingOutcome.key_discussion_points as string[] | undefined,
       followUpDate: replyMeetingOutcome.follow_up_date as string | undefined,
     } : null;
+
+    // Inject the actual meeting link from calendar_events
+    if (meetingLink) {
+      if (!replyMeetingContext) {
+        // No prior meeting outcome, but we have a calendar event — create context for it
+        replyMeetingContext = {
+          transcript: undefined,
+          outcome: undefined,
+          reasoning: undefined,
+          keyPoints: undefined,
+          meetingUrl: meetingLink.url,
+          meetingProvider: meetingLink.provider ?? undefined,
+          followUpDate: meetingLink.startTime,
+        };
+      } else {
+        replyMeetingContext.meetingUrl = meetingLink.url;
+        replyMeetingContext.meetingProvider = meetingLink.provider ?? undefined;
+        replyMeetingContext.followUpDate = replyMeetingContext.followUpDate ?? meetingLink.startTime;
+      }
+      console.log(`[Pipeline Reply] Meeting link injected into draft context: ${meetingLink.url}`);
+    }
 
     const draft = await step.run("draft-reply-email", async () => {
       console.log(`[Pipeline Reply] Drafting ${classification.intent} reply for ${contactEmail}${replyMeetingContext ? " [with meeting context]" : ""}...`);

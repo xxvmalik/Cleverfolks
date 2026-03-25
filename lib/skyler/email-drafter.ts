@@ -119,6 +119,12 @@ SUBJECT LINE: Re: [original subject]`,
 function buildMeetingContextBlock(ctx: MeetingContext): string {
   const parts: string[] = ["\n## MEETING CONTEXT (you had a meeting with this prospect)"];
 
+  if (ctx.meetingUrl) {
+    parts.push(`MEETING LINK (include this in the email): ${ctx.meetingUrl}`);
+    if (ctx.meetingProvider) {
+      parts.push(`Meeting platform: ${ctx.meetingProvider}`);
+    }
+  }
   if (ctx.outcome) {
     parts.push(`Meeting outcome: ${ctx.outcome}${ctx.reasoning ? ` — ${ctx.reasoning}` : ""}`);
   }
@@ -143,6 +149,7 @@ CRITICAL MEETING FOLLOW-UP RULES:
 - If a next step was agreed, confirm it: "Looking forward to our follow-up on..."
 - DO NOT re-pitch services already discussed in the meeting.
 - DO NOT act like you've never spoken — you literally just met with them.
+${ctx.meetingUrl ? `- Include the meeting link in the email: ${ctx.meetingUrl}\n- NEVER use [Meeting Link] or [Outlook Meeting Link] as a placeholder — use the ACTUAL link above.` : "- If you don't have a meeting link, do NOT use placeholders like [Meeting Link]. Instead say you'll send the details separately."}
 - Keep it short and specific to what was discussed.`);
 
   return parts.join("\n");
@@ -310,6 +317,8 @@ USE THE PQVIR FRAMEWORK:
 
 READ THE FULL THREAD CAREFULLY before responding:
 - If the prospect already BOOKED a meeting (mentioned a specific date/time they booked, or said "I have booked"): Simply confirm the booking. "Perfect, see you [day] at [time]." Do NOT propose new time slots — they already booked.
+- If a MEETING LINK is provided in the MEETING CONTEXT section above, INCLUDE IT in your reply so the prospect has it handy. Use the actual URL, NEVER a placeholder.
+- If NO meeting link is available, say you'll send the meeting details/link shortly — do NOT use [Meeting Link] or any bracket placeholder.
 - If the prospect agreed in PRINCIPLE but hasn't picked a time yet: Propose 2-3 specific time slots or share your booking link.
 - If the prospect picked a time from your options: Confirm that specific time. Send the meeting link if you have one (check saved resources/booking links).
 
@@ -525,6 +534,8 @@ export type MeetingContext = {
   reasoning?: string;
   keyPoints?: string[];
   followUpDate?: string;
+  meetingUrl?: string;
+  meetingProvider?: string;
 };
 
 export async function draftEmail(params: {

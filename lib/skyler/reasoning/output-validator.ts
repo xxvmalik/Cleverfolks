@@ -62,6 +62,10 @@ const BRACKET_EXCLUSIONS = [
   /^\[\d{4}-/,                                       // Date stamps [2026-03-...]
   /^\[http/i,                                        // URLs [https://...]
   /^\[✓\]/,                                          // Checkbox markers
+  /^\[(?:outlook|google|teams|zoom|meet)\s*meeting\s*link\]/i, // Meeting links — system can resolve from calendar
+  /^\[meeting\s*(?:link|url|details)\]/i,            // Generic meeting link placeholders
+  /^\[calendar\s*(?:link|url|invite)\]/i,            // Calendar invite links
+  /^\[booking\s*(?:link|url)\]/i,                    // Booking links
 ];
 
 // ── Scanner ──────────────────────────────────────────────────────────────────
