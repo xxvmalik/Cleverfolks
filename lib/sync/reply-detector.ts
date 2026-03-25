@@ -130,8 +130,13 @@ export async function detectPipelineReply(
       status: "received",
     });
 
-    const isReEngaging = pipeline.resolution === "no_response";
-    const newStage = isReEngaging
+    // Any resolved lead that replies is re-engaging — clear resolution so
+    // handlePipelineReply can process the reply (it skips resolved pipelines).
+    // meeting_booked/demo_booked are stage markers, not true resolutions.
+    const isReEngaging = ["no_response", "meeting_booked", "demo_booked"].includes(
+      pipeline.resolution as string
+    );
+    const newStage = pipeline.resolution === "no_response"
       ? stageOnReply("no_response")
       : stageOnReply(pipeline.stage as string);
 
@@ -146,12 +151,12 @@ export async function detectPipelineReply(
       updated_at: now,
     };
 
-    // Clear resolution if re-engaging a no_response lead
+    // Clear resolution when a "resolved" lead replies — they're re-engaging
     if (isReEngaging) {
       updatePayload.resolution = null;
       updatePayload.resolution_notes = null;
       updatePayload.resolved_at = null;
-      console.log(`[reply-detector] Clearing no_response resolution for pipeline ${pipeline.id}`);
+      console.log(`[reply-detector] Clearing ${pipeline.resolution} resolution for pipeline ${pipeline.id} — contact re-engaging`);
     }
 
     // Atomic conditional update: only succeeds if last_reply_at is NULL or older than 5 min

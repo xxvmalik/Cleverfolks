@@ -416,9 +416,12 @@ export const handlePipelineReply = inngest.createFunction(
 
       if (!current) throw new Error(`Pipeline record ${pipelineId} not found`);
 
-      // Skip if already resolved (opt-out, disqualified, etc.)
-      if (current.resolution) {
-        console.log(`[Pipeline Reply] Pipeline ${pipelineId} already resolved (${current.resolution}) — skipping`);
+      // Skip if truly resolved (opt-out, disqualified). meeting_booked/demo_booked/no_response
+      // are still active leads — the reply-detector clears these resolutions, but handle the
+      // race condition where the event fires before the resolution is cleared.
+      const skipResolutions = ["disqualified", "opted_out"];
+      if (current.resolution && skipResolutions.includes(current.resolution)) {
+        console.log(`[Pipeline Reply] Pipeline ${pipelineId} resolved as ${current.resolution} — skipping`);
         return null;
       }
 
