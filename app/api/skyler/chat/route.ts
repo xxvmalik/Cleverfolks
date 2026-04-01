@@ -472,13 +472,43 @@ ${isPending ? `This email is a pending draft (not sent yet). If the user gives f
   }
 
   // ── Handle clarification replies (low-confidence research pause) ─────────
-  const isClarification = pipelineContext?.referenced_email?.status === "clarification_needed";
-  if (isClarification && pipelineContext?.pipeline_id) {
-    const clarificationPipelineId = pipelineContext.pipeline_id as string;
+  // Trigger 1: User clicked the clarification note directly
+  // Trigger 2: User is chatting about a lead that's stuck in pending_clarification
+  const isClarificationViaNote = pipelineContext?.referenced_email?.status === "clarification_needed";
+  const isClarificationViaStage = !isClarificationViaNote && resolvedEntity && (() => {
+    // Check if the resolved entity's pipeline is in pending_clarification
+    const stageFromContext = pipelineContext?.stage as string | undefined;
+    if (stageFromContext === "pending_clarification") return true;
+    // Also check fresh entity data (entityPipeline was fetched above)
+    // We need to re-query since entityPipeline is scoped inside the if(resolvedEntity) block
+    return false;
+  })();
 
+  // For stage-based detection, we need the pipeline stage — fetch it if not already available
+  let clarificationPipelineId: string | null = null;
+  if (isClarificationViaNote && pipelineContext?.pipeline_id) {
+    clarificationPipelineId = pipelineContext.pipeline_id as string;
+  } else if (!isClarificationViaNote && resolvedEntity) {
+    // Check DB for pending_clarification stage
+    const { data: clarCheck } = await db
+      .from("skyler_sales_pipeline")
+      .select("id, stage")
+      .eq("id", resolvedEntity.entityId)
+      .eq("stage", "pending_clarification")
+      .maybeSingle();
+    if (clarCheck) {
+      clarificationPipelineId = clarCheck.id;
+    }
+  }
+
+  const isClarification = isClarificationViaNote || !!clarificationPipelineId;
+  if (isClarification && clarificationPipelineId) {
+
+    const clarContactName = pipelineContext?.contact_name ?? resolvedEntity?.entityName ?? "the lead";
+    const clarCompanyName = pipelineContext?.company_name ?? resolvedEntity?.companyName ?? "their company";
     systemPrompt += `\n\n## CLARIFICATION CONTEXT
 The user is replying to a Skyler Note asking for more context about a lead.
-Pipeline: ${pipelineContext.contact_name} at ${pipelineContext.company_name} (ID: ${clarificationPipelineId})
+Pipeline: ${clarContactName} at ${clarCompanyName} (ID: ${clarificationPipelineId})
 
 The user's message contains context about what this business does.
 1. Acknowledge the information warmly and briefly
