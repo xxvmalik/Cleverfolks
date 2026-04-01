@@ -265,6 +265,42 @@ export async function researchCompany(params: {
     return parsed;
   } catch (err) {
     console.error("[company-research] Analysis failed:", err instanceof Error ? err.message : String(err));
+
+    // If the user provided context, we have enough to proceed — don't block on AI failure.
+    // The user explicitly told us about this lead, so trust that and move forward.
+    if (userContext) {
+      console.log(`[company-research] AI failed but userContext available — using user context as medium-confidence fallback`);
+      const fallback: CompanyResearch = {
+        summary: `${companyName} — based on user-provided context: ${userContext.slice(0, 200)}`,
+        industry: "See user context",
+        estimated_size: "Unknown",
+        trigger_event: "",
+        recent_news: [],
+        pain_points: [],
+        decision_makers: contactName ? [`${contactName}`] : [],
+        talking_points: [`Based on user intel: ${userContext.slice(0, 150)}`],
+        service_alignment_points: [],
+        website_insights: websiteContent?.slice(0, 500) ?? allResults.map((r) => r.content).join(" ").slice(0, 500),
+        researched_at: new Date().toISOString(),
+        confidence: "medium",
+        confidence_reason: "AI analysis unavailable but user provided direct context about this lead.",
+      };
+
+      // Cache the fallback so we don't retry repeatedly
+      if (db && pipelineId) {
+        await db
+          .from("skyler_sales_pipeline")
+          .update({
+            company_research: fallback,
+            research_updated_at: fallback.researched_at,
+            updated_at: fallback.researched_at,
+          })
+          .eq("id", pipelineId);
+      }
+
+      return fallback;
+    }
+
     return {
       summary: `Research completed for ${companyName} but analysis failed.`,
       industry: "Unknown",

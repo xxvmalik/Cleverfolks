@@ -243,20 +243,28 @@ export const salesCloserWorkflow = inngest.createFunction(
         });
       } catch (err) {
         console.error(`[Sales Closer] research-company failed:`, err instanceof Error ? err.message : err);
+        // If user provided context, don't return low — the user told us enough to proceed
+        const hasUserContext = !!pipelineUserContext;
         return {
-          summary: `${pipeline.company_name || companyName}`,
+          summary: hasUserContext
+            ? `${pipeline.company_name || companyName} — ${pipelineUserContext!.slice(0, 200)}`
+            : `${pipeline.company_name || companyName}`,
           industry: "Unknown",
           estimated_size: "Unknown",
           trigger_event: "",
           recent_news: [],
           pain_points: [],
           decision_makers: [],
-          talking_points: [],
+          talking_points: hasUserContext
+            ? [`Based on user intel: ${pipelineUserContext!.slice(0, 150)}`]
+            : [],
           service_alignment_points: [],
           website_insights: "",
           researched_at: new Date().toISOString(),
-          confidence: "low" as const,
-          confidence_reason: "Research failed — using minimal context",
+          confidence: (hasUserContext ? "medium" : "low") as "high" | "medium" | "low",
+          confidence_reason: hasUserContext
+            ? "Research failed but user provided direct context about this lead."
+            : "Research failed — using minimal context",
         };
       }
     });
