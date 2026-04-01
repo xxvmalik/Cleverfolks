@@ -179,28 +179,36 @@ export async function researchCompany(params: {
     }
   }
 
-  // Priority 2: Run web searches in parallel
-  const queries = [
-    `${companyName} company overview`,
-    `${companyName} recent news ${new Date().getFullYear()}`,
-  ];
-  if (companyWebsite && !websiteContent) {
-    // Website extraction failed — try searching for the site
-    queries.push(`site:${companyWebsite} about`);
-  }
-  if (contactName) {
-    queries.push(`${contactName} ${companyName}`);
-  }
+  // Priority 2: Run web searches — but SKIP if user provided context.
+  // When the user tells us what a company does, web results for similarly-named
+  // companies can mislead the AI into ignoring the user's authoritative context.
+  let allResults: Awaited<ReturnType<typeof searchWeb>> = [];
+  let combinedText = "";
 
-  const searchResults = await Promise.all(
-    queries.map((q) => searchWeb(q, 3))
-  );
+  if (!userContext) {
+    const queries = [
+      `${companyName} company overview`,
+      `${companyName} recent news ${new Date().getFullYear()}`,
+    ];
+    if (companyWebsite && !websiteContent) {
+      queries.push(`site:${companyWebsite} about`);
+    }
+    if (contactName) {
+      queries.push(`${contactName} ${companyName}`);
+    }
 
-  const allResults = searchResults.flat();
-  const combinedText = allResults
-    .map((r) => `[${r.title}] (${r.url})\n${r.content}`)
-    .join("\n\n")
-    .slice(0, 6000);
+    const searchResults = await Promise.all(
+      queries.map((q) => searchWeb(q, 3))
+    );
+
+    allResults = searchResults.flat();
+    combinedText = allResults
+      .map((r) => `[${r.title}] (${r.url})\n${r.content}`)
+      .join("\n\n")
+      .slice(0, 6000);
+  } else {
+    console.log(`[company-research] Skipping web search — user provided context for ${companyName}`);
+  }
 
   // If we have no data at all, return a low-confidence fallback
   if (!combinedText.trim() && !websiteContent && !userContext) {
