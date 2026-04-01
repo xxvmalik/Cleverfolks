@@ -246,7 +246,9 @@ export async function researchCompany(params: {
   try {
     const text = await classifyWithGPT4oMini({
       systemPrompt,
-      userContent: combinedText || "(No web search results — rely on website content and user context above)",
+      userContent: combinedText || (userContext
+        ? `The user provided this context directly about the prospect:\n\n"${userContext}"\n\nBuild the research profile entirely from this user-provided context.${websiteContent ? `\n\nWebsite content:\n${websiteContent.slice(0, 4000)}` : ""}`
+        : "(No web search results — rely on website content and user context above)"),
       maxTokens: 2000,
     });
 
