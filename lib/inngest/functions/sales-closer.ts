@@ -517,6 +517,30 @@ export const handlePipelineReply = inngest.createFunction(
       stage: string;
     };
 
+    // Step 0: Check if there's already a pending draft for this pipeline.
+    // Prevents duplicate drafts when multiple reply emails arrive in the same window.
+    const hasPendingDraft = await step.run("check-pending-draft", async () => {
+      const db = createAdminSupabaseClient();
+      // Check both pipeline_id column and tool_input.pipelineId JSONB
+      const { data: existing } = await db
+        .from("skyler_actions")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .eq("status", "pending")
+        .or(`pipeline_id.eq.${pipelineId},tool_input->>pipelineId.eq.${pipelineId}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`[Pipeline Reply] Pending draft already exists (${existing.id}) for pipeline ${pipelineId} — skipping`);
+      }
+      return !!existing;
+    });
+
+    if (hasPendingDraft) {
+      return { status: "skipped", reason: "pending_draft_exists" };
+    }
+
     // Step 1: Fetch pipeline record (reply-detector already updated it with the reply)
     // Select only needed fields — select("*") can exceed Inngest step payload limits
     // when conversation_thread is large (22+ entries × 3000 chars each).

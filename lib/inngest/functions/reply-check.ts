@@ -200,9 +200,10 @@ async function checkOutlookReplies(
       if (!senderEmail) continue;
       if (!contactEmails.includes(senderEmail)) continue;
 
-      // Skip calendar acceptance/decline notifications — not real replies
+      // Skip calendar/meeting notifications — not real replies
       const subject = (msg.subject ?? "") as string;
-      if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
+      if (isCalendarNotification(subject)) {
+        console.log(`[reply-check] Skipping calendar notification: "${subject}"`);
         continue;
       }
 
@@ -323,8 +324,9 @@ async function checkGmailReplies(
 
         if (!contactEmails.includes(senderEmail)) continue;
 
-        // Skip calendar acceptance/decline notifications
-        if (/^(Accepted|Tentative|Declined|Cancelled|Updated):/i.test(subject)) {
+        // Skip calendar/meeting notifications — not real replies
+        if (isCalendarNotification(subject)) {
+          console.log(`[reply-check] Skipping calendar notification: "${subject}"`);
           continue;
         }
 
@@ -375,6 +377,27 @@ function buildEmailContent(outlookMessage: any): string {
     : outlookMessage.bodyPreview ?? "";
 
   return `From: ${fromName ? `${fromName} <${from}>` : from}\nSubject: ${subject}\n\n${body}`;
+}
+
+/**
+ * Detect calendar/meeting notification subjects that aren't real replies.
+ * These are automated emails from calendar systems (Outlook, Google, Calendly, etc.)
+ */
+function isCalendarNotification(subject: string): boolean {
+  // Standard calendar responses
+  if (/^(Accepted|Tentative|Declined|Cancelled|Updated|Forwarded):/i.test(subject)) return true;
+  // Meeting confirmations and booking notifications
+  if (/\b(confirmed|confirmation)\b.*\b(call|meeting|demo|session|appointment)\b/i.test(subject)) return true;
+  if (/\b(call|meeting|demo|session|appointment)\b.*\b(confirmed|confirmation)\b/i.test(subject)) return true;
+  // Scheduling/rescheduling notifications
+  if (/\b(reschedul|cancel|new time|time change|postpone)/i.test(subject)) return true;
+  // Calendar invite patterns
+  if (/\binvit(e|ation)\b.*\b(call|meeting|demo|event)\b/i.test(subject)) return true;
+  // "Reminder:" prefixed subjects
+  if (/^Reminder:/i.test(subject)) return true;
+  // Calendly/booking tool patterns
+  if (/\b(booked|scheduled|booking)\b.*\b(with|for)\b/i.test(subject)) return true;
+  return false;
 }
 
 function stripHtml(html: string): string {
