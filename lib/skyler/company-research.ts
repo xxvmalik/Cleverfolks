@@ -1,12 +1,13 @@
 /**
  * Company research for Skyler Sales Closer.
- * Uses Tavily web search + website extraction + GPT-4o-mini to produce
- * structured company intelligence before drafting any outreach email.
  *
  * Research priority:
- * 1. User-provided context (highest trust — the user told us directly)
+ * 1. User-provided context → BUILD DIRECTLY, no AI call, no web search
  * 2. Company website (most authoritative automated source)
- * 3. Web search results (supplementary)
+ * 3. Web search results (supplementary) — with company name verification
+ *
+ * When the user tells us what a company does, that IS the research.
+ * Web search is only used when we have zero user context.
  */
 
 import { classifyWithGPT4oMini } from "@/lib/openai-client";
@@ -33,17 +34,41 @@ export type CompanyResearch = {
   confidence_reason: string;
 };
 
+// ── Company name verification ──────────────────────────────────────────────
+
+/**
+ * Check if a search result title/content refers to the same company we searched for.
+ * Uses normalized substrings — "Prominess" should NOT match "Prominence Advisors".
+ */
+function companyNameMatches(companyName: string, resultTitle: string, resultContent: string): boolean {
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const target = normalize(companyName);
+  if (target.length < 3) return true; // Too short to verify
+
+  const titleNorm = normalize(resultTitle);
+  const contentNorm = normalize(resultContent);
+
+  // Exact substring match in title or first 500 chars of content
+  if (titleNorm.includes(target) || contentNorm.slice(0, 500).includes(target)) return true;
+
+  // Check if the company name words appear in order (for multi-word names)
+  const words = companyName.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  if (words.length > 1) {
+    const allInTitle = words.every((w) => titleNorm.includes(normalize(w)));
+    if (allInTitle) return true;
+  }
+
+  return false;
+}
+
+// ── Research prompt (only used when NO user context) ───────────────────────
+
 function buildResearchPrompt(params: {
   businessContext: string;
   playbookText?: string;
-  userContext?: string;
   websiteContent?: string;
 }): string {
   const ourContext = params.playbookText || params.businessContext || "No business context provided yet.";
-
-  const userContextBlock = params.userContext
-    ? `\nUSER-PROVIDED CONTEXT (HIGHEST TRUST — the user told us this directly):\n${params.userContext}\n\nThis context is authoritative. Trust it completely over web search results.`
-    : "";
 
   const websiteBlock = params.websiteContent
     ? `\nCOMPANY WEBSITE CONTENT (HIGH TRUST — extracted from their actual website):\n${params.websiteContent.slice(0, 4000)}\n\nThe website is the most authoritative automated source for what the business does. Trust it over web search snippets.`
@@ -52,18 +77,17 @@ function buildResearchPrompt(params: {
   return `Research this PROSPECT company for sales outreach. You MUST determine what this business actually does.
 
 CRITICAL RULES:
-- If user-provided context exists, trust it COMPLETELY — the user knows this lead
-- If a website is provided, the website content is the MOST authoritative automated source
 - NEVER assume what a business does based on the company name alone
 - "Digital" in a company name does NOT mean digital marketing
 - "Solutions" does NOT mean consulting
 - If the website and web search give conflicting info, trust the website
 - If you genuinely cannot determine what the business does, set confidence to "low"
-${userContextBlock}${websiteBlock}
+- IMPORTANT: Only use search results that are clearly about THIS specific company. If results seem to be about a different company with a similar name, IGNORE them and set confidence to "low".
+${websiteBlock}
 
 Find in this EXACT priority order:
 
-1. WHAT THEY ACTUALLY DO (from user context / website / search):
+1. WHAT THEY ACTUALLY DO (from website / search):
    - Their core business, products, or services
    - This is the MOST important field — get it right
 
@@ -93,9 +117,9 @@ RULES:
 - The "pain_points", "talking_points", and "service_alignment_points" must be about problems the PROSPECT has that WE can solve.
 
 CONFIDENCE SCORING:
-- "high": You have strong evidence of what the business does (website content, user context, or multiple corroborating search results)
+- "high": You have strong evidence of what the business does (website content or multiple corroborating search results)
 - "medium": You have some evidence but not fully certain (only search snippets, partial info)
-- "low": You cannot confidently determine what the business does (no website, no user context, minimal/conflicting search results, or you're guessing based on the name)
+- "low": You cannot confidently determine what the business does (no website, minimal/conflicting search results, or you're guessing based on the name)
 
 Respond with ONLY valid JSON. Do NOT wrap in markdown code fences.
 
@@ -130,9 +154,46 @@ function normaliseUrl(url: string): string {
   return `https://${trimmed}`;
 }
 
+// ── Fix 1: Build research directly from user context (no AI, no web search) ─
+
+/**
+ * When the user provides context about a lead, build the CompanyResearch
+ * struct directly. No AI call, no web search, no chance of wrong company.
+ */
+function buildResearchFromUserContext(params: {
+  companyName: string;
+  contactName?: string;
+  contactEmail?: string;
+  userContext: string;
+  websiteContent?: string;
+}): CompanyResearch {
+  const { companyName, contactName, userContext, websiteContent } = params;
+
+  console.log(`[company-research] Building research directly from user context for ${companyName}`);
+
+  return {
+    summary: `${companyName}: ${userContext}`,
+    industry: "Per user context",
+    estimated_size: "Unknown",
+    trigger_event: "",
+    recent_news: [],
+    pain_points: [],
+    decision_makers: contactName ? [contactName] : [],
+    talking_points: [userContext],
+    service_alignment_points: [],
+    website_insights: websiteContent?.slice(0, 500) ?? "",
+    researched_at: new Date().toISOString(),
+    confidence: "high",
+    confidence_reason: "Built from user-provided context — the user told us directly what this company does.",
+  };
+}
+
 /**
  * Research a company using website extraction + Tavily web search + GPT-4o-mini analysis.
  * Caches results in the pipeline record's company_research field.
+ *
+ * IMPORTANT: When userContext exists, skips ALL external lookups and AI calls.
+ * The user's word is the authoritative source — no web search can override it.
  */
 export async function researchCompany(params: {
   companyName: string;
@@ -166,7 +227,46 @@ export async function researchCompany(params: {
     }
   }
 
-  // Priority 1: Browse the company website if provided
+  // ── FIX 1: User context = skip everything, build directly ──────────────
+  // When the user tells us what a company does, that IS the research.
+  // No web search (wrong company risk), no AI call (misinterpretation risk).
+  if (userContext) {
+    // Still try to grab website content if provided (it's their actual site)
+    let websiteContent: string | null = null;
+    if (companyWebsite) {
+      const url = normaliseUrl(companyWebsite);
+      try {
+        websiteContent = await extractWebsite(url);
+      } catch { /* ignore website extraction failure */ }
+    }
+
+    const research = buildResearchFromUserContext({
+      companyName,
+      contactName,
+      contactEmail,
+      userContext,
+      websiteContent: websiteContent ?? undefined,
+    });
+
+    // Cache it
+    if (db && pipelineId) {
+      await db
+        .from("skyler_sales_pipeline")
+        .update({
+          company_research: research,
+          research_updated_at: research.researched_at,
+          updated_at: research.researched_at,
+        })
+        .eq("id", pipelineId);
+    }
+
+    console.log(`[company-research] ✓ Built from user context: "${userContext.slice(0, 80)}"`);
+    return research;
+  }
+
+  // ── No user context — use website + web search ─────────────────────────
+
+  // Browse the company website if provided
   let websiteContent: string | null = null;
   if (companyWebsite) {
     const url = normaliseUrl(companyWebsite);
@@ -179,39 +279,44 @@ export async function researchCompany(params: {
     }
   }
 
-  // Priority 2: Run web searches — but SKIP if user provided context.
-  // When the user tells us what a company does, web results for similarly-named
-  // companies can mislead the AI into ignoring the user's authoritative context.
-  let allResults: Awaited<ReturnType<typeof searchWeb>> = [];
-  let combinedText = "";
-
-  if (!userContext) {
-    const queries = [
-      `${companyName} company overview`,
-      `${companyName} recent news ${new Date().getFullYear()}`,
-    ];
-    if (companyWebsite && !websiteContent) {
-      queries.push(`site:${companyWebsite} about`);
-    }
-    if (contactName) {
-      queries.push(`${contactName} ${companyName}`);
-    }
-
-    const searchResults = await Promise.all(
-      queries.map((q) => searchWeb(q, 3))
-    );
-
-    allResults = searchResults.flat();
-    combinedText = allResults
-      .map((r) => `[${r.title}] (${r.url})\n${r.content}`)
-      .join("\n\n")
-      .slice(0, 6000);
-  } else {
-    console.log(`[company-research] Skipping web search — user provided context for ${companyName}`);
+  // Run web searches
+  const queries = [
+    `${companyName} company overview`,
+    `${companyName} recent news ${new Date().getFullYear()}`,
+  ];
+  if (companyWebsite && !websiteContent) {
+    queries.push(`site:${companyWebsite} about`);
+  }
+  if (contactName) {
+    queries.push(`${contactName} ${companyName}`);
   }
 
+  const searchResults = await Promise.all(
+    queries.map((q) => searchWeb(q, 3))
+  );
+
+  let allResults = searchResults.flat();
+
+  // ── FIX 2: Company name verification ───────────────────────────────────
+  // Discard search results that aren't actually about this company.
+  // This prevents "Prominess" from matching "Prominence Advisors".
+  const verifiedResults = allResults.filter((r) =>
+    companyNameMatches(companyName, r.title, r.content)
+  );
+
+  if (verifiedResults.length < allResults.length) {
+    const discarded = allResults.length - verifiedResults.length;
+    console.log(`[company-research] Name verification: discarded ${discarded}/${allResults.length} results (company name mismatch for "${companyName}")`);
+    allResults = verifiedResults;
+  }
+
+  const combinedText = allResults
+    .map((r) => `[${r.title}] (${r.url})\n${r.content}`)
+    .join("\n\n")
+    .slice(0, 6000);
+
   // If we have no data at all, return a low-confidence fallback
-  if (!combinedText.trim() && !websiteContent && !userContext) {
+  if (!combinedText.trim() && !websiteContent) {
     console.warn(`[company-research] No data found for ${companyName}`);
     const fallback: CompanyResearch = {
       summary: `Limited information available for ${companyName}.`,
@@ -226,17 +331,16 @@ export async function researchCompany(params: {
       website_insights: "No website data available.",
       researched_at: new Date().toISOString(),
       confidence: "low",
-      confidence_reason: "No website, user context, or web search results found for this company.",
+      confidence_reason: "No website or verified web search results found for this company.",
     };
     return fallback;
   }
 
-  // Analyse with GPT-4o-mini — include website content and user context
+  // Analyse with GPT-4o-mini (no user context in this path)
   const playbookText = salesPlaybook ? formatPlaybookForPrompt(salesPlaybook) : undefined;
   const systemPrompt = buildResearchPrompt({
     businessContext: businessContext ?? "",
     playbookText,
-    userContext: userContext ?? undefined,
     websiteContent: websiteContent ?? undefined,
   })
     .replace("{company_name}", companyName)
@@ -246,9 +350,7 @@ export async function researchCompany(params: {
   try {
     const text = await classifyWithGPT4oMini({
       systemPrompt,
-      userContent: combinedText || (userContext
-        ? `The user provided this context directly about the prospect:\n\n"${userContext}"\n\nBuild the research profile entirely from this user-provided context.${websiteContent ? `\n\nWebsite content:\n${websiteContent.slice(0, 4000)}` : ""}`
-        : "(No web search results — rely on website content and user context above)"),
+      userContent: combinedText || "(No web search results — rely on website content above)",
       maxTokens: 2000,
     });
 
@@ -275,42 +377,6 @@ export async function researchCompany(params: {
     return parsed;
   } catch (err) {
     console.error("[company-research] Analysis failed:", err instanceof Error ? err.message : String(err));
-
-    // If the user provided context, we have enough to proceed — don't block on AI failure.
-    // The user explicitly told us about this lead, so trust that and move forward.
-    if (userContext) {
-      console.log(`[company-research] AI failed but userContext available — using user context as medium-confidence fallback`);
-      const fallback: CompanyResearch = {
-        summary: `${companyName} — based on user-provided context: ${userContext.slice(0, 200)}`,
-        industry: "See user context",
-        estimated_size: "Unknown",
-        trigger_event: "",
-        recent_news: [],
-        pain_points: [],
-        decision_makers: contactName ? [`${contactName}`] : [],
-        talking_points: [`Based on user intel: ${userContext.slice(0, 150)}`],
-        service_alignment_points: [],
-        website_insights: websiteContent?.slice(0, 500) ?? allResults.map((r) => r.content).join(" ").slice(0, 500),
-        researched_at: new Date().toISOString(),
-        confidence: "medium",
-        confidence_reason: "AI analysis unavailable but user provided direct context about this lead.",
-      };
-
-      // Cache the fallback so we don't retry repeatedly
-      if (db && pipelineId) {
-        await db
-          .from("skyler_sales_pipeline")
-          .update({
-            company_research: fallback,
-            research_updated_at: fallback.researched_at,
-            updated_at: fallback.researched_at,
-          })
-          .eq("id", pipelineId);
-      }
-
-      return fallback;
-    }
-
     return {
       summary: `Research completed for ${companyName} but analysis failed.`,
       industry: "Unknown",
